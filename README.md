@@ -1,63 +1,111 @@
 # mpv-rich-presence
 
-[![Version](https://img.shields.io/github/v/release/goodtrailer/mpv-rich-presence.svg?color=green&style=flat-square)](https://github.com/goodtrailer/mpv-rich-presence/releases/latest)
-[![CodeFactor](https://www.codefactor.io/repository/github/goodtrailer/mpv-rich-presence/badge/main?style=flat-square)](https://www.codefactor.io/repository/github/goodtrailer/mpv-rich-presence/overview/main)
-[![License](https://img.shields.io/github/license/goodtrailer/mpv-rich-presence.svg?color=blue&style=flat-square)](https://github.com/goodtrailer/mpv-rich-presence/blob/master/LICENSE)
-[![Downloads](https://img.shields.io/github/downloads/goodtrailer/mpv-rich-presence/total.svg?color=orange&style=flat-square)](https://somsubhra.github.io/github-release-stats/?username=goodtrailer&repository=mpv-rich-presence&page=1&per_page=0)
+Windows/Linux mpv plugin for Discord Rich Presence using the Discord Social SDK. Supports media details, automatic anime metadata via AniList, folder privacy filtering, and multi-instance coordination.
 
+## Features
 
-Windows/Linux mpv plugin for Discord Rich Presence (that doesn't suck), using the Discord Social SDK. Yes, the Discord Social SDK is a bit overkill, but the legacy [discord-rpc](https://github.com/discord/discord-rpc) library doesn't seem to support overriding the application name, which is used here to display the current media being played.
-
-<p align="center"><img src="assets/preview.png" alt="preview image" width="725"></p>
+- **Media Presence**: Displays currently playing video or audio with title, artist, and playback progress.
+- **Anime Detection via AniList**:
+  - Automatically parses anime filenames using Anitomy to extract title, season (e.g. `S4`, `4th Season`, `S01E13`), part/cour, episode, and release group.
+  - Queries the AniList GraphQL API to fetch official cover art, Romaji/English titles, total episode count, and adds a clickable "View on AniList" button.
+  - Sequentially walks anime relation chains for continuous episode numbering across multi-cour and sequel seasons.
+- **Accurate Playback & Pause States**:
+  - Shows an active progress bar while playing and an elapsed timer with timestamp details when paused.
+  - Google Material Design play and pause status icons.
+  - Instant response to pause, play, and seek events with rate-limit protection against Discord RPC throttling.
+  - Configurable pause timeout to hide status after being paused for a specified duration.
+- **Privacy & Folder Filtering**:
+  - Whitelist or blacklist specific directories so private or sensitive media is never broadcast to Discord.
+- **Multi-Instance Coordination**:
+  - Coordinates active status between multiple mpv windows so only the active player reports to Discord.
 
 ## Installation
 
-Simply merge the contents of the distribution into your mpv config folder (e.g. `%APPDATA%/mpv` on Windows). Of course, the licenses/notices can (should) be omitted. Configure the plugin using the available options (see [§Configuration](#configuration)). By default, Rich Presence is initially off, so a `script-message-to rich_presence toggle` must be sent through the mpv console to toggle on Rich Presence.
+1. Download the latest release from the [Releases](https://github.com/Sirye8/mpv-rich-presence/releases) page.
+2. Copy the files into your mpv configuration directory (`%APPDATA%/mpv` on Windows, `~/.config/mpv` on Linux):
+   - Place `rich-presence.dll` (or `rich-presence.so`) in your mpv `scripts/` folder.
+   - Place `rich-presence-conf.lua` in your mpv `scripts/` folder.
+   - Place `rich-presence.conf` in your mpv `script-opts/` folder.
+3. Configure your settings in `script-opts/rich-presence.conf`.
 
 ## Configuration
 
-### Options (`script-opts/rich-presence.conf`)
-* `application_id=<id>` - the ID of the Discord application from the [Discord developer portal](https://discord.com/developers/applications)
-* `on=<yes/no>` - initial setting of Rich Presence on/off
+Edit `script-opts/rich-presence.conf`:
 
-### Commands (`script-message-to rich_presence [cmd] [args]`)
-* `toggle` - toggle Rich Presence on/off
-* `on` - set Rich Presence on
-* `off` - set Rich Presence off
-* `application_id <id>` - set the ID of the Discord application from the [Discord developer portal](https://discord.com/developers/applications)
+```ini
+# Discord Application ID (from https://discord.com/developers/applications)
+application_id=
 
-> [!TIP]
-> I recommend adding in `input.conf` a binding like `D script-message-to rich_presence toggle` to easily toggle Rich Presence. Then, leave `on=no` in `rich-presence.conf`. This is so that Rich Presence is opt-in, and not everything you watch will be immediately shared.
+# Enable rich presence by default (yes/no)
+on=yes
 
-## Building
+# Folder filtering mode: "disabled", "whitelist", or "blacklist"
+folder_filter_mode=disabled
+
+# Semicolon-separated list of folder paths (quotes optional)
+# Example: D:\Anime;E:\Videos\Movies
+folder_list=
+
+# Pause timeout in seconds before presence is hidden (0 to never hide)
+pause_timeout=1800
+```
+
+### Keybindings & Commands
+
+You can bind a key in `input.conf` to toggle presence on and off:
+
+```ini
+D script-message-to rich_presence toggle
+```
+
+Available script messages:
+- `script-message-to rich_presence toggle`
+- `script-message-to rich_presence on`
+- `script-message-to rich_presence off`
+- `script-message-to rich_presence application_id <id>`
+- `script-message-to rich_presence folder_filter_mode <disabled|whitelist|blacklist>`
+- `script-message-to rich_presence folder_list <path1;path2>`
+- `script-message-to rich_presence pause_timeout <seconds>`
+
+## Building from Source
+
+### Prerequisites
+
+- CMake 3.18+
+- C++20 compliant compiler (MSVC 2019+, GCC 10+, or Clang 11+)
+- vcpkg
+- [Discord Social SDK](https://discord.com/developers/social-sdk)
+
 ### Setup
 
-First, clone the repository *including submodules*:
-```bash
-git clone --recursive https://github.com/goodtrailer/mpv-rich-presence
-```
+1. Clone the repository recursively:
+   ```bash
+   git clone --recursive https://github.com/Sirye8/mpv-rich-presence.git
+   cd mpv-rich-presence
+   ```
 
-Download the [Discord Social SDK](https://discord.com/developers/social-sdk). Unpack its contents into `thirdparty/discord_social_sdk`, such that `bin` is placed as `thirdparty/discord_social_sdk/bin`. Afterwards, set up vcpkg with one of the following (depending on your platform):
-```batch
-.\thirdparty\vcpkg\bootstrap-vcpkg.bat
-```
-```bash
-./thirdparty/vcpkg/bootstrap-vcpkg.sh
-```
-Finally, configure the CMake project:
-```bash
-cmake --preset default
-```
-> [!TIP]
-> You probably want to set the CMake variable `VCPKG_TARGET_TRIPLET` to the *static* version of your platform's triplet. Otherwise, the build may depend on Boost's shared libraries, which is less convenient for installation as an mpv plugin. On Linux, the default triplet `x64-linux` works as suggested. On Windows, use the `x64-windows-static-md` triplet, e.g.
-> ```bash
-> cmake -D VCPKG_TARGET_TRIPLET:STRING=x64-windows-static-md build
-> ```
+2. Extract the Discord Social SDK into `thirdparty/discord_social_sdk` such that `thirdparty/discord_social_sdk/bin` and `lib` exist.
 
-### Compilation/Packaging
-Once the setup is complete, the following commands will build/install the project:
-```
-cmake --build build
-cmake --build build --target install
-```
-If everything worked correctly, the complete binary distribution should be located in `install/mpv-rich-presence`.
+3. Bootstrap vcpkg:
+   ```batch
+   .\thirdparty\vcpkg\bootstrap-vcpkg.bat
+   ```
+   *(or `./thirdparty/vcpkg/bootstrap-vcpkg.sh` on Linux)*
+
+4. Configure with CMake:
+   ```bash
+   cmake --preset default
+   ```
+
+5. Build the project:
+   ```bash
+   cmake --build build --config Release
+   ```
+
+Compiled binaries will be generated in `build/` (and can be packaged with `cmake --build build --target install`).
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
+
+Based on [mpv-rich-presence](https://github.com/goodtrailer/mpv-rich-presence) by Alden Wu.

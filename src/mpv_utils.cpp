@@ -1,5 +1,6 @@
 // This file is part of mpv-rich-presence.
 // Copyright (c) 2026 Alden Wu.
+// Copyright (c) 2026 Youssef M. (Sirye8).
 //
 // mpv-rich-presence is free software: you can redistribute it and/or modify it
 // under the terms of the GNU Affero General Public License as published by the

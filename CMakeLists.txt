@@ -3,8 +3,10 @@ cmake_minimum_required(VERSION 3.18)
 # Project ----------------------------------------------------------------------
 
 project(mpv-rich-presence
-    VERSION 0.0.0
+    VERSION 1.0.0
     LANGUAGES CXX C)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(mpv-rich-presence SHARED)
 
@@ -35,6 +37,22 @@ else()
     set(DISCORD_SHARED_LIB "${DISCORD_SHARED_LIB_DIR}/libdiscord_partner_sdk.so")
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+  anitomy
+  GIT_REPOSITORY https://github.com/erengy/anitomy.git
+  GIT_TAG master
+)
+FetchContent_MakeAvailable(anitomy)
+
+if(NOT TARGET anitomy)
+  file(GLOB_RECURSE ANITOMY_SOURCES "${anitomy_SOURCE_DIR}/anitomy/*.cpp")
+  add_library(anitomy STATIC ${ANITOMY_SOURCES})
+  target_include_directories(anitomy PUBLIC "${anitomy_SOURCE_DIR}")
+endif()
+
+find_package(cpr CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Boost CONFIG REQUIRED COMPONENTS dll)
 find_package(CMakeRC CONFIG REQUIRED)
     cmrc_add_resource_library(mpv-rich-presence_resources
@@ -123,7 +141,13 @@ target_include_directories(mpv-rich-presence PRIVATE
 
 target_link_libraries(mpv-rich-presence PRIVATE
     Boost::dll
-    mpv-rich-presence::rc)
+    Boost::headers
+    mpv-rich-presence::rc
+    anitomy
+    cpr::cpr
+    nlohmann_json::nlohmann_json
+    )
+
 
 # Target mpv-rich-presence::rc -------------------------------------------------
 
