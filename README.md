@@ -4,7 +4,7 @@ Windows/Linux mpv plugin for Discord Rich Presence using the Discord Social SDK.
 
 ## Features
 
-- **Media Presence**: Displays currently playing video or audio with title, artist, and playback progress.
+- **Media Presence**: Displays currently playing video or audio with title, artist, and playback progress. Audio files dynamically show as "Listening to <Artist> - <Title>" on Discord.
 - **Anime Detection via AniList**:
   - Automatically parses anime filenames using Anitomy to extract title, season (e.g. `S4`, `4th Season`, `S01E13`), part/cour, episode, and release group.
   - Queries the AniList GraphQL API to fetch official cover art, Romaji/English titles, total episode count, and adds a clickable "View on AniList" button.
@@ -18,6 +18,34 @@ Windows/Linux mpv plugin for Discord Rich Presence using the Discord Social SDK.
   - Whitelist or blacklist specific directories so private or sensitive media is never broadcast to Discord.
 - **Multi-Instance Coordination**:
   - Coordinates active status between multiple mpv windows so only the active player reports to Discord.
+
+## Screenshots
+
+### Anime Detection & Cover Art (AniList)
+
+| Active Playback | Paused State |
+| :---: | :---: |
+| ![Anime Playing](screenshots/anime%203.png) | ![Anime Paused](screenshots/anime%201.png) |
+
+| Pause Tooltip | Relation Chain & Multi-Season |
+| :---: | :---: |
+| ![Anime Pause Tooltip](screenshots/anime%202.png) | ![Anime Series](screenshots/anime%204.png) |
+
+| Long Title & Airing Sequences | Discord Status Indicator |
+| :---: | :---: |
+| ![Bleach TYBW](screenshots/anime%206.png) | ![Discord Sidebar Anime](screenshots/anime%205.png) |
+
+### Music & Audio Playback
+
+| Listening Activity | Discord Status Indicator |
+| :---: | :---: |
+| ![Music Playing](screenshots/music%201.png) | ![Discord Sidebar Music](screenshots/music%202.png) |
+
+### General Video Playback
+
+| Active Playback | Paused State | Discord Status Indicator |
+| :---: | :---: | :---: |
+| ![Video Playing](screenshots/non-anime%20video%202.png) | ![Video Paused](screenshots/non-anime%20video%203.png) | ![Discord Sidebar Video](screenshots/non-anime%20video%201.png) |
 
 ## Installation
 
