@@ -1,5 +1,6 @@
 -- This file is part of mpv-rich-presence.
 -- Copyright (c) 2026 Alden Wu.
+-- Copyright (c) 2026 Youssef M. (Sirye8).
 --
 -- mpv-rich-presence is free software: you can redistribute it and/or modify it
 -- under the terms of the GNU Affero General Public License as published by the
@@ -20,6 +21,9 @@ local mp_options = require("mp.options")
 local options = {
     application_id = "0",
     on = false,
+    folder_filter_mode = "disabled",
+    folder_list = "",
+    pause_timeout = 1800,
 }
 mp_options.read_options(options, "rich-presence")
 
@@ -32,6 +36,10 @@ function pong()
     else
         mp.commandv("script-message-to", "rich_presence", "off")
     end
+
+    mp.commandv("script-message-to", "rich_presence", "folder_filter_mode", options.folder_filter_mode)
+    mp.commandv("script-message-to", "rich_presence", "folder_list", options.folder_list)
+    mp.commandv("script-message-to", "rich_presence", "pause_timeout", tostring(options.pause_timeout))
 end
 
 mp.register_script_message("ping", pong)

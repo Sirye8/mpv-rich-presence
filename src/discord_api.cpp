@@ -1,5 +1,6 @@
 // This file is part of mpv-rich-presence.
 // Copyright (c) 2026 Alden Wu.
+// Copyright (c) 2026 Youssef M. (Sirye8).
 //
 // mpv-rich-presence is free software: you can redistribute it and/or modify it
 // under the terms of the GNU Affero General Public License as published by the
@@ -40,6 +41,18 @@ discord_api_importer::discord_api_importer(const dll::shared_library& sdk)
     , Discord_ClientResult_ErrorCode_impl { dll::import_symbol<int32_t(Discord_ClientResult* self)>(sdk, "Discord_ClientResult_ErrorCode") }
     , Discord_ClientResult_Successful_impl { dll::import_symbol<bool(Discord_ClientResult* self)>(sdk, "Discord_ClientResult_Successful") }
     , Discord_RunCallbacks_impl { dll::import_symbol<void()>(sdk, "Discord_RunCallbacks") }
+    , Discord_ActivityAssets_Init_impl { dll::import_symbol<void(Discord_ActivityAssets*)>(sdk, "Discord_ActivityAssets_Init") }
+    , Discord_ActivityAssets_SetLargeImage_impl { dll::import_symbol<void(Discord_ActivityAssets*, Discord_String)>(sdk, "Discord_ActivityAssets_SetLargeImage") }
+    , Discord_ActivityAssets_SetSmallImage_impl { dll::import_symbol<void(Discord_ActivityAssets*, Discord_String)>(sdk, "Discord_ActivityAssets_SetSmallImage") }
+    , Discord_Activity_SetAssets_impl { dll::import_symbol<void(Discord_Activity*, Discord_ActivityAssets*)>(sdk, "Discord_Activity_SetAssets") }
+    , Discord_Activity_SetDetails_impl { dll::import_symbol<void(Discord_Activity*, Discord_String*)>(sdk, "Discord_Activity_SetDetails") }
+    , Discord_ActivityButton_Init_impl { dll::import_symbol<void(Discord_ActivityButton*)>(sdk, "Discord_ActivityButton_Init") }
+    , Discord_ActivityButton_Drop_impl { dll::import_symbol<void(Discord_ActivityButton*)>(sdk, "Discord_ActivityButton_Drop") }
+    , Discord_ActivityButton_SetLabel_impl { dll::import_symbol<void(Discord_ActivityButton*, Discord_String)>(sdk, "Discord_ActivityButton_SetLabel") }
+    , Discord_ActivityButton_SetUrl_impl { dll::import_symbol<void(Discord_ActivityButton*, Discord_String)>(sdk, "Discord_ActivityButton_SetUrl") }
+    , Discord_Activity_AddButton_impl { dll::import_symbol<void(Discord_Activity*, Discord_ActivityButton const*)>(sdk, "Discord_Activity_AddButton") }
+    , Discord_ActivityAssets_SetLargeText_impl { dll::import_symbol<void(Discord_ActivityAssets*, Discord_String)>(sdk, "Discord_ActivityAssets_SetLargeText") }
+    , Discord_ActivityAssets_SetSmallText_impl { dll::import_symbol<void(Discord_ActivityAssets*, Discord_String)>(sdk, "Discord_ActivityAssets_SetSmallText") }
 {
 }
 
@@ -141,4 +154,64 @@ auto discord_api_importer::Discord_ClientResult_Successful(Discord_ClientResult*
 void discord_api_importer::Discord_RunCallbacks() const
 {
     Discord_RunCallbacks_impl();
+}
+
+void discord_api_importer::Discord_ActivityAssets_Init(Discord_ActivityAssets* self) const
+{
+    Discord_ActivityAssets_Init_impl(self);
+}
+
+void discord_api_importer::Discord_ActivityAssets_SetLargeImage(Discord_ActivityAssets* self, Discord_String value) const
+{
+    Discord_ActivityAssets_SetLargeImage_impl(self, value);
+}
+
+void discord_api_importer::Discord_Activity_SetAssets(Discord_Activity* self, Discord_ActivityAssets* value) const
+{
+    Discord_Activity_SetAssets_impl(self, value);
+}
+
+void discord_api_importer::Discord_ActivityAssets_SetSmallImage(Discord_ActivityAssets* self, Discord_String value) const
+{
+    Discord_ActivityAssets_SetSmallImage_impl(self, value);
+}
+
+void discord_api_importer::Discord_Activity_SetDetails(Discord_Activity* self, Discord_String* value) const
+{
+    Discord_Activity_SetDetails_impl(self, value);
+}
+
+void discord_api_importer::Discord_ActivityButton_Init(Discord_ActivityButton* self) const
+{
+    Discord_ActivityButton_Init_impl(self);
+}
+
+void discord_api_importer::Discord_ActivityButton_Drop(Discord_ActivityButton* self) const
+{
+    Discord_ActivityButton_Drop_impl(self);
+}
+
+void discord_api_importer::Discord_ActivityButton_SetLabel(Discord_ActivityButton* self, Discord_String value) const
+{
+    Discord_ActivityButton_SetLabel_impl(self, value);
+}
+
+void discord_api_importer::Discord_ActivityButton_SetUrl(Discord_ActivityButton* self, Discord_String value) const
+{
+    Discord_ActivityButton_SetUrl_impl(self, value);
+}
+
+void discord_api_importer::Discord_Activity_AddButton(Discord_Activity* self, Discord_ActivityButton const* button) const
+{
+    Discord_Activity_AddButton_impl(self, button);
+}
+
+void discord_api_importer::Discord_ActivityAssets_SetLargeText(Discord_ActivityAssets* self, Discord_String value) const
+{
+    Discord_ActivityAssets_SetLargeText_impl(self, value);
+}
+
+void discord_api_importer::Discord_ActivityAssets_SetSmallText(Discord_ActivityAssets* self, Discord_String value) const
+{
+    Discord_ActivityAssets_SetSmallText_impl(self, value);
 }

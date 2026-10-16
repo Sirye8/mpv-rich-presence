@@ -1,5 +1,6 @@
 // This file is part of mpv-rich-presence.
 // Copyright (c) 2026 Alden Wu.
+// Copyright (c) 2026 Youssef M. (Sirye8).
 //
 // mpv-rich-presence is free software: you can redistribute it and/or modify it
 // under the terms of the GNU Affero General Public License as published by the
@@ -103,5 +104,23 @@ namespace mpvrp
 
         static void init(const discord_api_importer&, Discord_ActivityTimestamps*);
         static void drop(const discord_api_importer&, Discord_ActivityTimestamps*);
+    };
+
+    class discord_activity_assets : public discord_object<discord_activity_assets, Discord_ActivityAssets>
+    {
+    public:
+        using discord_object<discord_activity_assets, Discord_ActivityAssets>::discord_object;
+
+        static void init(const discord_api_importer&, Discord_ActivityAssets*);
+        static void drop(const discord_api_importer&, Discord_ActivityAssets*);
+    };
+
+    class discord_activity_button : public discord_object<discord_activity_button, Discord_ActivityButton>
+    {
+    public:
+        using discord_object<discord_activity_button, Discord_ActivityButton>::discord_object;
+
+        static void init(const discord_api_importer&, Discord_ActivityButton*);
+        static void drop(const discord_api_importer&, Discord_ActivityButton*);
     };
 }
