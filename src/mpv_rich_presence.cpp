@@ -750,6 +750,10 @@ static void handle_file_loaded(rich_presence_state& state)
     const char* media_artist = "";
     const char* media_title = "";
     mpv_get_property(state.mpv, "metadata/by-key/Artist", MPV_FORMAT_OSD_STRING, &media_artist);
+    if (!media_artist || strlen(media_artist) == 0)
+        mpv_get_property(state.mpv, "metadata/by-key/artist", MPV_FORMAT_OSD_STRING, &media_artist);
+    if (!media_artist || strlen(media_artist) == 0)
+        mpv_get_property(state.mpv, "metadata/by-key/album_artist", MPV_FORMAT_OSD_STRING, &media_artist);
     mpv_get_property(state.mpv, "media-title", MPV_FORMAT_OSD_STRING, &media_title);
     state.media_artist = media_artist == nullptr ? "" : media_artist;
     state.media_title = media_title == nullptr ? "" : media_title;
@@ -1280,12 +1284,38 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         else
         {
             // Non-anime fallback
-            activity_name = "mpv";
+            std::string song_info;
+            if (!state.media_artist.empty() && !state.media_title.empty())
+            {
+                std::string title_lower = state.media_title;
+                std::string artist_lower = state.media_artist;
+                std::transform(title_lower.begin(), title_lower.end(), title_lower.begin(), ::tolower);
+                std::transform(artist_lower.begin(), artist_lower.end(), artist_lower.begin(), ::tolower);
+                if (title_lower.rfind(artist_lower, 0) == 0)
+                    song_info = state.media_title;
+                else
+                    song_info = std::format("{} - {}", state.media_artist, state.media_title);
+            }
+            else if (!state.media_artist.empty())
+            {
+                song_info = state.media_artist;
+            }
+            else
+            {
+                song_info = state.media_title;
+            }
+
+            if (!state.media_has_video && !song_info.empty())
+                activity_name = song_info;
+            else
+                activity_name = "mpv";
+
+            if (activity_name.size() > 128)
+                activity_name = activity_name.substr(0, 125) + "...";
+
             state.discord_api->Discord_Activity_SetName(&activity.get(), { activity_name.data(), activity_name.size() });
 
-            std::string fallback_details = !state.media_artist.empty()
-                ? std::format("{} - {}", state.media_artist, state.media_title)
-                : state.media_title;
+            std::string fallback_details = !song_info.empty() ? song_info : state.media_title;
             if (!fallback_details.empty())
             {
                 Discord_String d_details = { fallback_details.data(), fallback_details.size() };
