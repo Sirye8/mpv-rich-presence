@@ -1,0 +1,40 @@
+// This file is part of mpv-rich-presence.
+// Copyright (c) 2026 Alden Wu.
+// Copyright (c) 2026 Youssef M. (Sirye8).
+//
+// mpv-rich-presence is free software: you can redistribute it and/or modify it
+// under the terms of the GNU Affero General Public License as published by the
+// Free Software Foundation, either version 3 of the License, or (at your
+// option) any later version.
+//
+// mpv-rich-presence is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+// FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+// for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with mpv-rich-presence. If not, see <https://www.gnu.org/licenses/>.
+
+#include "mpv_rich_presence/discord_utils.hpp"
+
+using namespace mpvrp;
+
+void discord_client::init(const discord_api_importer& api, Discord_Client* h) { api.Discord_Client_Init(h); }
+
+void discord_client::drop(const discord_api_importer& api, Discord_Client* h) { api.Discord_Client_Drop(h); }
+
+void discord_activity::init(const discord_api_importer& api, Discord_Activity* h) { api.Discord_Activity_Init(h); }
+
+void discord_activity::drop(const discord_api_importer& api, Discord_Activity* h) { api.Discord_Activity_Drop(h); }
+
+void discord_activity_timestamps::init(const discord_api_importer& api, Discord_ActivityTimestamps* h) { api.Discord_ActivityTimestamps_Init(h); }
+
+void discord_activity_timestamps::drop(const discord_api_importer& api, Discord_ActivityTimestamps* h) { api.Discord_ActivityTimestamps_Drop(h); }
+
+void discord_activity_assets::init(const discord_api_importer& api, Discord_ActivityAssets* h) { api.Discord_ActivityAssets_Init(h); }
+
+void discord_activity_assets::drop(const discord_api_importer&, Discord_ActivityAssets*) { /* Discord SDK does not have Discord_ActivityAssets_Drop */ }
+
+void discord_activity_button::init(const discord_api_importer& api, Discord_ActivityButton* h) { api.Discord_ActivityButton_Init(h); }
+
+void discord_activity_button::drop(const discord_api_importer& api, Discord_ActivityButton* h) { api.Discord_ActivityButton_Drop(h); }

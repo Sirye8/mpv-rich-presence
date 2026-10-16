@@ -1,0 +1,10 @@
+{
+  "name": "mpv-rich-presence",
+  "version": "1.0.0",
+  "dependencies": [
+    "boost-dll",
+    "cmakerc",
+    "cpr",
+    "nlohmann-json"
+  ]
+}
