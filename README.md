@@ -137,3 +137,8 @@ Compiled binaries will be generated in `build/` (and can be packaged with `cmake
 This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
 
 Based on [mpv-rich-presence](https://github.com/goodtrailer/mpv-rich-presence) by Alden Wu.
+
+### Third-Party Notices
+- **Anitomy**: Licensed under Mozilla Public License 2.0 (MPL-2.0) by Eren Okka. See [licenses/LICENSE-Anitomy](licenses/LICENSE-Anitomy).
+- **Discord Social SDK**: The embedded runtime binary is proprietary software of Discord Inc. and governed by the [Discord Developer Terms of Service](https://discord.com/developers/docs/legal).
+- **Boost**, **CMakeRC**, and **mpv client API**: See individual licenses in the [licenses/](licenses/) directory.

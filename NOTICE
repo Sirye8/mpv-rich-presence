@@ -30,7 +30,19 @@ Modifications include:
 
 Third-Party Components & Licenses:
 
+- Anitomy (Mozilla Public License 2.0)
+  Copyright (c) 2014-2016 Eren Okka
+  Source code available at: <https://github.com/erengy/anitomy>
+  See licenses/LICENSE-Anitomy for full license text.
+
 - Boost (Boost Software License 1.0) - see licenses/LICENSE-Boost
 - CMakeRC (MIT License) - see licenses/LICENSE-CMakeRC
 - mpv client API (LGPL-2.1 or later) - see licenses/LICENSE-mpv
-- Discord Social SDK binary - copyright (c) Discord Inc., governed by the Discord Developer Terms
+
+- Discord Social SDK binary:
+  Copyright (c) Discord Inc.
+  The embedded Discord Social SDK / Partner SDK binary is proprietary software of Discord Inc.
+  and is NOT licensed under the GNU AGPLv3. It is governed exclusively by the Discord Developer
+  Terms of Service (<https://discord.com/developers/docs/legal>). It is distributed in binary form
+  as permitted by Discord for client application integration, as originally implemented in upstream
+  goodtrailer/mpv-rich-presence.
