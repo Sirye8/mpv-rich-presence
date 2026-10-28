@@ -13,13 +13,24 @@ with mpv-rich-presence. If not, see <https://www.gnu.org/licenses/>.
 
 This project is based on mpv-rich-presence originally authored by Alden Wu:
 <https://github.com/goodtrailer/mpv-rich-presence>
-Modified and maintained by Youssef M. (Sirye8):
+Copyright (c) 2026 Alden Wu.
+
+Modified by Youssef M. (Sirye8), October 2026:
 <https://github.com/Sirye8/mpv-rich-presence>
+Copyright (c) 2026 Youssef M. (Sirye8).
+
+Modifications include:
+- AniList anime metadata integration, GraphQL querying, and title/season parsing.
+- Enhanced playback, pause, and seek synchronization for responsive Discord RPC status.
+- Dynamic audio playback presence ("Listening to <Artist> - <Title>").
+- Folder privacy filtering (whitelist/blacklist modes).
+- Multi-instance player coordination.
 
 ---
 
-mpv-rich-presence uses Boost - see licenses/LICENSE-Boost for full license text.
+Third-Party Components & Licenses:
 
-mpv-rich-presence uses CMakeRC - see licenses/LICENSE-CMakeRC for full license text.
-
-mpv-rich-presence uses mpv - see licenses/LICENSE-mpv for full license text.
+- Boost (Boost Software License 1.0) - see licenses/LICENSE-Boost
+- CMakeRC (MIT License) - see licenses/LICENSE-CMakeRC
+- mpv client API (LGPL-2.1 or later) - see licenses/LICENSE-mpv
+- Discord Social SDK binary - copyright (c) Discord Inc., governed by the Discord Developer Terms
