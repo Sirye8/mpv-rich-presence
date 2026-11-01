@@ -189,3 +189,19 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
 endif()
+
+# Tests ------------------------------------------------------------------------
+
+option(mpv-rich-presence_BUILD_TESTS "Build regression test suite" ON)
+if(mpv-rich-presence_BUILD_TESTS)
+    add_executable(rich-presence-tests
+        tests/regression_tests.cpp
+    )
+    set_target_properties(rich-presence-tests PROPERTIES
+        CXX_STANDARD 20
+        CXX_EXTENSIONS OFF
+    )
+    target_link_libraries(rich-presence-tests PRIVATE
+        nlohmann_json::nlohmann_json
+    )
+endif()
