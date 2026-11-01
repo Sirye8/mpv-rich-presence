@@ -575,11 +575,15 @@ static fs::path get_lock_file_path()
     return dir / "mpv-rpc-active.lock";
 }
 
-static void claim_active_instance(const std::string& instance_id)
+// Explicit takeover: claims active ownership
+static bool claim_active_instance(const std::string& instance_id)
 {
     try
     {
         ipc_mutex_guard guard;
+        if (!guard.is_locked())
+            return false;
+
         auto path = get_lock_file_path();
         auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
         auto now = chrono::duration_cast<chrono::milliseconds>(
@@ -598,9 +602,69 @@ static void claim_active_instance(const std::string& instance_id)
             f << instance_id << "\n" << now << "\n";
             fs::remove(tmp_path, ec);
         }
+        return true;
     }
     catch (...)
     {
+        return false;
+    }
+}
+
+// Atomic heartbeat renewal: only updates timestamp if this instance still owns the lease
+static bool renew_active_instance(const std::string& instance_id)
+{
+    try
+    {
+        ipc_mutex_guard guard;
+        if (!guard.is_locked())
+            return false;
+
+        auto path = get_lock_file_path();
+        if (!fs::exists(path))
+            return false;
+
+        std::ifstream f(path);
+        std::string stored_id;
+        int64_t stored_time = 0;
+        if (std::getline(f, stored_id))
+        {
+            std::string time_str;
+            if (std::getline(f, time_str))
+            {
+                try { stored_time = std::stoll(time_str); } catch (...) { stored_time = 0; }
+            }
+        }
+        f.close();
+
+        while (!stored_id.empty() && (stored_id.back() == '\r' || stored_id.back() == '\n' || stored_id.back() == ' '))
+            stored_id.pop_back();
+
+        // Only renew if we are still the registered owner
+        if (stored_id != instance_id)
+            return false;
+
+        auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
+        auto now = chrono::duration_cast<chrono::milliseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
+
+        {
+            std::ofstream out(tmp_path, std::ios::trunc);
+            out << instance_id << "\n" << now << "\n";
+        }
+
+        std::error_code ec;
+        fs::rename(tmp_path, path, ec);
+        if (ec)
+        {
+            std::ofstream out(path, std::ios::trunc);
+            out << instance_id << "\n" << now << "\n";
+            fs::remove(tmp_path, ec);
+        }
+        return true;
+    }
+    catch (...)
+    {
+        return false;
     }
 }
 
@@ -609,6 +673,9 @@ static bool is_active_instance(const std::string& instance_id)
     try
     {
         ipc_mutex_guard guard;
+        if (!guard.is_locked())
+            return false;
+
         auto path = get_lock_file_path();
         if (!fs::exists(path))
             return true;
@@ -647,7 +714,7 @@ static bool is_active_instance(const std::string& instance_id)
     }
     catch (...)
     {
-        return true;
+        return false;
     }
 }
 
@@ -656,6 +723,9 @@ static void release_active_instance(const std::string& instance_id)
     try
     {
         ipc_mutex_guard guard;
+        if (!guard.is_locked())
+            return;
+
         auto path = get_lock_file_path();
         if (!fs::exists(path))
             return;
@@ -849,7 +919,7 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search)
             auto j = nlohmann::json::parse(r.text);
             if (!j.contains("errors") && j.contains("data") && !j["data"].is_null()
                 && j["data"].contains("Page") && !j["data"]["Page"].is_null()
-                && j["data"]["Page"].contains("media") && j["data"]["Page"]["media"].is_array())
+                && j["data"].contains("media") && j["data"]["Page"]["media"].is_array())
             {
                 for (auto& item : j["data"]["Page"]["media"])
                 {
@@ -1325,20 +1395,20 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
     if (msg->args[0] == "toggle"s)
     {
         state.is_enabled = !state.is_enabled.has_value() || !*state.is_enabled;
-        state.config_received = true;
-        on_eligibility_changed(state);
+        if (state.config_received)
+            on_eligibility_changed(state);
     }
     else if (msg->args[0] == "on"s)
     {
         state.is_enabled = true;
-        state.config_received = true;
-        on_eligibility_changed(state);
+        if (state.config_received)
+            on_eligibility_changed(state);
     }
     else if (msg->args[0] == "off"s)
     {
         state.is_enabled = false;
-        state.config_received = true;
-        on_eligibility_changed(state);
+        if (state.config_received)
+            on_eligibility_changed(state);
     }
     else if (msg->args[0] == "application_id"s)
     {
@@ -1373,7 +1443,8 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
             {
                 state.folder_filter_mode = mode;
                 mpv_print(state.mpv, std::format("Folder filter mode: {}", state.folder_filter_mode));
-                on_eligibility_changed(state);
+                if (state.config_received)
+                    on_eligibility_changed(state);
             }
         }
     }
@@ -1383,7 +1454,8 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
         {
             state.folder_list = parse_folder_list(msg->args[1]);
             mpv_print(state.mpv, std::format("Folder list: {} entries", state.folder_list.size()));
-            on_eligibility_changed(state);
+            if (state.config_received)
+                on_eligibility_changed(state);
         }
     }
     else if (msg->args[0] == "pause_timeout"s)
@@ -1399,6 +1471,12 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
             {
             }
         }
+    }
+    else if (msg->args[0] == "config_complete"s)
+    {
+        state.config_received = true;
+        mpv_print(state.mpv, "Configuration complete received from bridge");
+        on_eligibility_changed(state);
     }
 
     if (is_enabled_prev.has_value() && state.is_enabled.has_value() && state.is_enabled != is_enabled_prev)
@@ -1456,7 +1534,10 @@ static void handle_file_loaded(rich_presence_state& state)
 
     // Reset pause state and activity tracking for new file
     state.last_reported_pos = -1.0;
+    state.last_playback_paused = -1;
+    state.last_published_paused = -1;
     state.pause_start_epoch_ms = 0;
+    state.pause_start_time = chrono::steady_clock::time_point{};
     state.rpc_hidden_by_timeout = false;
     state.force_update = true;
 
@@ -1707,13 +1788,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
         // Track playback transitions independently of ownership or publishing
         bool transitioned_to_playing = (state.last_playback_paused == 1 && is_media_paused == 0);
-        bool transitioned_to_paused = (state.last_playback_paused == 0 && is_media_paused == 1);
+        bool transitioned_to_paused = (state.last_playback_paused != 1 && is_media_paused == 1);
         bool buffering_changed = (is_caching != state.last_caching_state);
 
         state.last_playback_paused = is_media_paused;
         state.last_caching_state = is_caching;
 
-        if (transitioned_to_paused)
+        if (transitioned_to_paused || (is_media_paused == 1 && state.pause_start_epoch_ms == 0))
         {
             state.pause_start_time = now_steady;
             state.pause_start_epoch_ms = chrono::duration_cast<chrono::milliseconds>(
@@ -1758,8 +1839,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         // Heartbeat renewal while owner
         if (now_steady - state.last_heartbeat >= chrono::seconds(2))
         {
-            claim_active_instance(state.instance_id);
-            state.last_heartbeat = now_steady;
+            if (renew_active_instance(state.instance_id))
+            {
+                state.last_heartbeat = now_steady;
+            }
+            else
+            {
+                hide_rich_presence();
+                continue;
+            }
         }
 
         // Skip update during seek

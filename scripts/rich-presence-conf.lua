@@ -40,6 +40,7 @@ function pong()
     mp.commandv("script-message-to", "rich_presence", "folder_filter_mode", options.folder_filter_mode)
     mp.commandv("script-message-to", "rich_presence", "folder_list", options.folder_list)
     mp.commandv("script-message-to", "rich_presence", "pause_timeout", tostring(options.pause_timeout))
+    mp.commandv("script-message-to", "rich_presence", "config_complete")
 end
 
 mp.register_script_message("ping", pong)
