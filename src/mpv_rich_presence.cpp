@@ -575,6 +575,44 @@ static fs::path get_lock_file_path()
     return dir / "mpv-rpc-active.lock";
 }
 
+// Internal checked writer for lease records: caller MUST already hold the interprocess mutex
+static bool write_lease_record_locked(const fs::path& lock_path, const std::string& instance_id, int64_t timestamp_ms)
+{
+    auto tmp_path = lock_path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
+    std::error_code ec;
+
+    try
+    {
+        {
+            std::ofstream out;
+            out.exceptions(std::ios::failbit | std::ios::badbit);
+            out.open(tmp_path, std::ios::binary | std::ios::trunc);
+            out << instance_id << '\n' << timestamp_ms << '\n';
+            out.flush();
+            out.close();
+        }
+
+        fs::rename(tmp_path, lock_path, ec);
+        if (ec)
+        {
+            // Direct write fallback within the held interprocess lock
+            std::ofstream out;
+            out.exceptions(std::ios::failbit | std::ios::badbit);
+            out.open(lock_path, std::ios::binary | std::ios::trunc);
+            out << instance_id << '\n' << timestamp_ms << '\n';
+            out.flush();
+            out.close();
+            fs::remove(tmp_path, ec);
+        }
+        return true;
+    }
+    catch (...)
+    {
+        fs::remove(tmp_path, ec);
+        return false;
+    }
+}
+
 // Explicit takeover: claims active ownership
 static bool claim_active_instance(const std::string& instance_id)
 {
@@ -585,24 +623,10 @@ static bool claim_active_instance(const std::string& instance_id)
             return false;
 
         auto path = get_lock_file_path();
-        auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
         auto now = chrono::duration_cast<chrono::milliseconds>(
             chrono::system_clock::now().time_since_epoch()).count();
 
-        {
-            std::ofstream f(tmp_path, std::ios::trunc);
-            f << instance_id << "\n" << now << "\n";
-        }
-
-        std::error_code ec;
-        fs::rename(tmp_path, path, ec);
-        if (ec)
-        {
-            std::ofstream f(path, std::ios::trunc);
-            f << instance_id << "\n" << now << "\n";
-            fs::remove(tmp_path, ec);
-        }
-        return true;
+        return write_lease_record_locked(path, instance_id, now);
     }
     catch (...)
     {
@@ -667,21 +691,7 @@ static bool acquire_or_renew_active_instance(const std::string& instance_id)
 
         if (can_acquire_or_renew)
         {
-            auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
-            {
-                std::ofstream out(tmp_path, std::ios::trunc);
-                out << instance_id << "\n" << now << "\n";
-            }
-
-            std::error_code ec;
-            fs::rename(tmp_path, path, ec);
-            if (ec)
-            {
-                std::ofstream out(path, std::ios::trunc);
-                out << instance_id << "\n" << now << "\n";
-                fs::remove(tmp_path, ec);
-            }
-            return true;
+            return write_lease_record_locked(path, instance_id, now);
         }
 
         return false;
@@ -1568,8 +1578,15 @@ static void handle_file_loaded(rich_presence_state& state)
     // Claim active instance if eligible
     if (is_window_eligible(state))
     {
-        claim_active_instance(state.instance_id);
-        state.last_heartbeat = chrono::steady_clock::now();
+        if (claim_active_instance(state.instance_id))
+        {
+            state.last_heartbeat = chrono::steady_clock::now();
+            state.was_active_instance = true;
+        }
+        else
+        {
+            state.was_active_instance = false;
+        }
     }
 
     // Only dispatch background anime lookup if eligible video file
@@ -1682,20 +1699,32 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (needs_write)
             {
                 auto tmp_file = target_dir / std::format("{}.tmp.{}", filename, state.instance_id);
+                try
                 {
-                    auto temp_sdk = std::ofstream { tmp_file, std::ios_base::binary | std::ios_base::trunc };
+                    std::ofstream temp_sdk;
+                    temp_sdk.exceptions(std::ios::failbit | std::ios::badbit);
+                    temp_sdk.open(tmp_file, std::ios_base::binary | std::ios_base::trunc);
                     temp_sdk.write(embedded_sdk.begin(), embedded_sdk.size());
-                }
-                fs::rename(tmp_file, temp_sdk_path, ec);
-                if (ec)
-                {
-                    if (!fs::exists(temp_sdk_path, ec) || fs::file_size(temp_sdk_path, ec) != embedded_sdk.size())
+                    temp_sdk.flush();
+                    temp_sdk.close();
+
+                    fs::rename(tmp_file, temp_sdk_path, ec);
+                    if (ec)
                     {
-                        mpv_print(state.mpv, std::format("Failed to write Discord SDK: {}", ec.message()));
+                        if (!fs::exists(temp_sdk_path, ec) || fs::file_size(temp_sdk_path, ec) != embedded_sdk.size())
+                        {
+                            mpv_print(state.mpv, std::format("Failed to write Discord SDK: {}", ec.message()));
+                            fs::remove(tmp_file, ec);
+                            return;
+                        }
                         fs::remove(tmp_file, ec);
-                        return;
                     }
+                }
+                catch (const std::exception& e)
+                {
                     fs::remove(tmp_file, ec);
+                    mpv_print(state.mpv, std::format("Failed to write Discord SDK: {}", e.what()));
+                    return;
                 }
             }
 
@@ -1825,10 +1854,17 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         bool eligible = is_window_eligible(state);
         if (eligible && transitioned_to_playing)
         {
-            claim_active_instance(state.instance_id);
-            state.last_heartbeat = now_steady;
-            state.force_update = true;
-            state.rpc_hidden_by_timeout = false;
+            if (claim_active_instance(state.instance_id))
+            {
+                state.last_heartbeat = now_steady;
+                state.was_active_instance = true;
+                state.force_update = true;
+                state.rpc_hidden_by_timeout = false;
+            }
+            else
+            {
+                state.was_active_instance = false;
+            }
         }
 
         // Track ownership transitions
