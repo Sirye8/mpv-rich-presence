@@ -176,6 +176,21 @@ static std::string to_lower(std::string str)
     return str;
 }
 
+static std::string truncate_utf8_bytes(std::string_view text, std::size_t limit)
+{
+    if (text.size() <= limit)
+        return std::string(text);
+    constexpr std::string_view suffix = "...";
+    if (limit < suffix.size())
+        return std::string(limit, '.');
+    std::size_t cut = limit - suffix.size();
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+    {
+        --cut;
+    }
+    return std::string(text.substr(0, cut)) + std::string(suffix);
+}
+
 static uint64_t compute_fnv1a64(const char* data, size_t len)
 {
     uint64_t hash = 14695981039346656037ULL;
@@ -2041,6 +2056,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
         if (local_is_anime)
         {
+            activity_name = truncate_utf8_bytes(activity_name, 128);
             state.discord_api->Discord_Activity_SetName(&activity.get(), { activity_name.data(), activity_name.size() });
 
             if (!details_str.empty())
@@ -2078,10 +2094,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             std::string song_info;
             if (!state.media_artist.empty() && !state.media_title.empty())
             {
-                std::string title_lower = state.media_title;
-                std::string artist_lower = state.media_artist;
-                std::transform(title_lower.begin(), title_lower.end(), title_lower.begin(), ::tolower);
-                std::transform(artist_lower.begin(), artist_lower.end(), artist_lower.begin(), ::tolower);
+                std::string title_lower = to_lower(state.media_title);
+                std::string artist_lower = to_lower(state.media_artist);
                 if (title_lower.rfind(artist_lower, 0) == 0)
                     song_info = state.media_title;
                 else
@@ -2101,8 +2115,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             else
                 activity_name = "mpv";
 
-            if (activity_name.size() > 128)
-                activity_name = activity_name.substr(0, 125) + "...";
+            activity_name = truncate_utf8_bytes(activity_name, 128);
 
             state.discord_api->Discord_Activity_SetName(&activity.get(), { activity_name.data(), activity_name.size() });
 
