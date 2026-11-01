@@ -25,4 +25,8 @@ namespace mpvrp
     auto mpv_print(mpv_handle* ctx, std::string_view str) -> int;
 
     auto mpv_show(mpv_handle* ctx, const std::string& str) -> int;
+
+    std::string get_mpv_string(mpv_handle* ctx, const char* name);
+
+    std::string get_mpv_osd_string(mpv_handle* ctx, const char* name);
 }
