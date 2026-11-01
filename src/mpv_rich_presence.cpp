@@ -1885,11 +1885,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 auto pause_elapsed = now_steady - state.pause_start_time;
                 if (pause_elapsed >= chrono::seconds(state.pause_timeout_seconds))
                 {
-                    if (!state.rpc_hidden_by_timeout)
-                    {
-                        state.rpc_hidden_by_timeout = true;
-                        hide_rich_presence();
-                    }
+                    state.rpc_hidden_by_timeout = true;
+                    hide_rich_presence();
                     continue;
                 }
             }
