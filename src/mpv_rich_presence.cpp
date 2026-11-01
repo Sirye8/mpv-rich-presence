@@ -610,8 +610,8 @@ static bool claim_active_instance(const std::string& instance_id)
     }
 }
 
-// Atomic heartbeat renewal: only updates timestamp if this instance still owns the lease
-static bool renew_active_instance(const std::string& instance_id)
+// Atomic lease renewal and takeover: renews if already owner, acquires if missing, invalid, or expired
+static bool acquire_or_renew_active_instance(const std::string& instance_id)
 {
     try
     {
@@ -620,47 +620,71 @@ static bool renew_active_instance(const std::string& instance_id)
             return false;
 
         auto path = get_lock_file_path();
-        if (!fs::exists(path))
-            return false;
+        bool can_acquire_or_renew = false;
 
-        std::ifstream f(path);
-        std::string stored_id;
-        int64_t stored_time = 0;
-        if (std::getline(f, stored_id))
-        {
-            std::string time_str;
-            if (std::getline(f, time_str))
-            {
-                try { stored_time = std::stoll(time_str); } catch (...) { stored_time = 0; }
-            }
-        }
-        f.close();
-
-        while (!stored_id.empty() && (stored_id.back() == '\r' || stored_id.back() == '\n' || stored_id.back() == ' '))
-            stored_id.pop_back();
-
-        // Only renew if we are still the registered owner
-        if (stored_id != instance_id)
-            return false;
-
-        auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
         auto now = chrono::duration_cast<chrono::milliseconds>(
             chrono::system_clock::now().time_since_epoch()).count();
 
+        if (!fs::exists(path))
         {
-            std::ofstream out(tmp_path, std::ios::trunc);
-            out << instance_id << "\n" << now << "\n";
+            can_acquire_or_renew = true;
+        }
+        else
+        {
+            std::ifstream f(path);
+            std::string stored_id;
+            int64_t stored_time = 0;
+            if (std::getline(f, stored_id))
+            {
+                std::string time_str;
+                if (std::getline(f, time_str))
+                {
+                    try { stored_time = std::stoll(time_str); } catch (...) { stored_time = 0; }
+                }
+            }
+            f.close();
+
+            while (!stored_id.empty() && (stored_id.back() == '\r' || stored_id.back() == '\n' || stored_id.back() == ' '))
+                stored_id.pop_back();
+
+            if (stored_id == instance_id)
+            {
+                can_acquire_or_renew = true;
+            }
+            else if (stored_id.empty() || stored_time <= 0)
+            {
+                can_acquire_or_renew = true;
+            }
+            else if (now - stored_time > LEASE_TIMEOUT_MS)
+            {
+                can_acquire_or_renew = true;
+            }
+            else
+            {
+                return false;
+            }
         }
 
-        std::error_code ec;
-        fs::rename(tmp_path, path, ec);
-        if (ec)
+        if (can_acquire_or_renew)
         {
-            std::ofstream out(path, std::ios::trunc);
-            out << instance_id << "\n" << now << "\n";
-            fs::remove(tmp_path, ec);
+            auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
+            {
+                std::ofstream out(tmp_path, std::ios::trunc);
+                out << instance_id << "\n" << now << "\n";
+            }
+
+            std::error_code ec;
+            fs::rename(tmp_path, path, ec);
+            if (ec)
+            {
+                std::ofstream out(path, std::ios::trunc);
+                out << instance_id << "\n" << now << "\n";
+                fs::remove(tmp_path, ec);
+            }
+            return true;
         }
-        return true;
+
+        return false;
     }
     catch (...)
     {
@@ -919,7 +943,7 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search)
             auto j = nlohmann::json::parse(r.text);
             if (!j.contains("errors") && j.contains("data") && !j["data"].is_null()
                 && j["data"].contains("Page") && !j["data"]["Page"].is_null()
-                && j["data"].contains("media") && j["data"]["Page"]["media"].is_array())
+                && j["data"]["Page"].contains("media") && j["data"]["Page"]["media"].is_array())
             {
                 for (auto& item : j["data"]["Page"]["media"])
                 {
@@ -1543,7 +1567,10 @@ static void handle_file_loaded(rich_presence_state& state)
 
     // Claim active instance if eligible
     if (is_window_eligible(state))
+    {
         claim_active_instance(state.instance_id);
+        state.last_heartbeat = chrono::steady_clock::now();
+    }
 
     // Only dispatch background anime lookup if eligible video file
     if (state.media_has_video && is_window_eligible(state))
@@ -1705,8 +1732,6 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         }
     };
 
-    auto start_time = chrono::steady_clock::now();
-
     // Main event loop
 
     while (true)
@@ -1751,13 +1776,6 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             break;
 
         auto now_steady = chrono::steady_clock::now();
-
-        // Mark config received fallback if no lua script response after 1.5 seconds
-        if (!state.config_received && (now_steady - start_time >= 1500ms))
-        {
-            state.config_received = true;
-            on_eligibility_changed(state);
-        }
 
         // Playback state inspection across all instances
         double media_time_pos_s = 0.0;
@@ -1806,6 +1824,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (eligible && transitioned_to_playing)
         {
             claim_active_instance(state.instance_id);
+            state.last_heartbeat = now_steady;
             state.force_update = true;
             state.rpc_hidden_by_timeout = false;
         }
@@ -1814,8 +1833,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         bool currently_active = is_active_instance(state.instance_id);
         if (currently_active && !state.was_active_instance)
         {
-            // Regained active ownership: force an immediate update
+            // Regained active ownership: force an immediate update and lease renewal
             state.force_update = true;
+            state.last_heartbeat = chrono::steady_clock::time_point{};
         }
         state.was_active_instance = currently_active;
 
@@ -1836,15 +1856,16 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             continue;
         }
 
-        // Heartbeat renewal while owner
+        // Heartbeat renewal or lease acquisition
         if (now_steady - state.last_heartbeat >= chrono::seconds(2))
         {
-            if (renew_active_instance(state.instance_id))
+            if (acquire_or_renew_active_instance(state.instance_id))
             {
                 state.last_heartbeat = now_steady;
             }
             else
             {
+                state.was_active_instance = false;
                 hide_rich_presence();
                 continue;
             }
