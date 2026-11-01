@@ -21,10 +21,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "mpv_rich_presence/discord_api.hpp"
@@ -75,5 +77,23 @@ namespace mpvrp
         std::string current_file_path;
 
         std::string instance_id = "";
+
+        // Presence state tracking
+        bool is_rpc_visible = false;
+        bool force_update = false;
+        std::chrono::steady_clock::time_point last_error_time;
+        int retry_backoff_ms = 0;
+        std::chrono::steady_clock::time_point last_heartbeat;
+        double playback_speed = 1.0;
+
+        // Background anime lookup worker
+        std::mutex worker_mutex;
+        std::condition_variable worker_cv;
+        bool has_pending_lookup = false;
+        int pending_load_id = 0;
+        std::string pending_filename = "";
+        std::string pending_file_path = "";
+        bool worker_stop = false;
+        std::thread worker_thread;
     };
 }
