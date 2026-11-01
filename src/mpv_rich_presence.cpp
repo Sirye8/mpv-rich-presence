@@ -1811,6 +1811,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
         state.last_playback_paused = is_media_paused;
         state.last_caching_state = is_caching;
+        if (buffering_changed)
+            state.force_update = true;
 
         if (transitioned_to_paused || (is_media_paused == 1 && state.pause_start_epoch_ms == 0))
         {
@@ -2109,7 +2111,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         state.discord_api->Discord_Activity_SetAssets(&activity.get(), &assets.get());
 
         // Timestamps
-        if (is_media_paused == 1 || is_caching == 1)
+        if (is_caching == 1)
+        {
+            // Omit timestamps while buffering to avoid reusing an earlier manual pause timer
+        }
+        else if (is_media_paused == 1)
         {
             if (state.pause_start_epoch_ms > 0)
             {
