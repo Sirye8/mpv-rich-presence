@@ -42,6 +42,7 @@ namespace mpvrp
         std::shared_ptr<discord_api_importer> discord_api = nullptr;
 
         std::optional<bool> is_enabled = std::nullopt;
+        bool config_received = false;
 
         bool media_has_audio = false;
         bool media_has_video = false;
@@ -60,8 +61,10 @@ namespace mpvrp
         std::string anime_cover_url = "";
         int anime_anilist_id = 0;
 
-        int last_paused = -1;
-        bool was_paused = false;
+        int last_playback_paused = -1;
+        int last_published_paused = -1;
+        int last_caching_state = 0;
+        bool was_active_instance = false;
         std::atomic<bool> anime_dirty = false;
         double last_reported_pos = -1.0;
         std::chrono::steady_clock::time_point last_activity_update;
@@ -81,6 +84,7 @@ namespace mpvrp
         // Presence state tracking
         bool is_rpc_visible = false;
         bool force_update = false;
+        bool needs_retry = false;
         std::chrono::steady_clock::time_point last_error_time;
         int retry_backoff_ms = 0;
         std::chrono::steady_clock::time_point last_heartbeat;
@@ -93,7 +97,15 @@ namespace mpvrp
         int pending_load_id = 0;
         std::string pending_filename = "";
         std::string pending_file_path = "";
-        bool worker_stop = false;
+        std::atomic<bool> worker_stop{false};
         std::thread worker_thread;
+
+        ~rich_presence_state()
+        {
+            worker_stop.store(true, std::memory_order_release);
+            worker_cv.notify_all();
+            if (worker_thread.joinable())
+                worker_thread.join();
+        }
     };
 }

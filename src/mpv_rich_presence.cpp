@@ -26,6 +26,13 @@
 #include <mpv/client.h>
 #include <nlohmann/json.hpp>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -69,6 +76,77 @@ static const std::string ICON_PAUSED = "https://raw.githubusercontent.com/google
 
 CMRC_DECLARE(mpvrp);
 
+// Interprocess synchronization guard for multi-instance lease coordination
+#if defined(_WIN32)
+class ipc_mutex_guard
+{
+public:
+    ipc_mutex_guard()
+    {
+        m_handle = CreateMutexW(NULL, FALSE, L"Local\\mpv_rich_presence_lease_mutex");
+        if (m_handle)
+        {
+            DWORD res = WaitForSingleObject(m_handle, 3000);
+            m_locked = (res == WAIT_OBJECT_0 || res == WAIT_ABANDONED);
+        }
+    }
+
+    ~ipc_mutex_guard()
+    {
+        if (m_locked && m_handle)
+            ReleaseMutex(m_handle);
+        if (m_handle)
+            CloseHandle(m_handle);
+    }
+
+    bool is_locked() const { return m_locked; }
+
+private:
+    HANDLE m_handle = NULL;
+    bool m_locked = false;
+};
+#else
+class ipc_mutex_guard
+{
+public:
+    ipc_mutex_guard()
+    {
+        auto lock_dir = fs::temp_directory_path() / "mpv-rich-presence";
+        std::error_code ec;
+        fs::create_directories(lock_dir, ec);
+        auto lock_path = lock_dir / ".lease.lock";
+        m_fd = open(lock_path.c_str(), O_CREAT | O_RDWR, 0666);
+        if (m_fd >= 0)
+        {
+            struct flock fl {};
+            fl.l_type = F_WRLCK;
+            fl.l_whence = SEEK_SET;
+            if (fcntl(m_fd, F_SETLKW, &fl) == 0)
+                m_locked = true;
+        }
+    }
+
+    ~ipc_mutex_guard()
+    {
+        if (m_locked && m_fd >= 0)
+        {
+            struct flock fl {};
+            fl.l_type = F_UNLCK;
+            fl.l_whence = SEEK_SET;
+            fcntl(m_fd, F_SETLK, &fl);
+        }
+        if (m_fd >= 0)
+            close(m_fd);
+    }
+
+    bool is_locked() const { return m_locked; }
+
+private:
+    int m_fd = -1;
+    bool m_locked = false;
+};
+#endif
+
 // Helper functions
 
 static std::wstring s2ws(const std::string& str)
@@ -96,6 +174,17 @@ static std::string to_lower(std::string str)
     std::transform(str.begin(), str.end(), str.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return str;
+}
+
+static uint64_t compute_fnv1a64(const char* data, size_t len)
+{
+    uint64_t hash = 14695981039346656037ULL;
+    for (size_t i = 0; i < len; ++i)
+    {
+        hash ^= static_cast<uint8_t>(data[i]);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
 }
 
 // OS-aware path normalization
@@ -438,7 +527,6 @@ static bool passes_folder_filter(const std::string& file_path, const std::string
     }
     else
     {
-        // Unrecognized mode (e.g. typos): default safely to enabled
         return true;
     }
 
@@ -463,6 +551,20 @@ static bool passes_folder_filter(const std::string& file_path, const std::string
         return !in_list;
 }
 
+static bool is_window_eligible(const rich_presence_state& state)
+{
+    if (!state.config_received)
+        return false;
+
+    if (!state.is_enabled.value_or(false))
+        return false;
+
+    if (!state.media_has_audio && !state.media_has_video)
+        return false;
+
+    return passes_folder_filter(state.current_file_path, state.folder_filter_mode, state.folder_list);
+}
+
 // Multi-instance coordination
 
 static fs::path get_lock_file_path()
@@ -477,6 +579,7 @@ static void claim_active_instance(const std::string& instance_id)
 {
     try
     {
+        ipc_mutex_guard guard;
         auto path = get_lock_file_path();
         auto tmp_path = path.parent_path() / std::format("mpv-rpc-active.{}.tmp", instance_id);
         auto now = chrono::duration_cast<chrono::milliseconds>(
@@ -505,6 +608,7 @@ static bool is_active_instance(const std::string& instance_id)
 {
     try
     {
+        ipc_mutex_guard guard;
         auto path = get_lock_file_path();
         if (!fs::exists(path))
             return true;
@@ -517,18 +621,25 @@ static bool is_active_instance(const std::string& instance_id)
             std::string time_str;
             if (std::getline(f, time_str))
             {
-                try { stored_time = std::stoll(time_str); } catch (...) {}
+                try { stored_time = std::stoll(time_str); } catch (...) { stored_time = 0; }
             }
         }
+
+        while (!stored_id.empty() && (stored_id.back() == '\r' || stored_id.back() == '\n' || stored_id.back() == ' '))
+            stored_id.pop_back();
 
         if (stored_id == instance_id)
             return true;
 
+        // Malformed, empty, or non-positive timestamp records are treated as immediately recoverable
+        if (stored_id.empty() || stored_time <= 0)
+            return true;
+
         auto now = chrono::duration_cast<chrono::milliseconds>(
             chrono::system_clock::now().time_since_epoch()).count();
-        if (stored_time > 0 && (now - stored_time > LEASE_TIMEOUT_MS))
+
+        if (now - stored_time > LEASE_TIMEOUT_MS)
         {
-            // Previous owner lease has expired
             return true;
         }
 
@@ -544,17 +655,24 @@ static void release_active_instance(const std::string& instance_id)
 {
     try
     {
+        ipc_mutex_guard guard;
         auto path = get_lock_file_path();
         if (!fs::exists(path))
             return;
 
         std::ifstream f(path);
         std::string stored_id;
-        if (std::getline(f, stored_id) && stored_id == instance_id)
+        if (std::getline(f, stored_id))
         {
-            f.close();
-            std::error_code ec;
-            fs::remove(path, ec);
+            while (!stored_id.empty() && (stored_id.back() == '\r' || stored_id.back() == '\n' || stored_id.back() == ' '))
+                stored_id.pop_back();
+
+            if (stored_id == instance_id)
+            {
+                f.close();
+                std::error_code ec;
+                fs::remove(path, ec);
+            }
         }
     }
     catch (...)
@@ -567,7 +685,8 @@ static void release_active_instance(const std::string& instance_id)
 struct anilist_media
 {
     int id = 0;
-    std::string title;
+    std::string title; // Preferred display title
+    std::vector<std::string> matching_titles; // Romaji, English, Native, and Synonyms for alias matching
     int episodes = 0;
     std::string cover_url;
     std::string format;
@@ -576,14 +695,21 @@ struct anilist_media
 
 static const std::string ANILIST_PAGE_FIELDS = R"(
     id
-    title { romaji english }
+    title { romaji english native }
+    synonyms
     episodes
     format
     coverImage { large }
     relations {
         edges {
             relationType(version: 2)
-            node { id type format title { romaji } }
+            node {
+                id
+                type
+                format
+                title { romaji english native }
+                synonyms
+            }
         }
     }
 )";
@@ -595,13 +721,49 @@ static std::optional<anilist_media> parse_anilist_media(const nlohmann::json& me
 
     anilist_media result;
     result.id = media.value("id", 0);
+
     if (media.contains("title") && !media["title"].is_null())
     {
         if (media["title"].contains("romaji") && !media["title"]["romaji"].is_null())
-            result.title = media["title"]["romaji"].get<std::string>();
-        if (result.title.empty() && media["title"].contains("english") && !media["title"]["english"].is_null())
-            result.title = media["title"]["english"].get<std::string>();
+        {
+            std::string romaji = media["title"]["romaji"].get<std::string>();
+            if (!romaji.empty())
+            {
+                result.title = romaji;
+                result.matching_titles.push_back(romaji);
+            }
+        }
+        if (media["title"].contains("english") && !media["title"]["english"].is_null())
+        {
+            std::string english = media["title"]["english"].get<std::string>();
+            if (!english.empty())
+            {
+                if (result.title.empty())
+                    result.title = english;
+                result.matching_titles.push_back(english);
+            }
+        }
+        if (media["title"].contains("native") && !media["title"]["native"].is_null())
+        {
+            std::string native = media["title"]["native"].get<std::string>();
+            if (!native.empty())
+                result.matching_titles.push_back(native);
+        }
     }
+
+    if (media.contains("synonyms") && media["synonyms"].is_array())
+    {
+        for (const auto& syn : media["synonyms"])
+        {
+            if (syn.is_string())
+            {
+                std::string s = syn.get<std::string>();
+                if (!s.empty())
+                    result.matching_titles.push_back(s);
+            }
+        }
+    }
+
     if (media.contains("episodes") && !media["episodes"].is_null())
     {
         try { result.episodes = media["episodes"].get<int>(); }
@@ -611,8 +773,10 @@ static std::optional<anilist_media> parse_anilist_media(const nlohmann::json& me
     {
         result.episodes = 0;
     }
+
     if (media.contains("format") && !media["format"].is_null())
         result.format = media["format"].get<std::string>();
+
     if (media.contains("coverImage") && !media["coverImage"].is_null())
     {
         if (media["coverImage"].contains("large") && !media["coverImage"]["large"].is_null())
@@ -683,7 +847,8 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search)
         try
         {
             auto j = nlohmann::json::parse(r.text);
-            if (j.contains("data") && !j["data"].is_null() && j["data"].contains("Page")
+            if (!j.contains("errors") && j.contains("data") && !j["data"].is_null()
+                && j["data"].contains("Page") && !j["data"]["Page"].is_null()
                 && j["data"]["Page"].contains("media") && j["data"]["Page"]["media"].is_array())
             {
                 for (auto& item : j["data"]["Page"]["media"])
@@ -696,14 +861,14 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search)
                         anilist_id_cache[parsed->id] = *parsed;
                     }
                 }
+
+                std::lock_guard<std::mutex> lock(anilist_cache_mutex);
+                anilist_page_cache[search] = results;
             }
         }
         catch (...)
         {
         }
-
-        std::lock_guard<std::mutex> lock(anilist_cache_mutex);
-        anilist_page_cache[search] = results;
     }
 
     return results;
@@ -738,28 +903,30 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
         try
         {
             auto j = nlohmann::json::parse(r.text);
-            if (j.contains("data") && !j["data"].is_null() && j["data"].contains("Media"))
+            if (!j.contains("errors") && j.contains("data") && !j["data"].is_null()
+                && j["data"].contains("Media") && !j["data"]["Media"].is_null())
+            {
                 result = parse_anilist_media(j["data"]["Media"]);
+                if (result)
+                {
+                    std::lock_guard<std::mutex> lock(anilist_cache_mutex);
+                    anilist_id_cache[result->id] = *result;
+                }
+            }
         }
         catch (...)
         {
-        }
-
-        if (result)
-        {
-            std::lock_guard<std::mutex> lock(anilist_cache_mutex);
-            anilist_id_cache[result->id] = *result;
         }
     }
 
     return result;
 }
 
-// Title similarity helper to avoid false matches
-static bool is_title_match(const std::string& query, const std::string& title)
+// Single title similarity check
+static bool is_single_title_match(const std::string& query, const std::string& candidate_title)
 {
     std::string q = to_lower(query);
-    std::string t = to_lower(title);
+    std::string t = to_lower(candidate_title);
     if (q.empty() || t.empty())
         return false;
     if (t.find(q) != std::string::npos || q.find(t) != std::string::npos)
@@ -799,10 +966,28 @@ static bool is_title_match(const std::string& query, const std::string& title)
     return sim >= 0.4;
 }
 
+// Matches query against any title variant or synonym of an AniList media entry
+static bool is_media_title_match(const std::string& query, const anilist_media& media)
+{
+    if (is_single_title_match(query, media.title))
+        return true;
+
+    for (const auto& alias : media.matching_titles)
+    {
+        if (is_single_title_match(query, alias))
+            return true;
+    }
+
+    return false;
+}
+
 // Anime lookup logic processed in worker thread
 static void process_anime_lookup(rich_presence_state& state, const std::string& filename_str, const std::string& file_path_str, int current_load_id)
 {
     if (filename_str.empty())
+        return;
+
+    if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
         return;
 
     anitomy::Anitomy anitomy;
@@ -859,7 +1044,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
 
     for (const auto& q_str : search_queries)
     {
-        if (state.worker_stop || state.file_load_id != current_load_id)
+        if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
             return;
 
         auto page = search_anilist_page(q_str);
@@ -869,23 +1054,50 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         std::optional<anilist_media> best = std::nullopt;
         for (const auto& m : page)
         {
-            if (!is_title_match(a_title, m.title))
+            if (!is_media_title_match(a_title, m))
                 continue;
 
-            std::string romaji_lower = to_lower(m.title);
+            std::string title_lower = to_lower(m.title);
 
             if (parsed_season > 1 && page.size() > 1)
             {
-                bool has_season = (romaji_lower.find(std::to_string(parsed_season)) != std::string::npos)
-                                  || (romaji_lower.find(to_lower(ord_str)) != std::string::npos);
+                bool has_season = (title_lower.find(std::to_string(parsed_season)) != std::string::npos)
+                                  || (title_lower.find(to_lower(ord_str)) != std::string::npos);
+                if (!has_season)
+                {
+                    for (const auto& alt : m.matching_titles)
+                    {
+                        std::string alt_lower = to_lower(alt);
+                        if ((alt_lower.find(std::to_string(parsed_season)) != std::string::npos)
+                            || (alt_lower.find(to_lower(ord_str)) != std::string::npos))
+                        {
+                            has_season = true;
+                            break;
+                        }
+                    }
+                }
                 if (!has_season)
                     continue;
             }
 
             if (parsed_part > 0)
             {
-                if (romaji_lower.find("part " + std::to_string(parsed_part)) == std::string::npos
-                    && romaji_lower.find("cour " + std::to_string(parsed_part)) == std::string::npos)
+                bool has_part = (title_lower.find("part " + std::to_string(parsed_part)) != std::string::npos)
+                                || (title_lower.find("cour " + std::to_string(parsed_part)) != std::string::npos);
+                if (!has_part)
+                {
+                    for (const auto& alt : m.matching_titles)
+                    {
+                        std::string alt_lower = to_lower(alt);
+                        if ((alt_lower.find("part " + std::to_string(parsed_part)) != std::string::npos)
+                            || (alt_lower.find("cour " + std::to_string(parsed_part)) != std::string::npos))
+                        {
+                            has_part = true;
+                            break;
+                        }
+                    }
+                }
+                if (!has_part)
                     continue;
             }
 
@@ -908,13 +1120,13 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
 
     if (!candidate)
     {
-        if (state.worker_stop || state.file_load_id != current_load_id)
+        if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
             return;
 
         auto base_page = search_anilist_page(a_title);
         for (const auto& m : base_page)
         {
-            if (is_title_match(a_title, m.title))
+            if (is_media_title_match(a_title, m))
             {
                 candidate = m;
                 break;
@@ -925,8 +1137,8 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     if (!candidate)
         return;
 
-    anilist_media resolved_media = *candidate;
-    int resolved_ep = parsed_ep;
+    anilist_media current_resolved_media = *candidate;
+    int current_resolved_ep = parsed_ep;
 
     // Walk sequels if episode number exceeds current season total
     if (parsed_ep > 0 && candidate->episodes > 0 && parsed_ep > candidate->episodes)
@@ -937,53 +1149,61 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
 
         for (int step = 0; step < 20 && curr_id > 0; step++)
         {
-            if (state.worker_stop || state.file_load_id != current_load_id)
+            if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
                 return;
 
             if (visited.contains(curr_id))
                 break;
             visited.insert(curr_id);
 
-            auto m_opt = fetch_anilist_by_id(curr_id);
+            auto m_opt = (curr_id == candidate->id) ? candidate : fetch_anilist_by_id(curr_id);
             if (!m_opt)
                 break;
 
             auto m = *m_opt;
             if (m.episodes > 0 && remaining_ep <= m.episodes)
             {
-                resolved_media = m;
-                resolved_ep = remaining_ep;
+                current_resolved_media = m;
+                current_resolved_ep = remaining_ep;
                 break;
             }
             else if (m.episodes <= 0)
             {
                 // Ongoing or unannounced total episodes
-                resolved_media = m;
-                resolved_ep = remaining_ep;
+                current_resolved_media = m;
+                current_resolved_ep = remaining_ep;
                 break;
             }
             else
             {
-                // Only advance or decrement when a sequel is confirmed
+                // remaining_ep > m.episodes: only advance after successfully fetching sequel
                 if (m.sequel_id > 0)
                 {
-                    remaining_ep -= m.episodes;
-                    curr_id = m.sequel_id;
-                    resolved_media = m;
-                    resolved_ep = remaining_ep;
+                    auto next_opt = fetch_anilist_by_id(m.sequel_id);
+                    if (next_opt)
+                    {
+                        remaining_ep -= m.episodes;
+                        current_resolved_media = *next_opt;
+                        current_resolved_ep = remaining_ep;
+                        curr_id = m.sequel_id;
+                        continue;
+                    }
+                    else
+                    {
+                        // Fetch failed: preserve last consistent media and episode
+                        break;
+                    }
                 }
                 else
                 {
-                    // No sequel exists: keep current media and remaining episode
-                    resolved_media = m;
-                    resolved_ep = remaining_ep;
+                    // No sequel exists: preserve last consistent media and episode
                     break;
                 }
             }
         }
     }
 
-    if (state.worker_stop || state.file_load_id != current_load_id)
+    if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
         return;
 
     // Commit results under lock
@@ -991,13 +1211,13 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     if (state.file_load_id == current_load_id)
     {
         state.is_anime = true;
-        state.anime_title = resolved_media.title;
-        state.anime_episode = (resolved_ep > 0) ? std::to_string(resolved_ep) : "";
+        state.anime_title = current_resolved_media.title;
+        state.anime_episode = (current_resolved_ep > 0) ? std::to_string(current_resolved_ep) : "";
         state.anime_episode_raw = (parsed_ep > 0) ? std::to_string(parsed_ep) : "";
-        state.anime_episode_total = resolved_media.episodes;
+        state.anime_episode_total = current_resolved_media.episodes;
         state.anime_release_group = a_group;
-        state.anime_cover_url = resolved_media.cover_url;
-        state.anime_anilist_id = resolved_media.id;
+        state.anime_cover_url = current_resolved_media.cover_url;
+        state.anime_anilist_id = current_resolved_media.id;
         state.anime_dirty = true;
     }
 }
@@ -1014,10 +1234,10 @@ static void anime_worker_loop(rich_presence_state& state)
         {
             std::unique_lock<std::mutex> lock(state.worker_mutex);
             state.worker_cv.wait(lock, [&state]() {
-                return state.worker_stop || state.has_pending_lookup;
+                return state.worker_stop.load(std::memory_order_acquire) || state.has_pending_lookup;
             });
 
-            if (state.worker_stop)
+            if (state.worker_stop.load(std::memory_order_acquire))
                 break;
 
             if (!state.has_pending_lookup)
@@ -1039,6 +1259,60 @@ static void anime_worker_loop(rich_presence_state& state)
     }
 }
 
+// React to configuration or eligibility changes
+static void on_eligibility_changed(rich_presence_state& state)
+{
+    state.force_update = true;
+    bool eligible = is_window_eligible(state);
+
+    if (!eligible)
+    {
+        // Invalidate any pending or in-flight background anime lookups
+        {
+            std::lock_guard<std::mutex> lock(state.worker_mutex);
+            state.has_pending_lookup = false;
+            state.pending_load_id = ++state.file_load_id;
+        }
+        {
+            std::lock_guard<std::mutex> lock(state.anime_mutex);
+            state.is_anime = false;
+            state.anime_anilist_id = 0;
+        }
+        if (state.is_rpc_visible && state.discord_api && state.discord)
+        {
+            state.discord_api->Discord_Client_ClearRichPresence(&state.discord->get());
+            state.is_rpc_visible = false;
+        }
+    }
+    else
+    {
+        // If newly eligible and video media is loaded without resolved anime metadata, enqueue lookup
+        if (state.media_has_video && !state.current_file_path.empty())
+        {
+            bool needs_lookup = false;
+            {
+                std::lock_guard<std::mutex> lock(state.anime_mutex);
+                if (!state.is_anime && state.anime_anilist_id == 0)
+                    needs_lookup = true;
+            }
+
+            if (needs_lookup)
+            {
+                int current_load_id = ++state.file_load_id;
+                std::string filename_str = fs::path(state.current_file_path).filename().string();
+                {
+                    std::lock_guard<std::mutex> lock(state.worker_mutex);
+                    state.pending_load_id = current_load_id;
+                    state.pending_filename = filename_str;
+                    state.pending_file_path = state.current_file_path;
+                    state.has_pending_lookup = true;
+                }
+                state.worker_cv.notify_one();
+            }
+        }
+    }
+}
+
 // Event handlers
 
 static void handle_client_message(rich_presence_state& state, int64_t& application_id, mpv_event_client_message* msg)
@@ -1051,17 +1325,20 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
     if (msg->args[0] == "toggle"s)
     {
         state.is_enabled = !state.is_enabled.has_value() || !*state.is_enabled;
-        state.force_update = true;
+        state.config_received = true;
+        on_eligibility_changed(state);
     }
     else if (msg->args[0] == "on"s)
     {
         state.is_enabled = true;
-        state.force_update = true;
+        state.config_received = true;
+        on_eligibility_changed(state);
     }
     else if (msg->args[0] == "off"s)
     {
         state.is_enabled = false;
-        state.force_update = true;
+        state.config_received = true;
+        on_eligibility_changed(state);
     }
     else if (msg->args[0] == "application_id"s)
     {
@@ -1090,15 +1367,14 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
             std::string mode = msg->args[1];
             if (mode != "whitelist" && mode != "blacklist" && mode != "disabled")
             {
-                mpv_print(state.mpv, std::format("Warning: invalid folder filter mode '{}', defaulting to disabled", mode));
-                state.folder_filter_mode = "disabled";
+                mpv_print(state.mpv, std::format("Warning: invalid folder filter mode '{}', ignoring and preserving '{}'", mode, state.folder_filter_mode));
             }
             else
             {
                 state.folder_filter_mode = mode;
+                mpv_print(state.mpv, std::format("Folder filter mode: {}", state.folder_filter_mode));
+                on_eligibility_changed(state);
             }
-            mpv_print(state.mpv, std::format("Folder filter mode: {}", state.folder_filter_mode));
-            state.force_update = true;
         }
     }
     else if (msg->args[0] == "folder_list"s)
@@ -1107,7 +1383,7 @@ static void handle_client_message(rich_presence_state& state, int64_t& applicati
         {
             state.folder_list = parse_folder_list(msg->args[1]);
             mpv_print(state.mpv, std::format("Folder list: {} entries", state.folder_list.size()));
-            state.force_update = true;
+            on_eligibility_changed(state);
         }
     }
     else if (msg->args[0] == "pause_timeout"s)
@@ -1179,22 +1455,17 @@ static void handle_file_loaded(rich_presence_state& state)
     }
 
     // Reset pause state and activity tracking for new file
-    state.was_paused = false;
-    state.last_paused = -1;
     state.last_reported_pos = -1.0;
     state.pause_start_epoch_ms = 0;
     state.rpc_hidden_by_timeout = false;
     state.force_update = true;
 
-    // Claim this instance as active on file load if eligible
-    bool is_filtered = !passes_folder_filter(state.current_file_path, state.folder_filter_mode, state.folder_list);
-    bool is_disabled = (state.is_enabled.has_value() && !*state.is_enabled);
-
-    if (!is_filtered && !is_disabled)
+    // Claim active instance if eligible
+    if (is_window_eligible(state))
         claim_active_instance(state.instance_id);
 
-    // Only dispatch background anime lookup for eligible video files
-    if (state.media_has_video && !is_filtered && !is_disabled)
+    // Only dispatch background anime lookup if eligible video file
+    if (state.media_has_video && is_window_eligible(state))
     {
         std::lock_guard<std::mutex> lock(state.worker_mutex);
         state.pending_load_id = current_load_id;
@@ -1246,6 +1517,7 @@ void on_discord_update_rich_presence(Discord_ClientResult* result, void* payload
     {
         state.is_rpc_visible = true;
         state.retry_backoff_ms = 0;
+        state.needs_retry = false;
         return;
     }
 
@@ -1253,6 +1525,7 @@ void on_discord_update_rich_presence(Discord_ClientResult* result, void* payload
     mpv_print(state.mpv, std::format("Rich presence error: {}", code));
     state.last_error_time = chrono::steady_clock::now();
     state.retry_backoff_ms = (state.retry_backoff_ms == 0) ? 1000 : (std::min)(state.retry_backoff_ms * 2, 16000);
+    state.needs_retry = true;
 }
 
 // Main plugin entry
@@ -1282,7 +1555,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             auto filename = (*embedded_fs.iterate_directory(DISCORD_SDK_DIR).begin()).filename();
             auto embedded_sdk = embedded_fs.open(std::format("{}/{}", DISCORD_SDK_DIR, filename));
 
-            auto target_dir = fs::temp_directory_path() / "mpv-rich-presence";
+            uint64_t sdk_hash = compute_fnv1a64(embedded_sdk.begin(), embedded_sdk.size());
+            auto target_dir = fs::temp_directory_path() / "mpv-rich-presence" / std::format("sdk_{:016x}", sdk_hash);
             std::error_code ec;
             fs::create_directories(target_dir, ec);
 
@@ -1350,6 +1624,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         }
     };
 
+    auto start_time = chrono::steady_clock::now();
+
     // Main event loop
 
     while (true)
@@ -1393,33 +1669,16 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (should_shutdown)
             break;
 
-        if (!is_ready)
-            continue;
+        auto now_steady = chrono::steady_clock::now();
 
-        state.discord_api->Discord_RunCallbacks();
-
-        if (state.discord_api->Discord_Client_GetApplicationId(&state.discord->get()) != application_id)
-            state.discord_api->Discord_Client_SetApplicationId(&state.discord->get(), application_id);
-
-        if (application_id == 0)
-            continue;
-
-        if (!state.is_enabled.has_value()
-            || !*state.is_enabled
-            || (!state.media_has_audio && !state.media_has_video))
+        // Mark config received fallback if no lua script response after 1.5 seconds
+        if (!state.config_received && (now_steady - start_time >= 1500ms))
         {
-            hide_rich_presence();
-            continue;
+            state.config_received = true;
+            on_eligibility_changed(state);
         }
 
-        // Folder filtering check
-        if (!passes_folder_filter(state.current_file_path, state.folder_filter_mode, state.folder_list))
-        {
-            hide_rich_presence();
-            continue;
-        }
-
-        // Playback state inspection
+        // Playback state inspection across all instances
         double media_time_pos_s = 0.0;
         double media_time_left_s = 0.0;
         int is_media_paused = 0;
@@ -1446,46 +1705,73 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 playtime_left_s = 0.0;
         }
 
-        // Handover on resume: claim active instance when transitioning from paused to playing
-        if (is_media_paused == 0 && state.was_paused)
+        // Track playback transitions independently of ownership or publishing
+        bool transitioned_to_playing = (state.last_playback_paused == 1 && is_media_paused == 0);
+        bool transitioned_to_paused = (state.last_playback_paused == 0 && is_media_paused == 1);
+        bool buffering_changed = (is_caching != state.last_caching_state);
+
+        state.last_playback_paused = is_media_paused;
+        state.last_caching_state = is_caching;
+
+        if (transitioned_to_paused)
+        {
+            state.pause_start_time = now_steady;
+            state.pause_start_epoch_ms = chrono::duration_cast<chrono::milliseconds>(
+                chrono::system_clock::now().time_since_epoch()).count();
+        }
+
+        // Handover on resume: unpausing an eligible instance claims ownership immediately
+        bool eligible = is_window_eligible(state);
+        if (eligible && transitioned_to_playing)
         {
             claim_active_instance(state.instance_id);
             state.force_update = true;
             state.rpc_hidden_by_timeout = false;
         }
 
-        // Multi-instance check
-        if (!is_active_instance(state.instance_id))
+        // Track ownership transitions
+        bool currently_active = is_active_instance(state.instance_id);
+        if (currently_active && !state.was_active_instance)
+        {
+            // Regained active ownership: force an immediate update
+            state.force_update = true;
+        }
+        state.was_active_instance = currently_active;
+
+        if (!is_ready)
+            continue;
+
+        state.discord_api->Discord_RunCallbacks();
+
+        if (state.discord_api->Discord_Client_GetApplicationId(&state.discord->get()) != application_id)
+            state.discord_api->Discord_Client_SetApplicationId(&state.discord->get(), application_id);
+
+        if (application_id == 0)
+            continue;
+
+        if (!eligible || !currently_active)
         {
             hide_rich_presence();
             continue;
         }
 
         // Heartbeat renewal while owner
-        auto now_steady = chrono::steady_clock::now();
         if (now_steady - state.last_heartbeat >= chrono::seconds(2))
         {
             claim_active_instance(state.instance_id);
             state.last_heartbeat = now_steady;
         }
 
-        // Skip tick during seek
+        // Skip update during seek
         if (is_seeking == 1)
             continue;
 
         // Pause timeout handling
         if (is_media_paused == 1)
         {
-            if (state.last_paused != 1)
-            {
-                state.pause_start_time = chrono::steady_clock::now();
-                state.pause_start_epoch_ms = chrono::duration_cast<chrono::milliseconds>(
-                    chrono::system_clock::now().time_since_epoch()).count();
-            }
-
             if (state.pause_timeout_seconds > 0)
             {
-                auto pause_elapsed = chrono::steady_clock::now() - state.pause_start_time;
+                auto pause_elapsed = now_steady - state.pause_start_time;
                 if (pause_elapsed >= chrono::seconds(state.pause_timeout_seconds))
                 {
                     if (!state.rpc_hidden_by_timeout)
@@ -1493,7 +1779,6 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                         state.rpc_hidden_by_timeout = true;
                         hide_rich_presence();
                     }
-                    state.was_paused = true;
                     continue;
                 }
             }
@@ -1503,21 +1788,25 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             state.rpc_hidden_by_timeout = false;
         }
 
-        // Error backoff check
-        if (state.retry_backoff_ms > 0)
+        // Scheduled retry check on previous error
+        bool retry_ready = false;
+        if (state.needs_retry)
         {
-            if (now_steady - state.last_error_time < chrono::milliseconds(state.retry_backoff_ms))
+            if (now_steady - state.last_error_time >= chrono::milliseconds(state.retry_backoff_ms))
+                retry_ready = true;
+            else
                 continue;
         }
 
         // Update detection
-        bool pause_changed = (is_media_paused != state.last_paused);
+        bool pause_changed = (is_media_paused != state.last_published_paused);
         bool anime_updated = state.anime_dirty.exchange(false);
+        bool buffering_update = buffering_changed;
 
         bool seek_detected = false;
         if (state.last_reported_pos >= 0.0)
         {
-            if (is_media_paused == 0)
+            if (is_media_paused == 0 && is_caching == 0)
             {
                 auto elapsed_s = chrono::duration_cast<chrono::milliseconds>(now_steady - state.last_activity_update).count() * 1e-3;
                 double expected_pos = state.last_reported_pos + (elapsed_s * current_speed);
@@ -1531,16 +1820,16 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             }
         }
 
-        bool periodic_update = (is_media_paused == 0 && (now_steady - state.last_activity_update >= chrono::seconds(15)));
+        bool periodic_update = (is_media_paused == 0 && is_caching == 0 && (now_steady - state.last_activity_update >= chrono::seconds(15)));
         bool first_update = (state.last_reported_pos < 0.0);
         bool forced = state.force_update;
 
-        if (!forced && !pause_changed && !anime_updated && !seek_detected && !periodic_update && !first_update)
+        if (!forced && !retry_ready && !pause_changed && !anime_updated && !buffering_update && !seek_detected && !periodic_update && !first_update)
             continue;
 
         state.force_update = false;
-        state.last_paused = is_media_paused;
-        state.was_paused = (is_media_paused == 1);
+        state.needs_retry = false;
+        state.last_published_paused = is_media_paused;
         state.last_reported_pos = media_time_pos_s;
         state.last_activity_update = now_steady;
 
@@ -1579,14 +1868,22 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     if (!state.anime_release_group.empty())
                         state_str += std::format(" by {}", state.anime_release_group);
 
-                    if (is_media_paused == 1)
+                    if (is_caching == 1)
+                        state_str += std::format(" (Buffering... {})", dur_str);
+                    else if (is_media_paused == 1)
                         state_str += std::format(" ({})", dur_str);
                 }
                 else if (!state.anime_release_group.empty())
                 {
                     state_str = std::format("by {}", state.anime_release_group);
-                    if (is_media_paused == 1)
+                    if (is_caching == 1)
+                        state_str += std::format(" (Buffering... {})", dur_str);
+                    else if (is_media_paused == 1)
                         state_str += std::format(" ({})", dur_str);
+                }
+                else if (is_caching == 1)
+                {
+                    state_str = std::format("Buffering... ({})", dur_str);
                 }
                 else if (is_media_paused == 1)
                 {
@@ -1672,7 +1969,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 state.discord_api->Discord_Activity_SetDetails(&activity.get(), &d_details);
             }
 
-            if (is_media_paused == 1)
+            if (is_caching == 1)
+            {
+                std::string b_state = std::format("Buffering... ({})", dur_str);
+                Discord_String d_state = { b_state.data(), b_state.size() };
+                state.discord_api->Discord_Activity_SetState(&activity.get(), &d_state);
+            }
+            else if (is_media_paused == 1)
             {
                 Discord_String d_state = { dur_str.data(), dur_str.size() };
                 state.discord_api->Discord_Activity_SetState(&activity.get(), &d_state);
@@ -1680,7 +1983,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         }
 
         // Play/pause and buffering indicator
-        const std::string& icon_url = (is_media_paused == 1) ? ICON_PAUSED : ICON_PLAYING;
+        const std::string& icon_url = (is_media_paused == 1 || is_caching == 1) ? ICON_PAUSED : ICON_PLAYING;
         state.discord_api->Discord_ActivityAssets_SetSmallImage(&assets.get(), { icon_url.data(), icon_url.size() });
 
         std::string small_tooltip;
@@ -1697,7 +2000,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         state.discord_api->Discord_Activity_SetAssets(&activity.get(), &assets.get());
 
         // Timestamps
-        if (is_media_paused == 1)
+        if (is_media_paused == 1 || is_caching == 1)
         {
             if (state.pause_start_epoch_ms > 0)
             {
@@ -1729,15 +2032,6 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
     // Shut down gracefully
     mpv_print(state.mpv, "Shutting down...");
-
-    // Stop anime worker thread
-    {
-        std::lock_guard<std::mutex> lock(state.worker_mutex);
-        state.worker_stop = true;
-    }
-    state.worker_cv.notify_all();
-    if (state.worker_thread.joinable())
-        state.worker_thread.join();
 
     release_active_instance(state.instance_id);
 
