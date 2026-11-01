@@ -102,7 +102,10 @@ namespace mpvrp
 
         ~rich_presence_state()
         {
-            worker_stop.store(true, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lock(worker_mutex);
+                worker_stop.store(true, std::memory_order_release);
+            }
             worker_cv.notify_all();
             if (worker_thread.joinable())
                 worker_thread.join();
