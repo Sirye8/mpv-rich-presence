@@ -35,3 +35,27 @@ auto mpvrp::mpv_show(mpv_handle* ctx, const std::string& str) -> int
     auto args = std::array<const char*, 3> { "show-text", str.c_str(), nullptr };
     return mpv_command(ctx, args.data());
 }
+
+std::string mpvrp::get_mpv_string(mpv_handle* ctx, const char* name)
+{
+    char* val = nullptr;
+    if (mpv_get_property(ctx, name, MPV_FORMAT_STRING, &val) >= 0 && val)
+    {
+        std::string res(val);
+        mpv_free(val);
+        return res;
+    }
+    return {};
+}
+
+std::string mpvrp::get_mpv_osd_string(mpv_handle* ctx, const char* name)
+{
+    char* val = nullptr;
+    if (mpv_get_property(ctx, name, MPV_FORMAT_OSD_STRING, &val) >= 0 && val)
+    {
+        std::string res(val);
+        mpv_free(val);
+        return res;
+    }
+    return {};
+}
