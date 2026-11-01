@@ -65,16 +65,22 @@ find_package(CMakeRC CONFIG REQUIRED)
 # Source -----------------------------------------------------------------------
 
 set(mpv-rich-presence_HPP
+    anilist_parser
     discord_api
     discord_utils
+    lease_manager
     mpv_utils
-    rich_presence_state)
+    rich_presence_state
+    string_utils)
 
 set(mpv-rich-presence_CPP
+    anilist_parser
     discord_api
     discord_utils
+    lease_manager
     mpv_rich_presence
-    mpv_utils)
+    mpv_utils
+    string_utils)
 
 set(mpv-rich-presence_LUA
     rich-presence-conf)
@@ -194,14 +200,25 @@ endif()
 
 option(mpv-rich-presence_BUILD_TESTS "Build regression test suite" ON)
 if(mpv-rich-presence_BUILD_TESTS)
+    enable_testing()
+
     add_executable(rich-presence-tests
         tests/regression_tests.cpp
+        src/string_utils.cpp
+        src/anilist_parser.cpp
+        src/lease_manager.cpp
     )
     set_target_properties(rich-presence-tests PROPERTIES
         CXX_STANDARD 20
         CXX_EXTENSIONS OFF
     )
+    target_include_directories(rich-presence-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
     target_link_libraries(rich-presence-tests PRIVATE
         nlohmann_json::nlohmann_json
     )
+
+    add_test(NAME rich-presence-regressions COMMAND rich-presence-tests)
+    set_tests_properties(rich-presence-regressions PROPERTIES TIMEOUT 30)
 endif()
