@@ -41,7 +41,7 @@ include(FetchContent)
 FetchContent_Declare(
   anitomy
   GIT_REPOSITORY https://github.com/erengy/anitomy.git
-  GIT_TAG master
+  GIT_TAG a538eff670cb4666f8395cf66a9c29a535f2c383
 )
 FetchContent_MakeAvailable(anitomy)
 
