@@ -145,6 +145,11 @@ Available script messages:
    cmake --build build --config Release
    ```
 
+6. Run the regression test suite:
+   ```bash
+   ctest --test-dir build -C Release --output-on-failure
+   ```
+
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 
 ## License
