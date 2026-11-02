@@ -487,6 +487,7 @@ static void test_lease_guard_exception_safety()
     fs::create_directories(test_dir, ec);
 
     auto lock_file = test_dir / "safety.lock";
+    const std::string instance_id = "safety_inst";
 
 #if !defined(_WIN32)
     // On POSIX, simulate invalid TMPDIR where temp_directory_path can fail
@@ -501,7 +502,7 @@ static void test_lease_guard_exception_safety()
     setenv("TMPDIR", invalid_tmp.c_str(), 1);
 
     // First call with invalid TMPDIR must safely handle or fail without leaving mutex locked
-    acquire_or_renew_active_instance("throw_inst_1", lock_file, 6000);
+    acquire_or_renew_active_instance(instance_id, lock_file, 6000);
 
     // Restore TMPDIR
     if (!saved_tmp.empty())
@@ -510,21 +511,21 @@ static void test_lease_guard_exception_safety()
         unsetenv("TMPDIR");
 
     // Second call must succeed immediately without hanging
-    bool succ = acquire_or_renew_active_instance("succ_inst", lock_file, 6000);
+    bool succ = acquire_or_renew_active_instance(instance_id, lock_file, 6000);
     TEST_CHECK(succ == true);
-    TEST_CHECK(is_active_instance("succ_inst", lock_file, 6000) == true);
-    release_active_instance("succ_inst", lock_file);
+    TEST_CHECK(is_active_instance(instance_id, lock_file, 6000) == true);
+    release_active_instance(instance_id, lock_file);
 #else
     // On Windows, verify collision and recovery
     auto dir_collision = test_dir / "dir_lock";
     fs::create_directories(dir_collision, ec);
-    bool fail1 = acquire_or_renew_active_instance("inst_fail", dir_collision, 6000);
+    bool fail1 = acquire_or_renew_active_instance(instance_id, dir_collision, 6000);
     TEST_CHECK(fail1 == false);
 
-    bool succ = acquire_or_renew_active_instance("inst_ok", lock_file, 6000);
+    bool succ = acquire_or_renew_active_instance(instance_id, lock_file, 6000);
     TEST_CHECK(succ == true);
-    TEST_CHECK(is_active_instance("inst_ok", lock_file, 6000) == true);
-    release_active_instance("inst_ok", lock_file);
+    TEST_CHECK(is_active_instance(instance_id, lock_file, 6000) == true);
+    release_active_instance(instance_id, lock_file);
 #endif
 
     fs::remove_all(test_dir, ec);
