@@ -46,6 +46,7 @@ private:
     HANDLE m_handle = NULL;
 #else
     int m_fd = -1;
+    bool m_thread_locked = false;
 #endif
     bool m_locked = false;
 };
