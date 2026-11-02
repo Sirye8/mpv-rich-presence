@@ -20,6 +20,7 @@
 #include <chrono>
 #include <format>
 #include <fstream>
+#include <mutex>
 #include <system_error>
 
 namespace chrono = std::chrono;
@@ -44,8 +45,13 @@ ipc_mutex_guard::~ipc_mutex_guard()
         CloseHandle(m_handle);
 }
 #else
+static std::mutex g_process_lease_mutex;
+
 ipc_mutex_guard::ipc_mutex_guard(const std::string& mutex_name)
 {
+    g_process_lease_mutex.lock();
+    m_thread_locked = true;
+
     auto lock_dir = fs::temp_directory_path() / "mpv-rich-presence";
     std::error_code ec;
     fs::create_directories(lock_dir, ec);
@@ -59,6 +65,17 @@ ipc_mutex_guard::ipc_mutex_guard(const std::string& mutex_name)
         if (fcntl(m_fd, F_SETLKW, &fl) == 0)
             m_locked = true;
     }
+
+    if (!m_locked)
+    {
+        if (m_fd >= 0)
+        {
+            close(m_fd);
+            m_fd = -1;
+        }
+        g_process_lease_mutex.unlock();
+        m_thread_locked = false;
+    }
 }
 
 ipc_mutex_guard::~ipc_mutex_guard()
@@ -71,7 +88,15 @@ ipc_mutex_guard::~ipc_mutex_guard()
         fcntl(m_fd, F_SETLK, &fl);
     }
     if (m_fd >= 0)
+    {
         close(m_fd);
+        m_fd = -1;
+    }
+    if (m_thread_locked)
+    {
+        g_process_lease_mutex.unlock();
+        m_thread_locked = false;
+    }
 }
 #endif
 

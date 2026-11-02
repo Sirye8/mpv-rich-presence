@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -61,6 +62,23 @@ static std::atomic<int> g_failed_checks{0};
         } \
     } while (0)
 
+template <typename Func>
+static void run_test(const char* name, Func&& test_fn)
+{
+    std::cout << "[RUN] " << name << "...\n";
+    int failures_before = g_failed_checks.load(std::memory_order_relaxed);
+    test_fn();
+    int failures_after = g_failed_checks.load(std::memory_order_relaxed);
+    if (failures_after == failures_before)
+    {
+        std::cout << "[PASS] " << name << "\n";
+    }
+    else
+    {
+        std::cout << "[FAIL] " << name << " (" << (failures_after - failures_before) << " check failure(s))\n";
+    }
+}
+
 static void verify_utf8_json(const std::string& str, const std::string& context)
 {
     try
@@ -79,8 +97,6 @@ static void verify_utf8_json(const std::string& str, const std::string& context)
 
 static void test_utf8_truncation()
 {
-    std::cout << "[RUN] test_utf8_truncation...\n";
-
     // Edge cases: limits 0 to 3
     TEST_CHECK_EQ(truncate_utf8_bytes("Hello", 0), "");
     TEST_CHECK_EQ(truncate_utf8_bytes("Hello", 1), ".");
@@ -125,14 +141,10 @@ static void test_utf8_truncation()
             }
         }
     }
-
-    std::cout << "[PASS] test_utf8_truncation\n";
 }
 
 static void test_safe_to_lower()
 {
-    std::cout << "[RUN] test_safe_to_lower...\n";
-
     TEST_CHECK_EQ(to_lower("HELLO WORLD"), "hello world");
     TEST_CHECK_EQ(to_lower("mpv-rich-presence"), "mpv-rich-presence");
 
@@ -140,14 +152,10 @@ static void test_safe_to_lower()
     std::string with_accents = "Caf\xE9";
     std::string lower_accents = to_lower(with_accents);
     TEST_CHECK(!lower_accents.empty());
-
-    std::cout << "[PASS] test_safe_to_lower\n";
 }
 
 static void test_folder_filtering()
 {
-    std::cout << "[RUN] test_folder_filtering...\n";
-
     // Empty whitelist blocks everything
     std::vector<std::string> empty_list;
     TEST_CHECK(passes_folder_filter("C:/Videos/anime.mkv", "whitelist", empty_list) == false);
@@ -171,14 +179,10 @@ static void test_folder_filtering()
     auto blacklist = parse_folder_list("C:/Private; /home/user/private");
     TEST_CHECK(passes_folder_filter("C:/Private/secret.mp4", "blacklist", blacklist) == false);
     TEST_CHECK(passes_folder_filter("C:/Videos/public.mp4", "blacklist", blacklist) == true);
-
-    std::cout << "[PASS] test_folder_filtering\n";
 }
 
 static void test_anilist_page_parsing()
 {
-    std::cout << "[RUN] test_anilist_page_parsing...\n";
-
     // Valid GraphQL response with data.Page.media
     std::string valid_json = R"({
         "data": {
@@ -244,14 +248,10 @@ static void test_anilist_page_parsing()
     bool bad_parse_ok = parse_anilist_page_response(j_invalid, bad_results);
     TEST_CHECK(bad_parse_ok == false);
     TEST_CHECK(bad_results.empty());
-
-    std::cout << "[PASS] test_anilist_page_parsing\n";
 }
 
 static void test_lease_operations()
 {
-    std::cout << "[RUN] test_lease_operations...\n";
-
     auto test_dir = fs::temp_directory_path() / "mpv_rpc_test_leases";
     std::error_code ec;
     fs::create_directories(test_dir, ec);
@@ -310,13 +310,10 @@ static void test_lease_operations()
     TEST_CHECK(acq_fail == false);
 
     fs::remove_all(test_dir, ec);
-    std::cout << "[PASS] test_lease_operations\n";
 }
 
 static void test_multi_thread_lease_contention()
 {
-    std::cout << "[RUN] test_multi_thread_lease_contention...\n";
-
     auto test_dir = fs::temp_directory_path() / "mpv_rpc_test_contention";
     std::error_code ec;
     fs::create_directories(test_dir, ec);
@@ -351,13 +348,139 @@ static void test_multi_thread_lease_contention()
     TEST_CHECK_EQ(successful_acquisitions.load(), 1);
 
     fs::remove_all(test_dir, ec);
-    std::cout << "[PASS] test_multi_thread_lease_contention\n";
+}
+
+static void test_multi_process_lease_contention(const fs::path& exe_path)
+{
+    auto test_dir = fs::temp_directory_path() / "mpv_rpc_test_proc_contention";
+    std::error_code ec;
+    fs::remove_all(test_dir, ec);
+    fs::create_directories(test_dir, ec);
+
+    auto lock_file = test_dir / "contention.lock";
+    auto gate_file = test_dir / "start_gate.txt";
+
+    constexpr int NUM_PROCS = 6;
+    std::vector<std::thread> threads;
+
+    for (int i = 0; i < NUM_PROCS; ++i)
+    {
+        threads.emplace_back([&, i]() {
+            std::string id = std::format("proc_{}", i);
+            auto ready_file = test_dir / std::format("ready_{}.txt", i);
+            auto res_file = test_dir / std::format("proc_{}.res", i);
+
+#if defined(_WIN32)
+            std::string cmd = std::format("\"\"{}\" --lease-contender \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"\"",
+                exe_path.string(), lock_file.string(), id, gate_file.string(), ready_file.string(), res_file.string());
+#else
+            std::string cmd = std::format("\"{}\" --lease-contender \"{}\" \"{}\" \"{}\" \"{}\" \"{}\"",
+                exe_path.string(), lock_file.string(), id, gate_file.string(), ready_file.string(), res_file.string());
+#endif
+            int ret = std::system(cmd.c_str());
+            (void)ret;
+        });
+    }
+
+    // Wait until all worker processes report ready
+    auto wait_start = chrono::steady_clock::now();
+    bool all_ready = false;
+    while (chrono::steady_clock::now() - wait_start < 10s)
+    {
+        int ready_count = 0;
+        for (int i = 0; i < NUM_PROCS; ++i)
+        {
+            if (fs::exists(test_dir / std::format("ready_{}.txt", i)))
+                ready_count++;
+        }
+        if (ready_count == NUM_PROCS)
+        {
+            all_ready = true;
+            break;
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    TEST_CHECK(all_ready == true);
+
+    // Release all workers simultaneously
+    {
+        std::ofstream out(gate_file);
+        out << "START";
+        out.flush();
+    }
+
+    for (auto& t : threads)
+        t.join();
+
+    int winners = 0;
+    int losers = 0;
+    for (int i = 0; i < NUM_PROCS; ++i)
+    {
+        auto res_file = test_dir / std::format("proc_{}.res", i);
+        if (fs::exists(res_file))
+        {
+            std::ifstream in(res_file);
+            std::string text;
+            in >> text;
+            if (text == "WON")
+                winners++;
+            else if (text == "LOST")
+                losers++;
+        }
+    }
+
+    // Exactly one process should succeed in acquiring the lease
+    TEST_CHECK_EQ(winners, 1);
+    TEST_CHECK_EQ(losers, NUM_PROCS - 1);
+
+    fs::remove_all(test_dir, ec);
+}
+
+static void test_multi_process_lease_takeover(const fs::path& exe_path)
+{
+    auto test_dir = fs::temp_directory_path() / "mpv_rpc_test_proc_takeover";
+    std::error_code ec;
+    fs::remove_all(test_dir, ec);
+    fs::create_directories(test_dir, ec);
+
+    auto lock_file = test_dir / "takeover.lock";
+
+    // 1. Parent process acquires the initial lease
+    bool acq = acquire_or_renew_active_instance("parent_owner", lock_file, 60000);
+    TEST_CHECK(acq == true);
+    TEST_CHECK(is_active_instance("parent_owner", lock_file, 60000) == true);
+
+    // 2. Spawn worker to explicitly claim active ownership
+    auto res_file = test_dir / "takeover.res";
+#if defined(_WIN32)
+    std::string cmd = std::format("\"\"{}\" --lease-claim \"{}\" \"child_takeover\" \"{}\"\"",
+        exe_path.string(), lock_file.string(), res_file.string());
+#else
+    std::string cmd = std::format("\"{}\" --lease-claim \"{}\" \"child_takeover\" \"{}\"",
+        exe_path.string(), lock_file.string(), res_file.string());
+#endif
+    int ret = std::system(cmd.c_str());
+    (void)ret;
+
+    // 3. Verify worker reported CLAIMED
+    TEST_CHECK(fs::exists(res_file));
+    if (fs::exists(res_file))
+    {
+        std::ifstream in(res_file);
+        std::string res;
+        in >> res;
+        TEST_CHECK_EQ(res, "CLAIMED");
+    }
+
+    // 4. Verify child now owns the lease and parent no longer does
+    TEST_CHECK(is_active_instance("child_takeover", lock_file, 60000) == true);
+    TEST_CHECK(is_active_instance("parent_owner", lock_file, 60000) == false);
+
+    fs::remove_all(test_dir, ec);
 }
 
 static void test_buffering_and_seek_state_machine()
 {
-    std::cout << "[RUN] test_buffering_and_seek_state_machine...\n";
-
     // Simulate main loop state
     int last_caching_state = 0;
     int is_caching = 0;
@@ -405,14 +528,10 @@ static void test_buffering_and_seek_state_machine()
     }
     TEST_CHECK(update_published == true);
     TEST_CHECK(force_update == false);
-
-    std::cout << "[PASS] test_buffering_and_seek_state_machine\n";
 }
 
 static void test_pause_timeout_callback_race()
 {
-    std::cout << "[RUN] test_pause_timeout_callback_race...\n";
-
     bool rpc_hidden_by_timeout = false;
     bool is_rpc_visible = false;
     int clear_calls = 0;
@@ -442,14 +561,10 @@ static void test_pause_timeout_callback_race()
     // 4. Subsequent timeout iteration does not redundantly clear
     hide_rich_presence();
     TEST_CHECK_EQ(clear_calls, 1); // No extra clear call
-
-    std::cout << "[PASS] test_pause_timeout_callback_race\n";
 }
 
 static void test_worker_shutdown_concurrency()
 {
-    std::cout << "[RUN] test_worker_shutdown_concurrency...\n";
-
     for (int cycle = 0; cycle < 100; ++cycle)
     {
         std::mutex worker_mutex;
@@ -474,35 +589,91 @@ static void test_worker_shutdown_concurrency()
         if (worker.joinable())
             worker.join();
     }
-
-    std::cout << "[PASS] test_worker_shutdown_concurrency\n";
 }
 
 int main(int argc, char* argv[])
 {
-    // Worker submode for multi-process lease verification if invoked with arguments
-    if (argc >= 4 && std::string_view(argv[1]) == "--lease-worker")
+    // Worker submode for multi-process lease contention
+    if (argc >= 6 && std::string_view(argv[1]) == "--lease-contender")
     {
         std::string lock_path = argv[2];
         std::string instance_id = argv[3];
-        int hold_ms = (argc >= 5) ? std::atoi(argv[4]) : 200;
-        if (!claim_active_instance(instance_id, lock_path))
-            return 1;
-        std::this_thread::sleep_for(chrono::milliseconds(hold_ms));
-        return 0;
+        std::string gate_path = argv[4];
+        std::string ready_path = argv[5];
+        std::string result_path = (argc >= 7) ? argv[6] : "";
+
+        // Signal ready
+        {
+            std::ofstream out(ready_path);
+            out << "READY";
+            out.flush();
+        }
+
+        // Wait until gate file appears or timeout (15 seconds)
+        auto start = chrono::steady_clock::now();
+        while (!fs::exists(gate_path))
+        {
+            if (chrono::steady_clock::now() - start > 15s)
+                return 1;
+            std::this_thread::sleep_for(1ms);
+        }
+
+        bool won = acquire_or_renew_active_instance(instance_id, lock_path, 60000);
+        if (!result_path.empty())
+        {
+            std::ofstream out(result_path);
+            out << (won ? "WON" : "LOST");
+            out.flush();
+        }
+        return won ? 0 : 2;
     }
+
+    // Worker submode for multi-process lease takeover
+    if (argc >= 4 && (std::string_view(argv[1]) == "--lease-claim" || std::string_view(argv[1]) == "--lease-worker"))
+    {
+        std::string lock_path = argv[2];
+        std::string instance_id = argv[3];
+        std::string opt_arg = (argc >= 5) ? argv[4] : "";
+        int hold_ms = 0;
+        if (!opt_arg.empty() && std::isdigit(static_cast<unsigned char>(opt_arg[0])))
+        {
+            hold_ms = std::atoi(opt_arg.c_str());
+        }
+        bool claimed = claim_active_instance(instance_id, lock_path);
+        if (!opt_arg.empty() && hold_ms == 0)
+        {
+            std::ofstream out(opt_arg);
+            out << (claimed ? "CLAIMED" : "FAILED");
+            out.flush();
+        }
+        if (hold_ms > 0)
+        {
+            std::this_thread::sleep_for(chrono::milliseconds(hold_ms));
+        }
+        return claimed ? 0 : 1;
+    }
+
+    fs::path exe_path = fs::absolute(argv[0]);
+#if defined(_WIN32)
+    if (!fs::exists(exe_path) && fs::exists(fs::path(exe_path.string() + ".exe")))
+    {
+        exe_path = fs::path(exe_path.string() + ".exe");
+    }
+#endif
 
     std::cout << "Starting mpv-rich-presence regression test suite...\n\n";
 
-    test_utf8_truncation();
-    test_safe_to_lower();
-    test_folder_filtering();
-    test_anilist_page_parsing();
-    test_lease_operations();
-    test_multi_thread_lease_contention();
-    test_buffering_and_seek_state_machine();
-    test_pause_timeout_callback_race();
-    test_worker_shutdown_concurrency();
+    run_test("test_utf8_truncation", test_utf8_truncation);
+    run_test("test_safe_to_lower", test_safe_to_lower);
+    run_test("test_folder_filtering", test_folder_filtering);
+    run_test("test_anilist_page_parsing", test_anilist_page_parsing);
+    run_test("test_lease_operations", test_lease_operations);
+    run_test("test_multi_thread_lease_contention", test_multi_thread_lease_contention);
+    run_test("test_multi_process_lease_contention", [&]() { test_multi_process_lease_contention(exe_path); });
+    run_test("test_multi_process_lease_takeover", [&]() { test_multi_process_lease_takeover(exe_path); });
+    run_test("test_buffering_and_seek_state_machine", test_buffering_and_seek_state_machine);
+    run_test("test_pause_timeout_callback_race", test_pause_timeout_callback_race);
+    run_test("test_worker_shutdown_concurrency", test_worker_shutdown_concurrency);
 
     int failures = g_failed_checks.load();
     if (failures > 0)
