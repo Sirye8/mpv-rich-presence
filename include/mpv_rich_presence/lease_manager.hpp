@@ -25,7 +25,10 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <mutex>
 #include <unistd.h>
+
+extern std::mutex g_process_lease_mutex;
 #endif
 
 namespace fs = std::filesystem;
@@ -45,8 +48,8 @@ private:
 #if defined(_WIN32)
     HANDLE m_handle = NULL;
 #else
+    std::unique_lock<std::mutex> m_thread_lock;
     int m_fd = -1;
-    bool m_thread_locked = false;
 #endif
     bool m_locked = false;
 };
