@@ -45,15 +45,16 @@ ipc_mutex_guard::~ipc_mutex_guard()
         CloseHandle(m_handle);
 }
 #else
-static std::mutex g_process_lease_mutex;
+std::mutex g_process_lease_mutex;
 
 ipc_mutex_guard::ipc_mutex_guard(const std::string& mutex_name)
+    : m_thread_lock(g_process_lease_mutex)
 {
-    g_process_lease_mutex.lock();
-    m_thread_locked = true;
-
-    auto lock_dir = fs::temp_directory_path() / "mpv-rich-presence";
     std::error_code ec;
+    auto temp_dir = fs::temp_directory_path(ec);
+    if (ec)
+        temp_dir = fs::path("/tmp");
+    auto lock_dir = temp_dir / "mpv-rich-presence";
     fs::create_directories(lock_dir, ec);
     auto lock_path = lock_dir / ".lease.lock";
     m_fd = open(lock_path.c_str(), O_CREAT | O_RDWR, 0666);
@@ -73,8 +74,8 @@ ipc_mutex_guard::ipc_mutex_guard(const std::string& mutex_name)
             close(m_fd);
             m_fd = -1;
         }
-        g_process_lease_mutex.unlock();
-        m_thread_locked = false;
+        if (m_thread_lock.owns_lock())
+            m_thread_lock.unlock();
     }
 }
 
@@ -92,18 +93,22 @@ ipc_mutex_guard::~ipc_mutex_guard()
         close(m_fd);
         m_fd = -1;
     }
-    if (m_thread_locked)
-    {
-        g_process_lease_mutex.unlock();
-        m_thread_locked = false;
-    }
 }
 #endif
 
 fs::path get_default_lock_directory()
 {
-    auto dir = fs::temp_directory_path() / "mpv-rich-presence";
     std::error_code ec;
+    auto dir = fs::temp_directory_path(ec);
+    if (ec)
+    {
+#if defined(_WIN32)
+        dir = fs::path("C:/Temp");
+#else
+        dir = fs::path("/tmp");
+#endif
+    }
+    dir /= "mpv-rich-presence";
     fs::create_directories(dir, ec);
     return dir;
 }
