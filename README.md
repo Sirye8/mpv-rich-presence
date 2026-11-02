@@ -161,4 +161,9 @@ Based on [mpv-rich-presence](https://github.com/goodtrailer/mpv-rich-presence) b
 ### Third-Party Notices
 - **Anitomy**: Licensed under Mozilla Public License 2.0 (MPL-2.0) by Eren Okka. See [licenses/LICENSE-Anitomy](licenses/LICENSE-Anitomy).
 - **Discord Social SDK**: The embedded runtime binary is proprietary software of Discord Inc. and governed by the [Discord Developer Terms of Service](https://discord.com/developers/docs/legal).
-- **Boost**, **CMakeRC**, and **mpv client API**: See individual licenses in the [licenses/](licenses/) directory.
+- **cpr**: Licensed under the MIT License. See [licenses/LICENSE-cpr](licenses/LICENSE-cpr).
+- **curl**: Governed by the curl license (MIT/ISC-like). See [licenses/LICENSE-curl](licenses/LICENSE-curl).
+- **nlohmann-json**: Licensed under the MIT License. See [licenses/LICENSE-nlohmann-json](licenses/LICENSE-nlohmann-json).
+- **zlib**: Licensed under the zlib License. See [licenses/LICENSE-zlib](licenses/LICENSE-zlib).
+- **mpv client API header**: Licensed under the ISC License by the mpv developers. See [licenses/LICENSE-mpv](licenses/LICENSE-mpv).
+- **Boost** and **CMakeRC**: See individual licenses in the [licenses/](licenses/) directory.

@@ -36,8 +36,29 @@ Third-Party Components & Licenses:
   See licenses/LICENSE-Anitomy for full license text.
 
 - Boost (Boost Software License 1.0) - see licenses/LICENSE-Boost
+
 - CMakeRC (MIT License) - see licenses/LICENSE-CMakeRC
-- mpv client API (LGPL-2.1 or later) - see licenses/LICENSE-mpv
+
+- cpr (MIT License)
+  Copyright (c) 2017-2021 Huu Nguyen
+  Copyright (c) 2022 libcpr and many other contributors
+  See licenses/LICENSE-cpr for full license text.
+
+- curl / libcurl (curl License / ISC-like)
+  Copyright (c) 1996 - 2025, Daniel Stenberg, <daniel@haxx.se>, and many contributors.
+  See licenses/LICENSE-curl for full license text.
+
+- nlohmann-json (MIT License)
+  Copyright (c) 2013-2025 Niels Lohmann
+  See licenses/LICENSE-nlohmann-json for full license text.
+
+- zlib (zlib License)
+  Copyright (C) 1995-2022 Jean-loup Gailly and Mark Adler
+  See licenses/LICENSE-zlib for full license text.
+
+- mpv client API header (ISC License)
+  Copyright (C) 2017 the mpv developers
+  See licenses/LICENSE-mpv for full license text.
 
 - Discord Social SDK binary:
   Copyright (c) Discord Inc.
