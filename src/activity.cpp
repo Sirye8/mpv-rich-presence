@@ -103,7 +103,13 @@ namespace mpvrp
             if (!m.provider.empty())
             {
                 name = details = m.provider.value("name", song);
-                state.clear();
+                state = m.provider.value("numbering", std::string{});
+                if (state.empty() && preset == "detailed")
+                {
+                    state = m.provider.value("year",std::string{});
+                    auto genre = m.provider.value("genre",std::string{});
+                    if (!genre.empty()) state += (state.empty() ? "" : " · ") + genre;
+                }
                 if (options.value("art", true) && m.provider.contains("cover") && m.provider.at("cover") != "")
                 {
                     card["large_image"] = m.provider.at("cover");

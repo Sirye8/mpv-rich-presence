@@ -167,6 +167,23 @@ def details(provider, hit, settings, throttle, episode):
             "https://api.themoviedb.org/3/%s/%d" % (kind, hit["id"]),
             headers={"Authorization": "Bearer " + settings["tmdb_key"]},
         )
+        item["name"] = data.get("title") or data.get("name") or hit["name"]
+        item["year"] = (data.get("release_date") or data.get("first_air_date") or "")[
+            :4
+        ]
+        item["genre"] = ", ".join(
+            g["name"] for g in data.get("genres", []) if g.get("name")
+        )
+        if kind == "tv" and episode:
+            throttle(provider)
+            season, number = map(int, episode)
+            ep = fetch(
+                "https://api.themoviedb.org/3/tv/%d/season/%d/episode/%d"
+                % (hit["id"], season, number),
+                headers={"Authorization": "Bearer " + settings["tmdb_key"]},
+            )
+            item["episode_title"] = ep.get("name", "")
+            item["numbering"] = "S%02dE%02d" % (season, number)
         if data.get("poster_path"):
             item["cover"] = "https://image.tmdb.org/t/p/w500" + data["poster_path"]
         item["link"] = "https://www.themoviedb.org/%s/%d" % (kind, hit["id"])
