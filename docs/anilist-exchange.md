@@ -16,4 +16,3 @@ Register `https://login.example.org/callback` as that client's redirect URL. Use
 Set `anilist_exchange_url` in the distributed mpv config to the public HTTPS origin. Public mode takes priority over the personal-client option. A server restart cancels unfinished sign-ins. A viewer can start again from the player.
 
 The developer's personal client currently redirects to localhost. Changing its registration to a hosted callback also changes where its personal authorization codes go. Use a second registration if both modes need to work at once.
-

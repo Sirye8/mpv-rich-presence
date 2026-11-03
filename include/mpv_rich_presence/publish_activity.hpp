@@ -8,4 +8,3 @@ namespace mpvrp
 {
     void publish_activity(rich_presence_state& state, const nlohmann::json& card, Discord_Client_UpdateRichPresenceCallback callback);
 }
-

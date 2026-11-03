@@ -20,4 +20,3 @@ namespace mpvrp
 
     nlohmann::json format_activity(const playback& media, const nlohmann::json& overrides);
 }
-

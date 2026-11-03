@@ -260,4 +260,3 @@ return function(make_sheet, send, options)
     end
     return ui
 end
-
