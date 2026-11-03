@@ -49,15 +49,19 @@ namespace mpvrp
         std::unique_ptr<profile_store> store;
         bool store_failed = false;
         int store_version = -1;
-        std::string scope_path, hidden_reason, last_sdk = "Waiting";
+        std::string cache_epoch, episode_label, scope_path, hidden_reason, last_sdk = "Waiting";
+        bool hard_block = false;
+        bool pinned_elsewhere = false, pinned_here = false;
         bool private_session = false, hidden_file = false;
         std::chrono::steady_clock::time_point hide_until{};
         std::string config_preset = "original";
         nlohmann::json appearance = nlohmann::json::object(), privacy = nlohmann::json::object();
+        nlohmann::json sources = nlohmann::json::object();
         nlohmann::json provider = nlohmann::json::object();
         nlohmann::json correction = nlohmann::json::object(), tracking = nlohmann::json::object();
         nlohmann::json preview = nlohmann::json::object();
-        std::string snapshot_request;
+        std::string snapshot_request, panel_page, last_notice;
+        bool replace_draft = false;
         std::string anime_english, anime_romaji, anime_native;
         bool config_received = false;
 

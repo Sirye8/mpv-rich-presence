@@ -201,6 +201,9 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/script-modules"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}" PATTERN "__pycache__" EXCLUDE)
 
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs"
+        DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
+
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
 endif()
@@ -230,9 +233,12 @@ if(mpv-rich-presence_BUILD_TESTS)
 
     add_test(NAME rich-presence-regressions COMMAND rich-presence-tests)
     set_tests_properties(rich-presence-regressions PROPERTIES TIMEOUT 30)
-endif()
 
-if(mpv-rich-presence_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME account-and-tracking COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/account_tests.py")
+    endif()
+
     add_library(recording-sdk SHARED tests/recording_sdk.cpp)
     set_target_properties(recording-sdk PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
     target_include_directories(recording-sdk PRIVATE "${DISCORD_SOCIAL_SDK_DIR}/include")

@@ -1,0 +1,26 @@
+name: Regressions
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install JSON headers
+        run: sudo apt-get update && sudo apt-get install -y g++-14 nlohmann-json3-dev
+      - name: Build native regression tests
+        run: |
+          g++-14 -std=c++20 -pthread -Iinclude tests/regression_tests.cpp \
+            src/anilist_parser.cpp src/string_utils.cpp src/lease_manager.cpp \
+            -o "$RUNNER_TEMP/rich-presence-tests"
+      - name: Run lease, parser and playback tests
+        run: timeout 30 "$RUNNER_TEMP/rich-presence-tests"
+      - name: Run account and multi-process tracking tests
+        run: python3 -B tests/account_tests.py
+

@@ -23,6 +23,8 @@ local options = {
     appearance_preset = "original",
     menu_key = "Alt+p",
     menu_scale = 1,
+    anilist_personal_client = false,
+    anilist_exchange_url = "",
     anilist_client_id = "55822",
     python = package.config:sub(1,1) == "\\" and "python" or "python3",
     tmdb_key = "",
@@ -68,8 +70,7 @@ mp.register_script_message("start-service", function(instance)
     if worker then return end
     local args = {options.python, "-I", utils.join_path(modules,"backend.py"), database, instance}
     worker = mp.command_native_async({name="subprocess",args=args,playback_only=false,
-        stdin_data=utils.format_json({client_id=options.anilist_client_id,tmdb_key=options.tmdb_key,
-            acoustid_key=options.acoustid_key}),capture_stderr=true}, function(_,result)
+        stdin_data=utils.format_json({broker=options.anilist_exchange_url,personal=options.anilist_personal_client,client_id=options.anilist_client_id}),capture_stderr=true}, function(_,result)
         worker=nil
         if not result or result.status~=0 then mp.msg.warn("Account helper unavailable. Check the Python setting.") end
     end)
@@ -83,6 +84,7 @@ end)
 if ok then
     mp.add_key_binding(options.menu_key,"rich-presence-menu",function() menu.show() end)
     mp.register_script_message("menu",function(page) menu.show(page) end)
+    mp.register_script_message("notice",menu.toast)
     mp.register_script_message("snapshot",function(raw)
         local data=utils.parse_json(raw)
         if data then menu.update(data) end
