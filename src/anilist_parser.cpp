@@ -54,6 +54,7 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
             if (!romaji.empty())
             {
                 result.title = romaji;
+                result.romaji = romaji;
                 result.matching_titles.push_back(romaji);
             }
         }
@@ -64,6 +65,7 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
             {
                 if (result.title.empty())
                     result.title = english;
+                result.english = english;
                 result.matching_titles.push_back(english);
             }
         }
@@ -71,6 +73,7 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
         {
             std::string native = media["title"]["native"].get<std::string>();
             if (!native.empty())
+                result.native = native;
                 result.matching_titles.push_back(native);
         }
     }

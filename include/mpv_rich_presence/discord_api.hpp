@@ -35,10 +35,19 @@ namespace mpvrp
     {
         boost::dll::shared_library sdk;
 
+        template<typename F> F* optional(const char* name)
+        {
+            return sdk.has(name) ? &sdk.get<F>(name) : nullptr;
+        }
+
     public:
         explicit discord_api_importer(boost::dll::shared_library library)
             : sdk(std::move(library)) {}
 
+        decltype(::Discord_Activity_SetStatusDisplayType)* Discord_Activity_SetStatusDisplayType = optional<decltype(::Discord_Activity_SetStatusDisplayType)>("Discord_Activity_SetStatusDisplayType");
+        decltype(::Discord_ActivityAssets_SetLargeUrl)* Discord_ActivityAssets_SetLargeUrl = optional<decltype(::Discord_ActivityAssets_SetLargeUrl)>("Discord_ActivityAssets_SetLargeUrl");
+        decltype(::Discord_Activity_SetStateUrl)* Discord_Activity_SetStateUrl = optional<decltype(::Discord_Activity_SetStateUrl)>("Discord_Activity_SetStateUrl");
+        decltype(::Discord_Activity_SetDetailsUrl)* Discord_Activity_SetDetailsUrl = optional<decltype(::Discord_Activity_SetDetailsUrl)>("Discord_Activity_SetDetailsUrl");
         decltype(::Discord_ActivityAssets_Drop)& Discord_ActivityAssets_Drop = sdk.get<decltype(::Discord_ActivityAssets_Drop)>("Discord_ActivityAssets_Drop");
         decltype(::Discord_ActivityAssets_Init)& Discord_ActivityAssets_Init = sdk.get<decltype(::Discord_ActivityAssets_Init)>("Discord_ActivityAssets_Init");
         decltype(::Discord_ActivityAssets_SetLargeImage)& Discord_ActivityAssets_SetLargeImage = sdk.get<decltype(::Discord_ActivityAssets_SetLargeImage)>("Discord_ActivityAssets_SetLargeImage");

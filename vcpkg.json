@@ -5,6 +5,7 @@
     "boost-dll",
     "cmakerc",
     "cpr",
+    "sqlite3",
     "nlohmann-json"
   ]
 }
