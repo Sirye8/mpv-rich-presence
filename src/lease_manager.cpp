@@ -22,6 +22,9 @@
 #include <fstream>
 #include <mutex>
 #include <system_error>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 namespace chrono = std::chrono;
 
@@ -50,14 +53,10 @@ std::mutex g_process_lease_mutex;
 ipc_mutex_guard::ipc_mutex_guard(const std::string& mutex_name)
     : m_thread_lock(g_process_lease_mutex)
 {
-    std::error_code ec;
-    auto temp_dir = fs::temp_directory_path(ec);
-    if (ec)
-        temp_dir = fs::path("/tmp");
-    auto lock_dir = temp_dir / "mpv-rich-presence";
-    fs::create_directories(lock_dir, ec);
+    auto lock_dir = get_default_lock_directory();
+    if (lock_dir.empty()) return;
     auto lock_path = lock_dir / ".lease.lock";
-    m_fd = open(lock_path.c_str(), O_CREAT | O_RDWR, 0666);
+    m_fd = open(lock_path.c_str(), O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (m_fd >= 0)
     {
         struct flock fl {};
@@ -108,14 +107,24 @@ fs::path get_default_lock_directory()
         dir = fs::path("/tmp");
 #endif
     }
+#if defined(_WIN32)
     dir /= "mpv-rich-presence";
     fs::create_directories(dir, ec);
+    if (ec) return {};
+#else
+    dir /= std::format("mpv-rich-presence-{}", geteuid());
+    if (mkdir(dir.c_str(), 0700) < 0 && errno != EEXIST) return {};
+    struct stat info {};
+    if (lstat(dir.c_str(), &info) < 0 || !S_ISDIR(info.st_mode) ||
+        info.st_uid != geteuid() || (info.st_mode & 0077) != 0) return {};
+#endif
     return dir;
 }
 
 fs::path get_default_lock_file_path()
 {
-    return get_default_lock_directory() / "mpv-rpc-active.lock";
+    auto dir = get_default_lock_directory();
+    return dir.empty() ? fs::path{} : dir / "mpv-rpc-active.lock";
 }
 
 bool write_lease_record_locked(const fs::path& lock_path, const std::string& instance_id, int64_t timestamp_ms)

@@ -405,6 +405,11 @@ static void clear_anilist_cache()
 
 static std::vector<anilist_media> search_anilist_page(const std::string& search)
 {
+    if (search.empty() || search.size() > 256 || search.find("://") != std::string::npos ||
+        search.starts_with("/") || search.starts_with("\\") || (search.size() > 2 && search[1] == ':' &&
+        (search[2] == '/' || search[2] == '\\')) ||
+        (search.find('?') != std::string::npos && search.find('=') != std::string::npos))
+        return {};
     auto generation = cache_generation.load();
     {
         std::lock_guard<std::mutex> lock(anilist_cache_mutex);
@@ -1372,22 +1377,29 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             auto embedded_sdk = embedded_fs.open(std::format("{}/{}", DISCORD_SDK_DIR, filename));
 
             uint64_t sdk_hash = compute_fnv1a64(embedded_sdk.begin(), embedded_sdk.size());
-            auto target_dir = fs::temp_directory_path() / "mpv-rich-presence" / std::format("sdk_{:016x}", sdk_hash);
+            auto private_dir = get_default_lock_directory();
+            if (private_dir.empty()) throw std::runtime_error("No private runtime directory available");
+            auto target_dir = private_dir / std::format("sdk_{:016x}", sdk_hash);
             std::error_code ec;
             fs::create_directories(target_dir, ec);
 
             auto temp_sdk_path = target_dir / filename;
-            bool needs_write = true;
-            if (fs::exists(temp_sdk_path, ec))
-            {
-                auto existing_size = fs::file_size(temp_sdk_path, ec);
-                if (!ec && existing_size == embedded_sdk.size())
+            auto matches_embedded = [&]() {
+                if (fs::file_size(temp_sdk_path, ec) != embedded_sdk.size() || ec) return false;
+                std::ifstream input(temp_sdk_path, std::ios::binary);
+                std::array<char, 16384> buffer;
+                size_t offset = 0;
+                while (input && offset < embedded_sdk.size())
                 {
-                    needs_write = false;
+                    auto count = (std::min)(buffer.size(), embedded_sdk.size()-offset);
+                    if (!input.read(buffer.data(), count) ||
+                        !std::equal(buffer.begin(),buffer.begin()+count,embedded_sdk.begin()+offset)) return false;
+                    offset += count;
                 }
-            }
+                return offset == embedded_sdk.size();
+            };
 
-            if (needs_write)
+            if (!matches_embedded())
             {
                 auto tmp_file = target_dir / std::format("{}.tmp.{}", filename, state.instance_id);
                 try
@@ -1402,7 +1414,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     fs::rename(tmp_file, temp_sdk_path, ec);
                     if (ec)
                     {
-                        if (!fs::exists(temp_sdk_path, ec) || fs::file_size(temp_sdk_path, ec) != embedded_sdk.size())
+                        if (!matches_embedded())
                         {
                             mpv_print(state.mpv, std::format("Failed to write Discord SDK: {}", ec.message()));
                             fs::remove(tmp_file, ec);

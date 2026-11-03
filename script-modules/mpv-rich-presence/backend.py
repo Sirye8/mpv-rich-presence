@@ -46,6 +46,8 @@ class Worker:
         self.vault = Vault()
         self.previous = None
         self.resolved = None
+        self.expected = None
+        self.data_generation = None
 
     def get(self, category, scope, default=None):
         row = self.db.execute(
@@ -77,7 +79,18 @@ class Worker:
 
     def reply(self, **fields):
         with self.transaction():
+            account = self.get("account", "current")
+            player = self.get("player", self.window)
+            generation, session = account.get("generation"), player.get("session")
+            if self.expected and self.expected != (generation, session):
+                return
             response = self.get("response", self.window)
+            if (response.get("generation"), response.get("context")) != (
+                generation,
+                session,
+            ):
+                response = {}
+
             if "message" in fields and fields["message"] != response.get("message"):
                 fields["notice"] = secrets.token_hex(8)
             response.update(fields)
@@ -511,6 +524,7 @@ class Worker:
     def sample(self):
         p = self.get("player", self.window)
         a = self.get("account", "current")
+        self.expected = (a.get("generation"), p.get("session"))
         prev = self.previous
         self.previous = (p, a.get("generation"))
         if (
@@ -635,7 +649,12 @@ class Worker:
     def run(self):
         while True:
             row = None
+            self.expected = None
             try:
+                epoch = self.get("generation", "data")
+                if self.data_generation != epoch:
+                    self.previous = None
+                    self.data_generation = epoch
                 cancellation = self.get("cancel", self.window)
                 if cancellation:
                     with self.transaction():
@@ -658,7 +677,10 @@ class Worker:
                     if row:
                         self.delete("job", row[0])
                 if row:
-                    self.handle(json.loads(row[1]))
+                    job = json.loads(row[1])
+                    if job["op"] not in ("connect", "disconnect", "reset"):
+                        self.expected = (job.get("account"), job.get("session"))
+                    self.handle(job)
                 else:
                     p = self.get("player", self.window)
                     self.recognize(p)

@@ -133,6 +133,8 @@ namespace mpvrp
             worker_cv.notify_all();
             if (worker_thread.joinable())
                 worker_thread.join();
+            discord.reset();
+            discord_api.reset();
         }
     };
 }
