@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import socket
 import time
@@ -23,11 +24,18 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def graphql(query, variables, token=None):
-    headers = {"User-Agent":"mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)", "Content-Type": "application/json", "Accept": "application/json"}
+    headers = {
+        "User-Agent": "mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
     if token:
         headers["Authorization"] = "Bearer " + token
-    req = urllib.request.Request("https://graphql.anilist.co", headers=headers,
-                                 data=json.dumps({"query": query, "variables": variables}).encode())
+    req = urllib.request.Request(
+        "https://graphql.anilist.co",
+        headers=headers,
+        data=json.dumps({"query": query, "variables": variables}).encode(),
+    )
     try:
         with urllib.request.build_opener(NoRedirect).open(req, timeout=8) as response:
             result = json.load(response)
@@ -46,39 +54,73 @@ def graphql(query, variables, token=None):
 
 def read_entry(token, viewer, media, call=graphql):
     # Page returns an empty list for a missing entry. Query errors stay errors.
-    data = call("""query($viewer:Int!,$media:Int!){Page(perPage:1){
+    data = call(
+        """query($viewer:Int!,$media:Int!){Page(perPage:1){
         mediaList(userId:$viewer,mediaId:$media){id userId mediaId progress status repeat updatedAt}}}""",
-                {"viewer": viewer, "media": media}, token)
+        {"viewer": viewer, "media": media},
+        token,
+    )
     entries = data["Page"]["mediaList"]
     if not isinstance(entries, list):
         raise AccountError("AniList returned an incomplete list.")
     if not entries:
-        return dict(id=None, viewer=viewer, media=media, progress=0, status=None, repeat=0, updatedAt=None)
+        return dict(
+            id=None,
+            viewer=viewer,
+            media=media,
+            progress=0,
+            status=None,
+            repeat=0,
+            updatedAt=None,
+        )
     entry = dict(entries[0])
     if entry.pop("userId") != viewer or entry.pop("mediaId") != media:
         raise AccountError("The entry belongs to a different viewer or media.")
     return dict(entry, viewer=viewer, media=media)
 
 
-def save_progress(token, base, target, total, valid, call=graphql):
+def save_progress(token, base, target, total, valid, call=graphql, status=None):
     if type(target) is not int or target < 0 or (total and target > total):
         raise AccountError("Progress is out of range.")
+    if status is not None and status not in (
+        "CURRENT",
+        "COMPLETED",
+        "REPEATING",
+        "PAUSED",
+        "DROPPED",
+        "PLANNING",
+    ):
+        raise AccountError("Unknown list status.")
     fresh = read_entry(token, base["viewer"], base["media"], call)
     if any(fresh[k] != base.get(k) for k in fresh):
         raise AccountError("AniList progress changed. Refresh and review the edit.")
     valid()
-    if base["id"] and fresh["progress"] == target:
+    if base["id"] and fresh["progress"] == target and status in (None, fresh["status"]):
         return fresh
     field, value = ("id", base["id"]) if base["id"] else ("mediaId", base["media"])
-    query = ("mutation($id:Int!,$progress:Int!){SaveMediaListEntry(" + field +
-             ":$id,progress:$progress){id userId mediaId progress status repeat updatedAt}}")
+    variables = {"id": value, "progress": target}
+    arguments = field + ":$id,progress:$progress"
+    declarations = "$id:Int!,$progress:Int!"
+    if status is not None:
+        variables["status"] = status
+        arguments += ",status:$status"
+        declarations += ",$status:MediaListStatus!"
+    query = (
+        "mutation("
+        + declarations
+        + "){SaveMediaListEntry("
+        + arguments
+        + "){id userId mediaId progress status repeat updatedAt}}"
+    )
     try:
-        row = dict(call(query, {"id": value, "progress": target}, token)["SaveMediaListEntry"])
+        row = dict(call(query, variables, token)["SaveMediaListEntry"])
     except AccountError:
         # Never repeat a mutation whose acknowledgement was lost.
         row = read_entry(token, base["viewer"], base["media"], call)
-        if row["progress"] != target:
-            raise AccountError("Update unconfirmed. Refresh before trying again.") from None
+        if row["progress"] != target or (status and status != row["status"]):
+            raise AccountError(
+                "Update unconfirmed. Refresh before trying again."
+            ) from None
         return row
     if row.pop("userId") != base["viewer"] or row.pop("mediaId") != base["media"]:
         raise AccountError("Unexpected mutation result. Refresh the entry.")
@@ -95,7 +137,10 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'",
+            )
             self.end_headers()
             self.wfile.write(body.encode())
 
@@ -107,7 +152,9 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
                 return self.send_error(404)
             if code_flow:
                 params = urllib.parse.parse_qs(request.query)
-                if not secrets.compare_digest(params.get("state", [""])[0], state) or not params.get("code"):
+                if not secrets.compare_digest(
+                    params.get("state", [""])[0], state
+                ) or not params.get("code"):
                     return self.send_error(400)
                 code = params["code"][0]
                 if exchange:
@@ -115,7 +162,9 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
                     try:
                         self.server.result = exchange(code, None, False)
                     except ClientSecretRequired:
-                        self.send_body(200, f"""<title>mpv Rich Presence</title>
+                        self.send_body(
+                            200,
+                            f"""<title>mpv Rich Presence</title>
                         <script>history.replaceState(null,"","/callback")</script>
                         <h2>Connect a personal AniList application</h2>
                         <p>AniList requires the secret for the application you registered. This form runs on your computer.
@@ -123,20 +172,27 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
                         <form action="/finish" method="post"><input type="hidden" name="state" value="{state}">
                         <label>Personal client secret <input type="password" name="secret" required autocomplete="off"></label>
                         <p><label><input type="checkbox" name="remember"> Save in my OS credential store</label></p>
-                        <button>Finish sign-in</button></form>""")
+                        <button>Finish sign-in</button></form>""",
+                        )
                         return
-                    except (AccountError, OSError) as exc:
+                    except (AccountError, OSError):
                         self.server.error = "Sign-in failed during the code exchange."
                         self.send_body(502, self.server.error)
                         return
                 else:
                     self.server.result = code
-                self.send_body(200, "<title>mpv Rich Presence</title>Return to mpv to see the sign-in result.")
+                self.send_body(
+                    200,
+                    "<title>mpv Rich Presence</title>Return to mpv to see the sign-in result.",
+                )
                 return
-            self.send_body(200, """<title>mpv Rich Presence</title><p id="message">Finishing sign-in...</p>
+            self.send_body(
+                200,
+                """<title>mpv Rich Presence</title><p id="message">Finishing sign-in...</p>
 <script>const fragment=location.hash.slice(1);history.replaceState(null,"","/callback");
 fetch("/callback",{method:"POST",body:fragment}).then(r=>document.querySelector("p").textContent=
-r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting again in mpv.");</script>""")
+r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting again in mpv.");</script>""",
+            )
 
         def do_POST(self):
             origin = "http://127.0.0.1:%d" % self.server.server_port
@@ -145,8 +201,11 @@ r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting ag
             # no-referrer policy. The form still carries the nonce from the
             # state-verified callback. Reject foreign hosts and origins.
             allowed_origins = (origin, "null", None) if code_flow else (origin,)
-            if (self.path != path or self.headers.get("Host") != origin.removeprefix("http://")
-                    or self.headers.get("Origin") not in allowed_origins):
+            if (
+                self.path != path
+                or self.headers.get("Host") != origin.removeprefix("http://")
+                or self.headers.get("Origin") not in allowed_origins
+            ):
                 return self.send_error(403)
             try:
                 size = int(self.headers.get("Content-Length", "0"))
@@ -159,7 +218,9 @@ r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting ag
                     if not exchange or not getattr(self.server, "code", None):
                         return self.send_error(400)
                     try:
-                        self.server.result = exchange(self.server.code, result["secret"][0], "remember" in result)
+                        self.server.result = exchange(
+                            self.server.code, result["secret"][0], "remember" in result
+                        )
                     except (AccountError, OSError):
                         self.server.error = "AniList declined the code exchange. Reconnect with your current credentials."
                         self.send_body(400, self.server.error)
@@ -194,29 +255,61 @@ class ClientSecretRequired(AccountError):
 
 
 def exchange_code(client_id, code, verifier, secret=None):
-    fields = dict(grant_type="authorization_code",client_id=client_id,
-                  redirect_uri="http://127.0.0.1:47653/callback",code=code,code_verifier=verifier)
+    fields = dict(
+        grant_type="authorization_code",
+        client_id=client_id,
+        redirect_uri="http://127.0.0.1:47653/callback",
+        code=code,
+        code_verifier=verifier,
+    )
     if secret:
         fields["client_secret"] = secret
-    request = urllib.request.Request("https://anilist.co/api/v2/oauth/token",
-        data=urllib.parse.urlencode(fields).encode(), headers={"Accept":"application/json","User-Agent":"mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)"})
+    request = urllib.request.Request(
+        "https://anilist.co/api/v2/oauth/token",
+        data=urllib.parse.urlencode(fields).encode(),
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)",
+        },
+    )
     try:
-        with urllib.request.build_opener(NoRedirect).open(request,timeout=10) as response:
+        with urllib.request.build_opener(NoRedirect).open(
+            request, timeout=10
+        ) as response:
             return json.load(response)["access_token"]
     except urllib.error.HTTPError as exc:
-        if exc.code == 401: raise ClientSecretRequired("AniList requires client authentication.") from None
+        if exc.code == 401:
+            raise ClientSecretRequired(
+                "AniList requires client authentication."
+            ) from None
         raise AccountError("AniList declined the authorization code.") from None
 
 
-def authorize(client_id, valid, flow="pkce", vault=None):
+def authorize(client_id, valid, flow="pkce", vault=None, broker=""):
     if not str(client_id).isdigit():
         raise AccountError("Set anilist_client_id in rich-presence.conf first.")
     state = secrets.token_urlsafe(32)
     verifier = secrets.token_urlsafe(48)
     code_flow = flow == "pkce"
     redirect = "http://127.0.0.1:47653/callback"
+    if broker and not re.fullmatch(r"https://[a-zA-Z0-9.-]+", broker):
+        raise AccountError("The public sign-in service needs an HTTPS origin.")
+
+    def broker_post(path, payload):
+        req = urllib.request.Request(
+            broker + path,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+        )
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=10) as response:
+            return json.load(response)
+
     def exchange(code, secret, remember):
         valid()
+        if broker:
+            return broker_post("/redeem", {"ticket": code, "verifier": verifier})[
+                "access_token"
+            ]
         key = "client-" + str(client_id)
         credential = secret or (vault.read(key) if vault else None)
         if not credential:
@@ -225,20 +318,37 @@ def authorize(client_id, valid, flow="pkce", vault=None):
         if secret and remember and vault:
             vault.write(key, secret)
         return token
+
     with callback_server(state, code_flow=code_flow, exchange=exchange) as server:
-        params = dict(client_id=client_id, response_type="code" if code_flow else "token",
-                      state=state, redirect_uri=redirect)
+        params = dict(
+            client_id=client_id,
+            response_type="code" if code_flow else "token",
+            state=state,
+            redirect_uri=redirect,
+        )
         if code_flow:
             params["code_challenge_method"] = "S256"
-            params["code_challenge"] = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+            params["code_challenge"] = (
+                base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
+                .rstrip(b"=")
+                .decode()
+            )
         query = urllib.parse.urlencode(params)
-        if not webbrowser.open("https://anilist.co/api/v2/oauth/authorize?" + query):
+        url = "https://anilist.co/api/v2/oauth/authorize?" + query
+        if broker:
+            url = broker_post(
+                "/start", {"challenge": params["code_challenge"], "state": state}
+            )["authorize"]
+            if not url.startswith("https://anilist.co/api/v2/oauth/authorize?"):
+                raise AccountError("Invalid authorization URL from sign-in service.")
+        if not webbrowser.open(url):
             raise AccountError("Could not open your browser.")
         limit = time.monotonic() + 180
         while time.monotonic() < limit and not server.result and not server.error:
             valid()
             server.handle_request()
-        if server.error: raise AccountError(server.error)
+        if server.error:
+            raise AccountError(server.error)
         if not server.result:
             raise AccountError("Sign-in timed out.")
         return server.result
@@ -246,15 +356,18 @@ def authorize(client_id, valid, flow="pkce", vault=None):
 
 class Vault:
     """Keep a session copy when no OS credential service is available."""
+
     def __init__(self):
         self.session = {}
         self.keyring = None
         try:
             if os.name == "nt":
                 from windows_vault import WindowsVault
+
                 self.keyring = WindowsVault()
             else:
                 from keyring.backends.SecretService import Keyring
+
                 self.keyring = Keyring()
         except (ImportError, RuntimeError):
             pass
@@ -286,4 +399,3 @@ class Vault:
             if self.keyring.get_password("mpv-rich-presence", key) is not None:
                 self.keyring.delete_password("mpv-rich-presence", key)
         self.session.pop(key, None)
-

@@ -19,6 +19,7 @@ end
 return function(model)
     local ui = {open=false, page="Menu", memory={}, stack={}, hits={}}
     local overlay, timer, keys, editing, down = nil, nil, {}, false, nil
+    local toast_timer
     local scale = 1
     local function unbind()
         for _, id in ipairs(keys) do mp.remove_key_binding(id) end
@@ -31,6 +32,7 @@ return function(model)
     end
     function ui.close()
         ui.open = false
+        if toast_timer then toast_timer:kill(); toast_timer=nil end
         if timer then timer:kill(); timer=nil end
         if overlay then overlay:remove(); overlay=nil end
         mp.unobserve_property(ui.draw)
@@ -108,9 +110,21 @@ return function(model)
                 (row.disabled and theme.muted or theme.text),right-pane-40)
             hit(pane+8,y,right-8,y+40,i,row.run)
         end
+        if ui.page=="Appearance" then
+            local mid=(pane+right)/2
+            box(pane+8,bottom-48,mid-4,bottom-8,theme.raised)
+            label(pane+20,bottom-39,"Cancel",16,theme.text,mid-pane-24)
+            hit(pane+8,bottom-48,mid-4,bottom-8,"cancel",ui.back)
+            box(mid+4,bottom-48,right-8,bottom-8,theme.primary)
+            label(mid+20,bottom-39,"Apply",16,theme.surface,right-mid-24)
+            for _,r in ipairs(rows) do
+                if r.label=="Apply" then hit(mid+4,bottom-48,right-8,bottom-8,"apply",r.run) end
+            end
+        else
         box(pane+8,bottom-48,right-8,bottom-8,theme.raised)
         label(pane+20,bottom-39,ui.page=="Menu" and "Close" or "Back",16,theme.primary,right-pane-40)
         hit(pane+8,bottom-48,right-8,bottom-8,"back",ui.back)
+        end
         overlay.data=ass.text; overlay:update()
     end
     local function focus(delta)
@@ -139,6 +153,7 @@ return function(model)
         if event=="up" then down=nil end
     end
     local function controls()
+        bind("HOME",function() focus(-100000) end); bind("END",function() focus(100000) end)
         bind("UP",function() focus(-1) end,{repeatable=true})
         bind("DOWN",function() focus(1) end,{repeatable=true})
         bind("LEFT",function() activate(-1) end); bind("RIGHT",function() activate(1) end)
@@ -153,9 +168,34 @@ return function(model)
         input.get({prompt=prompt,default_text=value or "",submit=function(s) done(s) end,
             closed=function() editing=false; if ui.open then controls(); ui.draw() end end})
     end
+    function ui.toast(message)
+        if ui.open then model.notice(message); return end
+        if toast_timer then toast_timer:kill() end
+        local w,h=mp.get_osd_size()
+        if not w or w<=0 or h<=0 then mp.msg.info(message); return end
+        overlay=overlay or mp.create_osd_overlay("ass-events")
+        overlay.res_y=720; overlay.res_x=math.floor(w*720/h)
+        local ass=assdraw.ass_new()
+        local right=overlay.res_x-16
+        local left=math.max(8,right-460)
+        ass:pos(0,0); ass:append("{\\bord0\\shad0\\1c&H"..theme.raised.."&}")
+        ass:draw_start(); ass:round_rect_cw(left,644,right,704,12); ass:draw_stop()
+        ass:new_event(); ass:pos(left+16,663); ass:an(7)
+        ass:append("{\\fs18\\bord0\\1c&H"..theme.text.."&}"..safe(short(message,(right-left-32)/11)))
+        overlay.data=ass.text; overlay:update()
+        toast_timer=mp.add_timeout(4,function()
+            if not ui.open and overlay then overlay:remove(); overlay=nil end
+            toast_timer=nil
+        end)
+    end
     function ui.show(page)
-        if ui.open then ui.close(); return end
-        overlay=mp.create_osd_overlay("ass-events")
+        if ui.open then
+            if page then ui.page=page; ui.stack={"Menu"}; model.refresh(); ui.draw()
+            else ui.close() end
+            return
+        end
+        if toast_timer then toast_timer:kill(); toast_timer=nil end
+        overlay=overlay or mp.create_osd_overlay("ass-events")
         ui.old_term=mp.get_property("term-status-msg",""); ui.terminal=false
         ui.open=true; ui.page=page or "Menu"; ui.stack=page and {"Menu"} or {}
         controls()

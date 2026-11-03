@@ -63,6 +63,21 @@ namespace mpvrp
 
     profile_store::~profile_store() { sqlite3_close(db); }
 
+    void profile_store::renew_pin(const std::string& owner, uint64_t expiry)
+    {
+        execute(db, "UPDATE records SET value=json_set(value,'$.expires',CAST(? AS INTEGER)) WHERE category='pin' "
+                    "AND scope='current' AND json_extract(value,'$.owner')=?", {std::to_string(expiry),owner});
+    }
+
+    void profile_store::close_window(const std::string& owner)
+    {
+        execute(db, "DELETE FROM records WHERE (category='pin' AND json_extract(value,'$.owner')=?) OR "
+                    "(category IN ('player','response','auto','cancel') AND scope=?) OR "
+                    "(category='job' AND json_extract(value,'$.window')=?) OR "
+                    "(category='account' AND json_extract(value,'$.persistent')=0 AND json_extract(value,'$.window')=?)",
+                    {owner,owner,owner,owner});
+    }
+
     int profile_store::version() const
     {
         auto stmt = prepare(db, "PRAGMA data_version");
@@ -73,12 +88,25 @@ namespace mpvrp
     json profile_store::records() const
     {
         auto result = json::array();
-        auto stmt = prepare(db, "SELECT category,scope FROM records WHERE category IN ('appearance','privacy','match','tracking','provider') ORDER BY category,scope");
+        auto stmt = prepare(db, "SELECT category,scope FROM records WHERE category IN ('appearance','exclude','privacy','match','tracking','sources','provider','cache') "
+                                "OR (category IN ('watch','pending','history') AND substr(scope,1,instr(scope,'/')-1)= "
+                                "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT)) ORDER BY category,scope");
         int code;
         while ((code = sqlite3_step(stmt.get())) == SQLITE_ROW)
             result.push_back({{"category",column(stmt.get(),0)},{"scope",column(stmt.get(),1)}});
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
         return result;
+    }
+
+    bool profile_store::blocked(const std::string& path) const
+    {
+        auto stmt = prepare(db, "SELECT 1 FROM records WHERE category='exclude' AND json_extract(value,'$.blocked')=1 "
+                       "AND (scope='global' OR scope='file:'||? OR (substr(scope,1,7)='folder:' AND instr(?,substr(scope,8)||'/')=1)) LIMIT 1",
+                       {path,path});
+        int code = sqlite3_step(stmt.get());
+        if (code == SQLITE_ROW) return true;
+        if (code == SQLITE_DONE) return false;
+        throw std::runtime_error(sqlite3_errmsg(db));
     }
 
     json profile_store::effective(const std::string& category, const std::string& path) const
@@ -92,7 +120,11 @@ namespace mpvrp
             auto scope = column(stmt.get(),0);
             if (scope == "global" || (!path.empty() && (scope == "file:" + path ||
                 (scope.starts_with("folder:") && path.starts_with(scope.substr(7) + "/")))))
-                result.merge_patch(json::parse(column(stmt.get(),1)));
+            {
+                auto patch = json::parse(column(stmt.get(),1));
+                if (category == "appearance" && patch.contains("preset")) result = json::object();
+                result.merge_patch(patch);
+            }
         }
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
         return result;

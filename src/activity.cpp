@@ -34,7 +34,7 @@ namespace mpvrp
             }
             if (!missing && !part.empty())
             {
-                if (!result.empty()) result += " · ";
+                if (!result.empty()) result += " Â· ";
                 result += part;
             }
         }
@@ -71,6 +71,7 @@ namespace mpvrp
                 auto ep = m.episode;
                 const auto numbering = options.value("numbering", std::string("relative"));
                 if (numbering == "original" && !m.raw_episode.empty()) ep = m.raw_episode;
+                if (!m.episode_label.empty() && (preset != "original" || numbering != "relative")) ep = m.episode_label;
                 if (!ep.empty() && options.value("episode", true))
                 {
                     state = "Episode " + ep;

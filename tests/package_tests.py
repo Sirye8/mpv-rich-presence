@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Run against an installed plugin in a disposable mpv config directory."""
+
+import json
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tempfile
+
+root = Path(sys.argv[1]).resolve()
+mpv = sys.argv[2]
+with tempfile.TemporaryDirectory() as directory:
+    config = Path(directory) / "mpv"
+    for part in ("scripts", "script-opts", "script-modules"):
+        shutil.copytree(root / part, config / part)
+    applied = False
+    for mode in ("cancel", "apply", "cancel"):
+        log = Path(directory) / "mpv.log"
+        subprocess.run(
+            [
+                mpv,
+                "--config-dir=" + str(config),
+                "--idle=yes",
+                "--no-terminal",
+                "--vo=null",
+                "--ao=null",
+                "--log-file=" + str(log),
+                "--script="
+                + str(Path(__file__).with_name("menu_actions.lua").resolve()),
+            ],
+            env=dict(os.environ, MPVRP_MENU_TEST=mode),
+            timeout=12,
+            check=True,
+        )
+        text = log.read_text(encoding="utf-8", errors="replace")
+        if "stack traceback" in text or "Could not load the Rich Presence menu" in text:
+            raise RuntimeError("Packaged Lua module failed to load")
+        if "Configuration complete received from bridge" not in text:
+            raise RuntimeError("Configuration bridge failed")
+        with sqlite3.connect(config / "rich-presence/data.sqlite3") as db:
+            row = db.execute(
+                "SELECT value FROM records WHERE category='appearance' AND scope='global'"
+            ).fetchone()
+        db.close()
+        if mode == "apply":
+            applied = True
+        if applied:
+            assert row and json.loads(row[0])["preset"] == "clean", (
+                "Apply did not persist the draft"
+            )
+        else:
+            assert row is None, "Cancel persisted a preview"
+    print("Packaged menu startup, Cancel, Apply and restart passed.")
