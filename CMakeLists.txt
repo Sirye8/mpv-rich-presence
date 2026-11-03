@@ -75,7 +75,6 @@ set(mpv-rich-presence_HPP
 
 set(mpv-rich-presence_CPP
     anilist_parser
-    discord_api
     discord_utils
     lease_manager
     mpv_rich_presence
@@ -143,6 +142,7 @@ target_sources(mpv-rich-presence PRIVATE
 
 target_include_directories(mpv-rich-presence PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${DISCORD_SOCIAL_SDK_DIR}/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/mpv/include")
 
 target_link_libraries(mpv-rich-presence PRIVATE

@@ -1040,19 +1040,19 @@ void on_discord_log(Discord_String msg, Discord_LoggingSeverity severity, void* 
     auto severity_str = ""s;
     switch (severity)
     {
-    case Discord_LoggingSeverity::Verbose:
+    case Discord_LoggingSeverity_Verbose:
         severity_str = "Verbose";
         break;
-    case Discord_LoggingSeverity::Info:
+    case Discord_LoggingSeverity_Info:
         severity_str = "Info";
         break;
-    case Discord_LoggingSeverity::Warning:
+    case Discord_LoggingSeverity_Warning:
         severity_str = "Warning";
         break;
-    case Discord_LoggingSeverity::Error:
+    case Discord_LoggingSeverity_Error:
         severity_str = "Error";
         break;
-    case Discord_LoggingSeverity::None:
+    case Discord_LoggingSeverity_None:
         severity_str = "None";
         break;
     default:
@@ -1060,7 +1060,8 @@ void on_discord_log(Discord_String msg, Discord_LoggingSeverity severity, void* 
         break;
     }
 
-    auto msg_view = std::string_view { msg.data, msg.size };
+    auto msg_view = std::string { reinterpret_cast<const char*>(msg.ptr), msg.size };
+    state.discord_api->Discord_Free(msg.ptr);
     mpv_print(state.mpv, std::format("[{}] {}", severity_str, msg_view));
 }
 
@@ -1068,7 +1069,10 @@ void on_discord_update_rich_presence(Discord_ClientResult* result, void* payload
 {
     auto& state = *(rich_presence_state*)payload;
 
-    if (state.discord_api->Discord_ClientResult_Successful(result))
+    const auto success = state.discord_api->Discord_ClientResult_Successful(result);
+    const auto code = success ? 0 : state.discord_api->Discord_ClientResult_ErrorCode(result);
+    state.discord_api->Discord_ClientResult_Drop(result);
+    if (success)
     {
         state.is_rpc_visible = true;
         state.retry_backoff_ms = 0;
@@ -1076,7 +1080,6 @@ void on_discord_update_rich_presence(Discord_ClientResult* result, void* payload
         return;
     }
 
-    int32_t code = state.discord_api->Discord_ClientResult_ErrorCode(result);
     mpv_print(state.mpv, std::format("Rich presence error: {}", code));
     state.last_error_time = chrono::steady_clock::now();
     state.retry_backoff_ms = (state.retry_backoff_ms == 0) ? 1000 : (std::min)(state.retry_backoff_ms * 2, 16000);
@@ -1162,7 +1165,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             state.discord_api = std::make_shared<discord_api_importer>(sdk);
 
             state.discord = std::make_unique<discord_client>(state.discord_api);
-            state.discord_api->Discord_Client_AddLogCallback(&state.discord->get(), on_discord_log, nullptr, &state, Discord_LoggingSeverity::Warning);
+            state.discord_api->Discord_Client_AddLogCallback(&state.discord->get(), on_discord_log, nullptr, &state, Discord_LoggingSeverity_Warning);
 
             is_ready = true;
         }
@@ -1417,7 +1420,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         std::string anilist_url;
         int local_anilist_id = 0;
 
-        auto activity_type = state.media_has_video ? Discord_ActivityTypes::Watching : Discord_ActivityTypes::Listening;
+        auto activity_type = state.media_has_video ? Discord_ActivityTypes_Watching : Discord_ActivityTypes_Listening;
         state.discord_api->Discord_Activity_SetType(&activity.get(), activity_type);
 
         std::string dur_str = format_time_duration(media_time_pos_s, (media_time_left_s > 0.0) ? (media_time_pos_s + media_time_left_s) : -1.0);
@@ -1472,24 +1475,26 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (local_is_anime)
         {
             activity_name = truncate_utf8_bytes(activity_name, 128);
-            state.discord_api->Discord_Activity_SetName(&activity.get(), { activity_name.data(), activity_name.size() });
+            state.discord_api->Discord_Activity_SetName(&activity.get(), sdk_string(activity_name));
 
             if (!details_str.empty())
             {
-                Discord_String d_details = { details_str.data(), details_str.size() };
+                Discord_String d_details = sdk_string(details_str);
                 state.discord_api->Discord_Activity_SetDetails(&activity.get(), &d_details);
             }
 
             if (!state_str.empty())
             {
-                Discord_String d_state = { state_str.data(), state_str.size() };
+                Discord_String d_state = sdk_string(state_str);
                 state.discord_api->Discord_Activity_SetState(&activity.get(), &d_state);
             }
 
             if (!cover_url.empty())
             {
-                state.discord_api->Discord_ActivityAssets_SetLargeImage(&assets.get(), { cover_url.data(), cover_url.size() });
-                state.discord_api->Discord_ActivityAssets_SetLargeText(&assets.get(), { activity_name.data(), activity_name.size() });
+                auto valueLargeImage = sdk_string(cover_url);
+                state.discord_api->Discord_ActivityAssets_SetLargeImage(&assets.get(), &valueLargeImage);
+                auto valueLargeText = sdk_string(activity_name);
+                state.discord_api->Discord_ActivityAssets_SetLargeText(&assets.get(), &valueLargeText);
             }
 
             // AniList link button
@@ -1498,8 +1503,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 anilist_url = std::format("https://anilist.co/anime/{}", local_anilist_id);
                 auto button = discord_activity_button { state.discord_api };
                 std::string button_label = "View on AniList";
-                state.discord_api->Discord_ActivityButton_SetLabel(&button.get(), { button_label.data(), button_label.size() });
-                state.discord_api->Discord_ActivityButton_SetUrl(&button.get(), { anilist_url.data(), anilist_url.size() });
+                state.discord_api->Discord_ActivityButton_SetLabel(&button.get(), sdk_string(button_label));
+                state.discord_api->Discord_ActivityButton_SetUrl(&button.get(), sdk_string(anilist_url));
                 state.discord_api->Discord_Activity_AddButton(&activity.get(), &button.get());
             }
         }
@@ -1532,31 +1537,32 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
             activity_name = truncate_utf8_bytes(activity_name, 128);
 
-            state.discord_api->Discord_Activity_SetName(&activity.get(), { activity_name.data(), activity_name.size() });
+            state.discord_api->Discord_Activity_SetName(&activity.get(), sdk_string(activity_name));
 
             std::string fallback_details = !song_info.empty() ? song_info : state.media_title;
             if (!fallback_details.empty())
             {
-                Discord_String d_details = { fallback_details.data(), fallback_details.size() };
+                Discord_String d_details = sdk_string(fallback_details);
                 state.discord_api->Discord_Activity_SetDetails(&activity.get(), &d_details);
             }
 
             if (is_caching == 1)
             {
                 std::string b_state = std::format("Buffering... ({})", dur_str);
-                Discord_String d_state = { b_state.data(), b_state.size() };
+                Discord_String d_state = sdk_string(b_state);
                 state.discord_api->Discord_Activity_SetState(&activity.get(), &d_state);
             }
             else if (is_media_paused == 1)
             {
-                Discord_String d_state = { dur_str.data(), dur_str.size() };
+                Discord_String d_state = sdk_string(dur_str);
                 state.discord_api->Discord_Activity_SetState(&activity.get(), &d_state);
             }
         }
 
         // Play/pause and buffering indicator
         const std::string& icon_url = (is_media_paused == 1 || is_caching == 1) ? ICON_PAUSED : ICON_PLAYING;
-        state.discord_api->Discord_ActivityAssets_SetSmallImage(&assets.get(), { icon_url.data(), icon_url.size() });
+        auto valueSmallImage = sdk_string(icon_url);
+        state.discord_api->Discord_ActivityAssets_SetSmallImage(&assets.get(), &valueSmallImage);
 
         std::string small_tooltip;
         if (is_caching == 1)
@@ -1568,7 +1574,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         else
             small_tooltip = "Playing";
 
-        state.discord_api->Discord_ActivityAssets_SetSmallText(&assets.get(), { small_tooltip.data(), small_tooltip.size() });
+        auto valueSmallText = sdk_string(small_tooltip);
+        state.discord_api->Discord_ActivityAssets_SetSmallText(&assets.get(), &valueSmallText);
         state.discord_api->Discord_Activity_SetAssets(&activity.get(), &assets.get());
 
         // Timestamps

@@ -43,20 +43,6 @@ namespace mpvrp
             Derived::init(*this->api, &*handle);
         }
 
-        discord_object(Derived&& other) noexcept
-        {
-            static_assert(discord_managed<Derived, Inner>);
-            handle = other.handle;
-            other.handle = std::nullopt;
-        }
-
-        auto operator=(Derived&& other) noexcept -> Derived&
-        {
-            handle = other.handle;
-            other.handle = std::nullopt;
-            return *(Derived*)this;
-        }
-
         ~discord_object()
         {
             static_assert(discord_managed<Derived, Inner>);
