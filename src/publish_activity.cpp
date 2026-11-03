@@ -55,4 +55,3 @@ namespace mpvrp
         api.Discord_Client_UpdateRichPresence(&state.discord->get(), &activity.get(), callback, nullptr, &state);
     }
 }
-

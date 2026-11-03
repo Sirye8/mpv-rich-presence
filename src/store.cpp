@@ -156,4 +156,3 @@ namespace mpvrp
         execute(db, "DELETE FROM records WHERE category=? AND scope=?", {category,scope});
     }
 }
-

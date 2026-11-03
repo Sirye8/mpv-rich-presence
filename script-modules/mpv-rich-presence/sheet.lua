@@ -206,4 +206,3 @@ return function(model)
     end
     return ui
 end
-

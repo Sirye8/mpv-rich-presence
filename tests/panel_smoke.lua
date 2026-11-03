@@ -21,4 +21,3 @@ mp.register_event("file-loaded",function()
         end)
     end)
 end)
-

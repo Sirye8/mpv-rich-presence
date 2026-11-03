@@ -27,4 +27,3 @@ namespace mpvrp
         void clear(const std::string& category, const std::string& scope);
     };
 }
-

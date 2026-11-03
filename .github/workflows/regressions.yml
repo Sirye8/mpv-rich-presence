@@ -23,4 +23,3 @@ jobs:
         run: timeout 30 "$RUNNER_TEMP/rich-presence-tests"
       - name: Run account and multi-process tracking tests
         run: python3 -B tests/account_tests.py
-

@@ -17,4 +17,3 @@ mp.add_timeout(.5,function()
         else timer:kill(); mp.commandv("quit","0") end
     end)
 end)
-

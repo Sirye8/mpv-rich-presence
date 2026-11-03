@@ -178,4 +178,3 @@ namespace mpvrp
         return card;
     }
 }
-
