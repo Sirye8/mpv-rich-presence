@@ -47,3 +47,6 @@ vcpkg_installed/
 .DS_Store
 Thumbs.db
 dist/
+
+__pycache__/
+*.pyc
