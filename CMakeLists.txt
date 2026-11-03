@@ -51,6 +51,7 @@ if(NOT TARGET anitomy)
   target_include_directories(anitomy PUBLIC "${anitomy_SOURCE_DIR}")
 endif()
 
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(cpr CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Boost CONFIG REQUIRED COMPONENTS dll)
@@ -74,6 +75,9 @@ set(mpv-rich-presence_HPP
     string_utils)
 
 set(mpv-rich-presence_CPP
+    activity
+    publish_activity
+    store
     anilist_parser
     discord_utils
     lease_manager
@@ -150,6 +154,7 @@ target_link_libraries(mpv-rich-presence PRIVATE
     Boost::headers
     mpv-rich-presence::rc
     anitomy
+    unofficial::sqlite3::sqlite3
     cpr::cpr
     nlohmann_json::nlohmann_json
     )
@@ -190,7 +195,11 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
     install(FILES
             "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
             "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE"
+            "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
+
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/script-modules"
+        DESTINATION "${mpv-rich-presence_INSTALL_DIR}" PATTERN "__pycache__" EXCLUDE)
 
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
@@ -221,4 +230,18 @@ if(mpv-rich-presence_BUILD_TESTS)
 
     add_test(NAME rich-presence-regressions COMMAND rich-presence-tests)
     set_tests_properties(rich-presence-regressions PROPERTIES TIMEOUT 30)
+endif()
+
+if(mpv-rich-presence_BUILD_TESTS)
+    add_library(recording-sdk SHARED tests/recording_sdk.cpp)
+    set_target_properties(recording-sdk PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    target_include_directories(recording-sdk PRIVATE "${DISCORD_SOCIAL_SDK_DIR}/include")
+    target_link_libraries(recording-sdk PRIVATE nlohmann_json::nlohmann_json)
+    add_executable(activity-tests tests/activity_tests.cpp src/activity.cpp src/string_utils.cpp
+        src/store.cpp src/discord_utils.cpp src/publish_activity.cpp)
+    target_compile_features(activity-tests PRIVATE cxx_std_20)
+    target_include_directories(activity-tests PRIVATE include thirdparty/mpv/include "${DISCORD_SOCIAL_SDK_DIR}/include")
+    target_link_libraries(activity-tests PRIVATE Boost::dll unofficial::sqlite3::sqlite3 nlohmann_json::nlohmann_json)
+    add_test(NAME original-sdk-calls COMMAND activity-tests $<TARGET_FILE:recording-sdk>
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/original-calls.json")
 endif()

@@ -29,6 +29,8 @@
 #include <thread>
 #include <vector>
 
+#include "mpv_rich_presence/store.hpp"
+#include "mpv_rich_presence/activity.hpp"
 #include "mpv_rich_presence/discord_api.hpp"
 #include "mpv_rich_presence/discord_utils.hpp"
 
@@ -42,16 +44,33 @@ namespace mpvrp
         std::shared_ptr<discord_api_importer> discord_api = nullptr;
 
         std::optional<bool> is_enabled = std::nullopt;
+        uint64_t application_id = 0;
+        uint64_t session_start = 0, file_session = 0;
+        std::unique_ptr<profile_store> store;
+        bool store_failed = false;
+        int store_version = -1;
+        std::string scope_path, hidden_reason, last_sdk = "Waiting";
+        bool private_session = false, hidden_file = false;
+        std::chrono::steady_clock::time_point hide_until{};
+        std::string config_preset = "original";
+        nlohmann::json appearance = nlohmann::json::object(), privacy = nlohmann::json::object();
+        nlohmann::json provider = nlohmann::json::object();
+        nlohmann::json correction = nlohmann::json::object(), tracking = nlohmann::json::object();
+        nlohmann::json preview = nlohmann::json::object();
+        std::string snapshot_request;
+        std::string anime_english, anime_romaji, anime_native;
         bool config_received = false;
 
         bool media_has_audio = false;
         bool media_has_video = false;
+        std::string album, channel;
         std::string media_artist = "";
         std::string media_title = "";
 
         std::mutex anime_mutex;
         std::atomic<int> file_load_id = 0;
 
+        std::atomic<bool> safe_episode{false};
         bool is_anime = false;
         std::string anime_title = "";
         std::string anime_episode = "";
@@ -94,6 +113,7 @@ namespace mpvrp
         std::mutex worker_mutex;
         std::condition_variable worker_cv;
         bool has_pending_lookup = false;
+        nlohmann::json pending_correction;
         int pending_load_id = 0;
         std::string pending_filename = "";
         std::string pending_file_path = "";
