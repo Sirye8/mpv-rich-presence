@@ -33,7 +33,7 @@ void discord_activity_timestamps::drop(const discord_api_importer& api, Discord_
 
 void discord_activity_assets::init(const discord_api_importer& api, Discord_ActivityAssets* h) { api.Discord_ActivityAssets_Init(h); }
 
-void discord_activity_assets::drop(const discord_api_importer&, Discord_ActivityAssets*) { /* Discord SDK does not have Discord_ActivityAssets_Drop */ }
+void discord_activity_assets::drop(const discord_api_importer& api, Discord_ActivityAssets* h) { api.Discord_ActivityAssets_Drop(h); }
 
 void discord_activity_button::init(const discord_api_importer& api, Discord_ActivityButton* h) { api.Discord_ActivityButton_Init(h); }
 
