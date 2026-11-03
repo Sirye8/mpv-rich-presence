@@ -305,14 +305,30 @@ class Worker:
                     "provider",
                     "sources",
                 ):
+                    removed = self.get(category, job["scope"])
                     self.delete(category, job["scope"])
-                    if category in ("privacy", "exclude"):
+                    restricted = (
+                        removed.get("blocked")
+                        or removed.get("block_lookup")
+                        or removed.get("mode") in ("hidden", "generic")
+                    )
+                    if category in ("privacy", "exclude") and restricted:
                         # Keep open files hidden even when removing their folder exclusion.
                         for (raw,) in self.db.execute(
                             "SELECT value FROM records WHERE category='player'"
                         ):
                             path = json.loads(raw).get("scope_path")
-                            if path:
+                            scope = job["scope"]
+                            applies = (
+                                scope == "global"
+                                or scope == "file:" + str(path)
+                                or (
+                                    scope.startswith("folder:")
+                                    and path
+                                    and path.startswith(scope[7:].rstrip("/") + "/")
+                                )
+                            )
+                            if path and applies:
                                 self.put(
                                     "privacy",
                                     "file:" + path,
