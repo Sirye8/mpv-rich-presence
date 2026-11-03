@@ -67,3 +67,12 @@ Third-Party Components & Licenses:
   Terms of Service (<https://discord.com/developers/docs/legal>). It is distributed in binary form
   as permitted by Discord for client application integration, as originally implemented in upstream
   goodtrailer/mpv-rich-presence.
+
+SQLite is in the public domain. See licenses/LICENSE-SQLite.
+
+Optional metadata services:
+- This product uses the TMDB API but is not endorsed or certified by TMDB.
+- TVmaze data is provided by TVmaze under CC BY-SA. https://www.tvmaze.com/api
+- MusicBrainz metadata is provided by the MetaBrainz Foundation and its contributors.
+- Cover images are supplied by their respective providers and rights holders.
+- AcoustID supplies optional fingerprint matches. Chromaprint is installed separately.

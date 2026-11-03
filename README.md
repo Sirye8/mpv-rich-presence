@@ -1,38 +1,50 @@
 # mpv-rich-presence
 
-A modern, full-featured Discord Rich Presence plugin for mpv on Windows and Linux, powered by the Discord Social SDK. Displays rich media details, automated anime recognition via AniList, strict folder privacy filtering, speed-aware playback timing, and seamless multi-window coordination.
+Share what you are watching or listening to in mpv with Discord. The plugin runs on Windows and Linux. Anime filenames are parsed with Anitomy and matched against AniList. Music uses the artist and track title from mpv. No AniList account is needed for either feature.
 
-## Features
+Press **Alt+p** to open the player panel. The Original preset keeps the v1.0.10 Discord card. Changes in Appearance are private until you choose **Apply**. Account details, watch time and list progress stay in the player.
 
-- **Rich Media Presence**:
-  - Displays currently playing video or music with title, artist, and real-time playback progress.
-  - Music and audio tracks automatically display as "Listening to [Artist] - [Title]" on Discord.
-  - Non-anime videos display clean titles with duration timestamps and play or pause indicators.
+## In the player
 
-- **Automated Anime Recognition (AniList)**:
-  - Parses filenames using Anitomy to extract clean titles, season indicators (such as `S2`, `4th Season`, `S01E13`), part or cour notation, episode numbers, and release groups.
-  - Queries the AniList GraphQL API with similarity confidence matching to fetch high-resolution cover art, Romaji and English titles, and total episode counts.
-  - Traverses sequel and relation chains across multi-cour and continuous seasons without episode index wrapping issues.
-  - Adds a clickable "View on AniList" button directly in Discord.
+| Section | What you can do |
+| --- | --- |
+| Now playing | Check the outgoing card, see why sharing is hidden, correct a match or claim Discord for this window. |
+| AniList | Connect an account, refresh a list entry, adjust the progress draft or review an episode that qualified for an update. |
+| Appearance | Preview Original, Clean, Detailed or Private. Change title language, numbering, artwork, buttons and timers. Choose a file, folder or global scope. |
+| Recognition & folders | Search for a match, pin an AniList ID, adjust episode numbering or select another provider for a folder. |
+| Privacy & windows | Hide a file, hide Discord for an hour, block a folder, pin a player or start a private session. |
+| Saved data | Filter local records and confirm what to remove. Clearing local progress leaves your AniList list alone. |
+| Diagnostics | Check the active provider, ownership, permission and most recent SDK or account result. |
 
-- **Speed-Aware Timing & Live Stream Support**:
-  - Automatically calculates remaining playback time and seek detection according to current playback speed (such as 1.25x, 1.5x, or 2x).
-  - Handles live streams and unknown-duration broadcasts gracefully with clean elapsed timers.
-  - Displays network cache and buffering states ("Buffering...") when mpv is waiting on data.
+Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Click or scroll to navigate with a mouse. Search and ID entry use mpv's text input when available. You can also open a page from the mpv console, for example `script-message-to rich_presence_conf menu Appearance`.
 
-- **Privacy & Folder Filtering**:
-  - Whitelist or blacklist specific directories so private or sensitive media is never shared.
-  - Privacy checks run before online metadata lookups, preventing sensitive file paths or titles from being queried online.
-  - Fully OS-aware path normalization that handles symlinks, parent directory references, and case sensitivity properly across Windows and Linux.
+### Sharing and privacy
 
-- **Multi-Instance Coordination & Clean Handover**:
-  - Coordinates presence across multiple concurrent mpv windows using an active lease system with automatic heartbeats.
-  - Resuming or playing a window smoothly hands over Discord presence ownership to the active player.
-  - Releases ownership immediately when an instance exits.
+The native plugin waits for the Lua configuration bridge before searching or publishing. A blank Discord application ID disables ordinary Discord sharing and its anime lookups. Explicitly enabling **Track while hidden** gives AniList separate permission. Folder exclusions and a private session take precedence. A new file or a resumed window can claim Discord unless a different player is pinned.
 
-- **Managed Background Worker & Stability**:
-  - Dedicated background worker queue with cancellation checks for rapid file skipping.
-  - Eliminates detached thread hazards and safely cleans up memory and mpv property allocations on shutdown.
+Matched anime can show episode numbers, release group, cover art and an AniList link. Other videos use mpv's title. Audio uses a Listening activity. Playback timestamps account for speed, and buffering suspends the display timer. Paused presence is hidden after 30 minutes by default.
+
+### Connecting AniList
+
+The optional account and provider worker requires Python 3.9 or newer. Set `python` to its executable if mpv cannot find it. The native plugin and player menu work independently of Python.
+
+For a **personal application**, register a client in [AniList developer settings](https://anilist.co/settings/developer) with the redirect URL `http://127.0.0.1:47653/callback`. Set `anilist_personal_client=yes` and `anilist_client_id` to the public ID of the client you own. Select **Connect account** and approve access on AniList. Enter your application secret only on the local callback page. Do not put a secret or access token in the config. ID `55822` belongs to this project's developer.
+
+For a **public installation**, the distributor supplies an HTTPS code exchange service in `anilist_exchange_url`. Viewers approve their own accounts on AniList. The application secret stays on the service. This source tree includes the service implementation. No hosted endpoint is configured by default. See [the deployment notes](docs/anilist-exchange.md).
+
+Windows uses Credential Manager. Linux can use the Python keyring package with Secret Service. If credential storage is unavailable, sign-in lasts for the worker session. Disconnect removes the local account credential. Use AniList's connected app settings to revoke remote access.
+
+### Watch time and list edits
+
+Tracking starts off. Manual mode lets you edit an entry without waiting. Ask and Automatic use a fixed threshold, initially 15 minutes of real playback. Watching at 2× earns the same time per minute as watching at 1×. Pauses, seeks, buffering and long observation gaps earn no extra time. Two windows share one watch record for an account and episode.
+
+The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Automatic changes require a suitable episode, a current list entry and the next consecutive progress value. Gaps and missing entries require review. A manual correction or skip suppresses a later automatic credit for that episode.
+
+### Recognition and templates
+
+AniList remains the default for video. Optional sources include TMDB movies and TV, TVmaze, MusicBrainz, Cover Art Archive, stream metadata and AcoustID. Select a source under **Recognition & folders**. TMDB needs a read access token. AcoustID needs a client key and `fpcalc` on PATH. Fingerprinting runs only when selected. Configure provider keys in your own mpv config and keep that file private.
+
+Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `rich-presence/data.sqlite3` under the mpv config directory.
 
 ## Screenshots
 
@@ -68,7 +80,8 @@ A modern, full-featured Discord Rich Presence plugin for mpv on Windows and Linu
 2. Copy the files into your mpv configuration directory (`%APPDATA%/mpv` on Windows, or `~/.config/mpv` on Linux):
    - Place `rich-presence.dll` (or `rich-presence.so` on Linux) into your mpv `scripts/` folder.
    - Place `rich-presence-conf.lua` into your mpv `scripts/` folder.
-   - Place `rich-presence.conf` into your mpv `script-opts/` folder.
+   - Copy the entire `script-modules/mpv-rich-presence/` directory into the corresponding `script-modules/` directory in your config.
+   - On a new installation, place `rich-presence.conf` in `script-opts/`. On an upgrade, keep your existing config.
 3. Open `script-opts/rich-presence.conf` in a text editor to configure your Discord Application ID and optional settings.
 
 ## Configuration
@@ -114,8 +127,8 @@ Available script messages:
 
 ### Prerequisites
 
-- CMake 3.18 or higher
-- C++20 compliant compiler (MSVC 2019+, GCC 10+, or Clang 11+)
+- CMake 3.21 or newer for the configure preset
+- A C++20 compiler and standard library with `std::format` support
 - vcpkg
 - [Discord Social SDK](https://discord.com/developers/social-sdk)
 
@@ -138,6 +151,7 @@ Available script messages:
 4. Configure with CMake:
    ```bash
    cmake --preset default
+   # Windows x64 package builds: add -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
    ```
 
 5. Build the Release configuration:
@@ -149,6 +163,8 @@ Available script messages:
    ```bash
    ctest --test-dir build -C Release --output-on-failure
    ```
+
+To create a local Windows archive from a clean install tree, run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. This rebuilds Release, runs CTest and packages the installed DLL, scripts, documentation and licenses. It does not publish to GitHub.
 
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 
@@ -166,4 +182,5 @@ Based on [mpv-rich-presence](https://github.com/goodtrailer/mpv-rich-presence) b
 - **nlohmann-json**: Licensed under the MIT License. See [licenses/LICENSE-nlohmann-json](licenses/LICENSE-nlohmann-json).
 - **zlib**: Licensed under the zlib License. See [licenses/LICENSE-zlib](licenses/LICENSE-zlib).
 - **mpv client API header**: Licensed under the ISC License by the mpv developers. See [licenses/LICENSE-mpv](licenses/LICENSE-mpv).
+- **SQLite**: Public domain. See [its notice](licenses/LICENSE-SQLite).
 - **Boost** and **CMakeRC**: See individual licenses in the [licenses/](licenses/) directory.
