@@ -210,6 +210,45 @@ class AccountTests(unittest.TestCase):
             save_progress("dummy", base, 7, 12, lambda: None, transport)
         self.assertEqual(sum("progress" in c for c in calls), 1)
 
+    def test_scoped_clear_and_stale_response(self):
+        with tempfile.TemporaryDirectory() as temp:
+            worker = Worker(Path(temp) / "db", "left", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                worker.put(
+                    "player", "left", {"session": 1, "scope_path": "/private/show.mkv"}
+                )
+                worker.put(
+                    "player",
+                    "right",
+                    {"session": 2, "scope_path": "/private-other/show.mkv"},
+                )
+                worker.put("exclude", "folder:/private", {"blocked": True})
+                worker.put("cache", "art", {"url": "fixture"})
+                worker.handle(
+                    {
+                        "op": "clear",
+                        "category": "exclude",
+                        "scope": "folder:/private",
+                        "session": 1,
+                    }
+                )
+                self.assertTrue(
+                    worker.get("privacy", "file:/private/show.mkv")["block_lookup"]
+                )
+                self.assertEqual(
+                    worker.get("privacy", "file:/private-other/show.mkv"), {}
+                )
+                self.assertEqual(worker.get("cache", "art"), {"url": "fixture"})
+                worker.put("account", "current", {"id": 2, "generation": "new"})
+                worker.expected = ("old", 1)
+                worker.reply(entry={"viewer": 1, "progress": 7})
+                self.assertNotIn("entry", worker.get("response", "left"))
+            finally:
+                worker.db.close()
+
     def test_two_processes(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Path(directory) / "db"
