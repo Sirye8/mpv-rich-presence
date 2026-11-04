@@ -14,7 +14,15 @@ import time
 
 # mpv starts Python in isolated mode. Load siblings only from this installation.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from account import AccountError, Vault, authorize, graphql, read_entry, save_progress
+from account import (
+    AccountError,
+    SessionExpired,
+    Vault,
+    authorize,
+    graphql,
+    read_entry,
+    save_progress,
+)
 from providers import candidates, details, fingerprint
 
 
@@ -111,6 +119,8 @@ class Worker:
         return account, player
 
     def credential(self, account):
+        if account.get("expired"):
+            raise SessionExpired("Session expired. Reconnect to AniList.")
         token = self.vault.read(account.get("generation", ""))
         if not token:
             raise AccountError("Reconnect to AniList in this window.")
@@ -163,6 +173,11 @@ class Worker:
             key = self.cycle(account, p)
             with self.transaction():
                 self.put(
+                    "entry",
+                    f"{account['id']}/{p['media']}",
+                    dict(result, checked=time.time()),
+                )
+                self.put(
                     "history",
                     key,
                     {
@@ -172,10 +187,17 @@ class Worker:
                         "session": p["session"],
                     },
                 )
-                self.delete("pending", key)
+                # A list edit also invalidates older proposals for this entry.
+                prefix = f"{account['id']}/{p['media']}/%"
+                self.db.execute(
+                    "DELETE FROM records WHERE category='pending' AND scope LIKE ?",
+                    (prefix,),
+                )
             self.reply(
                 entry=dict(result, session=p["session"]),
                 proposal=None,
+                read_state="ready",
+                last_write=time.time(),
                 message="Progress saved.",
             )
 
@@ -193,7 +215,7 @@ class Worker:
     def handle(self, job):
         op = job["op"]
         account, p = self.context(
-            job, op in ("read", "write", "search", "select", "accept", "skip", "rearm")
+            job, op in ("read", "write", "search", "select", "accept", "rearm")
         )
         if op == "connect":
             if not self.settings.get("broker") and not self.settings.get("personal"):
@@ -205,6 +227,7 @@ class Worker:
                 lambda: self.context(job),
                 vault=self.vault,
                 broker=self.settings.get("broker", ""),
+                progress=lambda message: self.reply(message=message),
             )
             viewer = graphql("query{Viewer{id name avatar{medium}}}", {}, token)[
                 "Viewer"
@@ -252,11 +275,27 @@ class Worker:
                         self.put("generation", "cache", {"id": secrets.token_hex(16)})
             self.reply(message="Disconnected.")
         elif op == "read":
-            entry = read_entry(self.credential(account), account["id"], p["media"])
-            self.context(job, True)
+            if not account.get("id") or not p.get("media"):
+                raise AccountError(
+                    "Choose a matched anime and connect an account first."
+                )
+            scope = f"{account['id']}/{p['media']}"
+            previous = self.get("entry", scope)
+            cached = dict(previous, session=p["session"]) if previous else None
+            self.reply(read_state="loading", entry=cached, offline=False)
+            try:
+                entry = read_entry(self.credential(account), account["id"], p["media"])
+            except AccountError:
+                self.reply(read_state="offline", entry=cached, offline=True)
+                raise
+            with self.transaction():
+                self.context(job, True)
+                self.put("entry", scope, dict(entry, checked=time.time()))
             self.reply(
                 entry=dict(entry, session=p["session"]),
                 offline=False,
+                read_state="ready",
+                last_read=time.time(),
                 message="Progress refreshed.",
             )
         elif op == "rearm":
@@ -278,19 +317,29 @@ class Worker:
         elif op == "write":
             self.write(job)
         elif op in ("accept", "skip"):
-            key = self.cycle(account, p)
+            key = job["proposal"]
             prop = self.get("pending", key)
             if (
                 not prop
-                or prop["key"] != job["proposal"]
+                or not account.get("id")
+                or not key.startswith(str(account["id"]) + "/")
                 or prop["account"] != account["generation"]
             ):
                 raise AccountError("This proposal has expired.")
             if op == "accept":
-                self.write(dict(job, base=prop["base"], target=prop["episode"]))
+                if (
+                    self.cycle(account, p) != key
+                    or prop.get("offline")
+                    or not p.get("safe_episode")
+                ):
+                    raise AccountError(
+                        "Return to the matched episode and refresh its progress to apply."
+                    )
+                base = dict(prop["base"], session=p["session"])
+                self.write(dict(job, base=base, target=prop["episode"]))
             else:
                 with self.transaction():
-                    self.put("history", key, {"skip": True})
+                    self.put("skipped", key, {"skip": True})
                     self.delete("pending", key)
                 self.reply(proposal=None, message="Skipped.")
         elif op == "clear":
@@ -334,7 +383,13 @@ class Worker:
                                     "file:" + path,
                                     {"mode": "hidden", "block_lookup": True},
                                 )
-                elif category in ("watch", "pending", "history") and account.get("id"):
+                elif category in (
+                    "watch",
+                    "pending",
+                    "history",
+                    "skipped",
+                    "entry",
+                ) and account.get("id"):
                     prefix = str(account["id"]) + "/"
                     if job.get("scope"):
                         if not job["scope"].startswith(prefix):
@@ -588,13 +643,12 @@ class Worker:
                 end = p["time"]
             start = max(before["time"], end)
             credit = min(dt, max(0, p["time"] - start))
-            if (
-                not p["tracking"].get("resume", True)
-                and watch.get("owner") == self.window
-                and watch.get("session") != p["session"]
+            if not p["tracking"].get("resume", True) and (
+                watch.get("owner") != self.window
+                or watch.get("session") != p["session"]
             ):
                 watch["elapsed"] = 0
-            if self.get("history", key):
+            if self.get("history", key) or self.get("skipped", key):
                 return
             elapsed = watch.get("elapsed", 0) + credit
             self.put(
@@ -618,7 +672,7 @@ class Worker:
         ):
             return
         prop = self.get("pending", key)
-        if prop:
+        if prop and not prop.get("offline"):
             if (
                 prop["account"] == a["generation"]
                 and prop["base"].get("session") == p["session"]
@@ -633,14 +687,41 @@ class Worker:
             watch = self.get("watch", key)
             watch["retry"] = time.time() + 60
             self.put("watch", key, watch)
-        entry = read_entry(self.credential(a), a["id"], p["media"])
+        epoch = self.get("generation", "data")
+        try:
+            entry = read_entry(self.credential(a), a["id"], p["media"])
+        except SessionExpired:
+            raise
+        except AccountError:
+            if p["tracking"].get("keep_pending"):
+                with self.transaction():
+                    self.context(job, True)
+                    if epoch == self.get("generation", "data"):
+                        self.put(
+                            "pending",
+                            key,
+                            dict(
+                                key=key,
+                                window=self.window,
+                                media=p["media"],
+                                title=p.get("match_title", ""),
+                                episode=int(p["episode"]),
+                                offline=True,
+                                account=a["generation"],
+                                base={"session": p["session"]},
+                            ),
+                        )
+            raise
         self.context(job, True)
         episode = int(p["episode"])
         if entry["progress"] >= episode:
             self.put("history", key, {"progress": entry["progress"]})
+            self.delete("pending", key)
             return
         entry["session"] = p["session"]
         prop = dict(
+            title=p.get("match_title", ""),
+            media=p["media"],
             window=self.window,
             key=key,
             episode=episode,
@@ -649,7 +730,14 @@ class Worker:
             account=a["generation"],
         )
         with self.transaction():
-            if self.get("pending", key) or self.get("history", key):
+            self.context(job, True)
+            existing = self.get("pending", key)
+            if (
+                (existing and not existing.get("offline"))
+                or self.get("history", key)
+                or self.get("skipped", key)
+                or epoch != self.get("generation", "data")
+            ):
                 return
             self.put("pending", key, prop)
         if (
@@ -703,6 +791,13 @@ class Worker:
                     if not self.previous or p != self.previous[0]:
                         self.sample()
             except AccountError as exc:
+                if isinstance(exc, SessionExpired) and self.expected:
+                    with self.transaction():
+                        current = self.get("account", "current")
+                        if current.get("generation") == self.expected[
+                            0
+                        ] and not current.get("expired"):
+                            self.put("account", "current", dict(current, expired=True))
                 if row and json.loads(row[1]).get("account") != self.get(
                     "account", "current"
                 ).get("generation"):

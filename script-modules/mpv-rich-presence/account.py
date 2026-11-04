@@ -18,6 +18,10 @@ class AccountError(Exception):
     pass
 
 
+class SessionExpired(AccountError):
+    pass
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args):
         return None
@@ -41,7 +45,7 @@ def graphql(query, variables, token=None):
             result = json.load(response)
     except urllib.error.HTTPError as exc:
         if exc.code == 401:
-            raise AccountError("Session expired. Reconnect to AniList.") from None
+            raise SessionExpired("Session expired. Reconnect to AniList.") from None
         if exc.code == 429:
             raise AccountError("AniList rate limit reached. Try again later.") from None
         raise AccountError("AniList request failed (HTTP %d)." % exc.code) from None
@@ -114,6 +118,8 @@ def save_progress(token, base, target, total, valid, call=graphql, status=None):
     )
     try:
         row = dict(call(query, variables, token)["SaveMediaListEntry"])
+    except SessionExpired:
+        raise
     except AccountError:
         # Never repeat a mutation whose acknowledgement was lost.
         row = read_entry(token, base["viewer"], base["media"], call)
@@ -285,7 +291,41 @@ def exchange_code(client_id, code, verifier, secret=None):
         raise AccountError("AniList declined the authorization code.") from None
 
 
-def authorize(client_id, valid, flow="pkce", vault=None, broker=""):
+def wake_exchange(
+    broker, client_id, valid, open_url, *, clock=time.monotonic, sleep=time.sleep
+):
+    """Wake an idle service only after Connect. No account data is sent."""
+    deadline = clock() + 100
+    while clock() < deadline:
+        valid()
+        try:
+            with open_url(broker + "/health", timeout=8) as response:
+                health = json.load(response)
+            if (
+                health.get("service") != "mpv-anilist-login"
+                or str(health.get("client_id")) != str(client_id)
+                or health.get("redirect_uri") != broker + "/callback"
+            ):
+                raise AccountError(
+                    "The sign-in service is configured for a different AniList client."
+                )
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 502, 503, 504):
+                raise AccountError(
+                    f"Sign-in service health check failed (HTTP {exc.code})."
+                ) from None
+        except (OSError, ValueError):
+            pass
+        sleep(min(2, max(0, deadline - clock())))
+    raise AccountError(
+        "The sign-in service did not wake up. Select Connect to try again."
+    )
+
+
+def authorize(
+    client_id, valid, flow="pkce", vault=None, broker="", progress=lambda message: None
+):
     if not str(client_id).isdigit():
         raise AccountError("Set anilist_client_id in rich-presence.conf first.")
     state = secrets.token_urlsafe(32)
@@ -336,11 +376,23 @@ def authorize(client_id, valid, flow="pkce", vault=None, broker=""):
         query = urllib.parse.urlencode(params)
         url = "https://anilist.co/api/v2/oauth/authorize?" + query
         if broker:
+            progress(
+                "Starting the sign-in service. The first connection can take about a minute."
+            )
+            wake_exchange(
+                broker, client_id, valid, urllib.request.build_opener(NoRedirect).open
+            )
+            valid()
             url = broker_post(
                 "/start", {"challenge": params["code_challenge"], "state": state}
             )["authorize"]
-            if not url.startswith("https://anilist.co/api/v2/oauth/authorize?"):
+            if not url.startswith(
+                "https://anilist.co/api/v2/oauth/authorize?"
+            ) or urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get(
+                "client_id"
+            ) != [str(client_id)]:
                 raise AccountError("Invalid authorization URL from sign-in service.")
+        progress("Approve access in your browser, then return to mpv.")
         if not webbrowser.open(url):
             raise AccountError("Could not open your browser.")
         limit = time.monotonic() + 180
