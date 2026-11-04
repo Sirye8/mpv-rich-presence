@@ -2,11 +2,6 @@
 import json
 from pathlib import Path
 import subprocess
-import hashlib
-import base64
-from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
-from unittest.mock import patch
 import io
 import sys
 import tempfile
@@ -113,64 +108,27 @@ class CallbackTests(unittest.TestCase):
 
 
 class PublicSignInTests(unittest.TestCase):
-    def test_one_time_handoff(self):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
-        from anilist_exchange import handler
+    def test_wake_before_login(self):
+        from account import wake_exchange
 
-        verifier = "v" * 64
-        challenge = (
-            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-            .rstrip(b"=")
-            .decode()
+        base = "https://login.example.org"
+        health = dict(
+            service="mpv-anilist-login",
+            client_id="55822",
+            redirect_uri=base + "/callback",
         )
-        state = "s" * 32
-        with ThreadingHTTPServer(
-            ("127.0.0.1", 0), handler("https://example.org", "123", "fixture")
-        ) as server:
-            thread = threading.Thread(target=server.serve_forever)
-            thread.start()
-            client = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        attempts = []
 
-            def post(path, body):
-                client.request(
-                    "POST", path, json.dumps(body), {"Content-Type": "application/json"}
-                )
-                result = client.getresponse()
-                return result.status, json.loads(result.read())
+        def opening(url, timeout):
+            attempts.append(url)
+            if len(attempts) == 1:
+                raise urllib.error.HTTPError(url, 503, "Starting", None, None)
+            return io.BytesIO(json.dumps(health).encode())
 
-            try:
-                code, started = post("/start", dict(state=state, challenge=challenge))
-                self.assertEqual(code, 200)
-                params = urllib.parse.parse_qs(
-                    urllib.parse.urlsplit(started["authorize"]).query
-                )
-                with patch("anilist_exchange.urllib.request.build_opener") as opener:
-                    opener.return_value.open.return_value = io.BytesIO(
-                        b'{"access_token":"fixture-access"}'
-                    )
-                    client.request(
-                        "GET",
-                        "/callback?"
-                        + urllib.parse.urlencode(
-                            dict(code="code", state=params["state"][0])
-                        ),
-                    )
-                    response = client.getresponse()
-                    dest = response.getheader("Location")
-                    response.read()
-                self.assertTrue(dest.startswith("http://127.0.0.1:47653/callback?"))
-                self.assertNotIn("fixture-access", dest)
-                data = urllib.parse.parse_qs(urllib.parse.urlsplit(dest).query)
-                self.assertEqual(data["state"], [state])
-                req = dict(ticket=data["code"][0], verifier=verifier)
-                self.assertEqual(
-                    post("/redeem", req), (200, {"access_token": "fixture-access"})
-                )
-                self.assertEqual(post("/redeem", req)[0], 400)
-            finally:
-                client.close()
-                server.shutdown()
-                thread.join()
+        wake_exchange(base, "55822", lambda: None, opening, sleep=lambda _: None)
+        self.assertEqual(attempts, [base + "/health"] * 2)
+        with self.assertRaises(AccountError):
+            wake_exchange(base, "other", lambda: None, opening)
 
 
 class AccountTests(unittest.TestCase):

@@ -30,7 +30,7 @@ The optional account and provider worker requires Python 3.9 or newer. Set `pyth
 
 For a **personal application**, register a client in [AniList developer settings](https://anilist.co/settings/developer) with the redirect URL `http://127.0.0.1:47653/callback`. Set `anilist_personal_client=yes` and `anilist_client_id` to the public ID of the client you own. Select **Connect account** and approve access on AniList. Enter your application secret only on the local callback page. Do not put a secret or access token in the config. ID `55822` belongs to this project's developer.
 
-For a **public installation**, the distributor supplies an HTTPS code exchange service in `anilist_exchange_url`. Viewers approve their own accounts on AniList. The application secret stays on the service. This source tree includes the service implementation. No hosted endpoint is configured by default. See [the deployment notes](docs/anilist-exchange.md).
+For a **public installation**, the distributor supplies an HTTPS code exchange service in `anilist_exchange_url`. Viewers approve their own accounts on AniList. The application secret stays on the service. The Cloudflare Worker implementation and deployment instructions are included in this repository. See [the deployment notes](docs/anilist-exchange.md).
 
 Windows uses Credential Manager. Linux can use the Python keyring package with Secret Service. If credential storage is unavailable, sign-in lasts for the worker session. Disconnect removes the local account credential. Use AniList's connected app settings to revoke remote access.
 
