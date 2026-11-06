@@ -120,7 +120,7 @@ class PublicSignInTests(unittest.TestCase):
         attempts = []
 
         def opening(url, timeout):
-            attempts.append(url)
+            attempts.append(url.full_url)
             if len(attempts) == 1:
                 raise urllib.error.HTTPError(url, 503, "Starting", None, None)
             return io.BytesIO(json.dumps(health).encode())
@@ -302,6 +302,70 @@ class AccountTests(unittest.TestCase):
             finally:
                 for w in workers:
                     w.db.close()
+
+    def test_watch_time_during_blocked_account_operation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "db"
+            control = Worker(path, "window", {})
+            control.db.execute(
+                "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+            )
+            control.put("account", "current", dict(id=1, generation="test"))
+            sample = dict(
+                session=1,
+                media=2,
+                episode="7",
+                safe_episode=True,
+                active=True,
+                speed=2,
+                seek=0,
+                tracking={"mode": "manual"},
+            )
+            control.put(
+                "player",
+                "window",
+                dict(sample, time=1000, pos=0, wall=time.time() * 1000),
+            )
+            stop = threading.Event()
+            entered = threading.Event()
+
+            def run():
+                worker = Worker(path, "window", {})
+
+                def blocked_request():
+                    entered.set()
+                    stop.wait(8)
+
+                worker.operations = blocked_request
+                worker.run()
+
+            thread = threading.Thread(target=run)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                time.sleep(0.3)
+                for step in range(1, 4):
+                    control.put(
+                        "player",
+                        "window",
+                        dict(
+                            sample,
+                            time=1000 + step,
+                            pos=step * 2,
+                            wall=time.time() * 1000,
+                        ),
+                    )
+                    deadline = time.monotonic() + 2
+                    while (
+                        time.monotonic() < deadline
+                        and control.get("watch", "1/2/7/0").get("end", 0) < 1000 + step
+                    ):
+                        time.sleep(0.02)
+                self.assertAlmostEqual(control.get("watch", "1/2/7/0")["elapsed"], 3)
+            finally:
+                stop.set()
+                thread.join(3)
+                control.db.close()
 
 
 if __name__ == "__main__":

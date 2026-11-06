@@ -1,0 +1,15 @@
+[build]
+  publish = "tools/login-site"
+  functions = "tools/netlify"
+
+[functions]
+  node_bundler = "esbuild"
+
+[build.environment]
+  ANILIST_CLIENT_ID = "55822"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    Referrer-Policy = "no-referrer"

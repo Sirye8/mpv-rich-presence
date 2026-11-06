@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker from "../tools/cloudflare/worker.mjs";
+import worker from "../tools/login/exchange.mjs";
+import relay from "../tools/cloudflare/worker.mjs";
 
 test("a viewer exchanges one code with the original verifier", async t => {
   const origin = "https://login.example.org";
@@ -28,9 +29,11 @@ test("a viewer exchanges one code with the original verifier", async t => {
   let used=false;
   const provider=t.mock.method(globalThis,"fetch",async (url, req) => {
     assert.equal(url,"https://anilist.co/api/v2/oauth/token");
-    assert.equal(req.body.get("code_verifier"),verifier);
-    assert.equal(req.body.get("client_secret"),env.ANILIST_CLIENT_SECRET);
-    assert.equal(req.body.get("code"),"example-code");
+    assert.equal(req.redirect,"manual");
+    const body = JSON.parse(req.body);
+    assert.equal(body.code_verifier,verifier);
+    assert.equal(body.client_secret,env.ANILIST_CLIENT_SECRET);
+    assert.equal(body.code,"example-code");
     if (used) return Response.json({}, {status:400});
     used=true;
     return Response.json({access_token:"viewer-token"});
@@ -43,4 +46,54 @@ test("a viewer exchanges one code with the original verifier", async t => {
   assert.equal((await worker.fetch(new Request(callback),env)).status,400);
   assert.equal((await post("/redeem",{ticket,verifier})).status,400);
   assert.equal(provider.mock.callCount(),2);
+});
+
+test("the relay forwards only sign-in routes without following the callback", async t => {
+  const origin = "https://mpv-anilist-login.si-based.workers.dev";
+  const provider = t.mock.method(globalThis, "fetch", async (url, req) => {
+    assert.equal(url.origin, "https://mpv-anilist-login.netlify.app");
+    assert.equal(req.redirect, "manual");
+    assert.equal(req.headers.has("Cookie"), false);
+    assert.equal(req.headers.has("Authorization"), false);
+    if (url.pathname === "/callback") {
+      assert.equal(url.searchParams.get("state"), "opaque-state");
+      return new Response(null, { status: 303, headers: {
+        Location: "http://127.0.0.1:47653/callback?code=encrypted-ticket",
+        "Cache-Control": "no-store",
+      } });
+    }
+    assert.equal(url.pathname, "/start");
+    assert.equal(await new Response(req.body).text(), "{}");
+    assert.equal(req.headers.get("Content-Length"), "2");
+    return Response.json({ authorize: "https://anilist.co/api/v2/oauth/authorize" });
+  });
+  for (const path of ["/", "/probe", "/https://example.org", "//example.org"]) {
+    assert.equal((await relay.fetch(new Request(origin + path))).status, 404);
+  }
+  assert.equal((await relay.fetch(new Request(origin + "/redeem"))).status, 404);
+  const start = await relay.fetch(new Request(origin + "/start", {
+    method: "POST", body: "{}", headers: { "Content-Length": "2", Cookie: "private", Authorization: "private" },
+  }));
+  assert.equal(start.status, 200);
+  const callback = await relay.fetch(new Request(origin + "/callback?state=opaque-state"));
+  assert.equal(callback.status, 303);
+  assert.equal(new URL(callback.headers.get("Location")).hostname, "127.0.0.1");
+  assert.equal(callback.headers.get("Cache-Control"), "no-store");
+  assert.equal(provider.mock.callCount(), 2);
+  provider.mock.mockImplementation(() => { throw Error("network failure"); });
+  assert.equal((await relay.fetch(new Request(origin + "/health"))).status, 503);
+});
+
+test("the exchange uses its public relay origin for authorization and health", async () => {
+  const env = { ANILIST_CLIENT_ID: "55822", ANILIST_CLIENT_SECRET: "test-only",
+    ANILIST_PUBLIC_ORIGIN: "https://relay.example.org" };
+  const origin = "https://exchange.example.org";
+  const health = await (await worker.fetch(new Request(origin + "/health"), env)).json();
+  assert.equal(health.redirect_uri, env.ANILIST_PUBLIC_ORIGIN + "/callback");
+  const body = JSON.stringify({ state: "s".repeat(32), challenge: "c".repeat(43) });
+  const result = await (await worker.fetch(new Request(origin + "/start", {
+    method: "POST", body, headers: { "Content-Length": String(body.length) },
+  }), env)).json();
+  assert.equal(new URL(result.authorize).searchParams.get("redirect_uri"), health.redirect_uri);
+  assert.equal(JSON.stringify(result).includes(env.ANILIST_CLIENT_SECRET), false);
 });

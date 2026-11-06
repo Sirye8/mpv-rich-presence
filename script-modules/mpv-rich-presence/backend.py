@@ -10,6 +10,7 @@ import re
 import secrets
 import sqlite3
 import sys
+import threading
 import time
 
 # mpv starts Python in isolated mode. Load siblings only from this installation.
@@ -24,6 +25,8 @@ from account import (
     save_progress,
 )
 from providers import candidates, details, fingerprint
+
+PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
 
 
 @contextlib.contextmanager
@@ -47,6 +50,7 @@ def serialized(directory):
 
 class Worker:
     def __init__(self, db_path, window, settings):
+        self.db_path = db_path
         self.db = sqlite3.connect(db_path, isolation_level=None, timeout=4)
         self.directory = Path(db_path).parent
         self.window = window
@@ -212,21 +216,65 @@ class Worker:
             )
         time.sleep(max(0, when - now))
 
+    def cached_fetch(self, key, field, request, valid):
+        epoch = self.get("generation", "data")
+        owner = secrets.token_hex(16)
+        while True:
+            valid()
+            with self.transaction():
+                if self.get("generation", "data") != epoch:
+                    raise AccountError("Saved data changed. Search again.")
+                cached = self.get("cache", key)
+                if field in cached and cached.get("expires", 0) > time.time():
+                    return cached[field]
+                if self.get("flight", key).get("expires", 0) <= time.time():
+                    self.put(
+                        "flight", key, {"owner": owner, "expires": time.time() + 90}
+                    )
+                    break
+            time.sleep(0.2)
+        try:
+            valid()
+            result = request()
+            with self.transaction():
+                valid()
+                if (
+                    epoch != self.get("generation", "data")
+                    or self.get("flight", key).get("owner") != owner
+                ):
+                    raise AccountError("The search was superseded.")
+                self.put(
+                    "cache",
+                    key,
+                    {
+                        field: result,
+                        "expires": time.time() + (86400 if result else 300),
+                    },
+                )
+            return result
+        finally:
+            with self.transaction():
+                if self.get("flight", key).get("owner") == owner:
+                    self.delete("flight", key)
+
     def handle(self, job):
         op = job["op"]
         account, p = self.context(
             job, op in ("read", "write", "search", "select", "accept", "rearm")
         )
         if op == "connect":
-            if not self.settings.get("broker") and not self.settings.get("personal"):
-                raise AccountError(
-                    "Public sign-in is not configured. App owners can enable personal sign-in in script options."
-                )
+            broker = self.settings.get("broker", "")
+            if not broker and not self.settings.get("personal"):
+                if str(self.settings.get("client_id")) != "55822":
+                    raise AccountError(
+                        "Configure the exchange for your custom AniList client."
+                    )
+                broker = PUBLIC_EXCHANGE
             token = authorize(
                 self.settings.get("client_id"),
                 lambda: self.context(job),
                 vault=self.vault,
-                broker=self.settings.get("broker", ""),
+                broker=broker,
                 progress=lambda message: self.reply(message=message),
             )
             viewer = graphql("query{Viewer{id name avatar{medium}}}", {}, token)[
@@ -235,7 +283,9 @@ class Worker:
             with serialized(self.directory):
                 self.context(job)
                 generation = secrets.token_hex(16)
-                persistent = self.vault.write(generation, token)
+                persistent = self.vault.write(
+                    generation, token, remember=not job.get("session_only", False)
+                )
                 if account.get("generation"):
                     self.vault.forget(account["generation"], account.get("persistent"))
                 self.put(
@@ -355,7 +405,17 @@ class Worker:
                     "sources",
                 ):
                     removed = self.get(category, job["scope"])
-                    self.delete(category, job["scope"])
+                    if category == "match" and job.get("field"):
+                        if job["field"] not in ("id", "not_anime", "offset"):
+                            raise AccountError("Unknown match field.")
+                        remaining = dict(removed)
+                        remaining.pop(job["field"], None)
+                        if remaining:
+                            self.put(category, job["scope"], remaining)
+                        else:
+                            self.delete(category, job["scope"])
+                    else:
+                        self.delete(category, job["scope"])
                     restricted = (
                         removed.get("blocked")
                         or removed.get("block_lookup")
@@ -415,7 +475,6 @@ class Worker:
             )
         elif op == "search":
             provider = job["provider"]
-            generation = self.get("generation", "data")
             query = job.get("query", "")
             key = (
                 provider
@@ -424,26 +483,16 @@ class Worker:
                     (p["path"] if provider == "acoustid" else query).encode()
                 ).hexdigest()
             )
-            cached = self.get("cache", key)
-            if cached.get("expires", 0) > time.time():
-                hits = cached["results"]
-            else:
+
+            def valid():
+                self.context(job, True)
+
+            def fetch_results():
                 if provider == "acoustid":
-                    hits = fingerprint(p["path"], self.settings, self.throttle)
-                else:
-                    hits = candidates(provider, query, self.settings, self.throttle)
-                with self.transaction():
-                    self.context(job, True)
-                    if generation != self.get("generation", "data"):
-                        return
-                    self.put(
-                        "cache",
-                        key,
-                        {
-                            "expires": time.time() + (86400 if hits else 300),
-                            "results": hits,
-                        },
-                    )
+                    return fingerprint(p["path"], self.settings, self.throttle, valid)
+                return candidates(provider, query, self.settings, self.throttle)
+
+            hits = self.cached_fetch(key, "results", fetch_results, valid)
             self.reply(
                 results=hits,
                 provider=provider,
@@ -480,6 +529,10 @@ class Worker:
 
     def recognize(self, p):
         source = p.get("source", "original")
+        refresh = self.get("refresh", self.window)
+        if refresh != getattr(self, "last_refresh", None):
+            self.resolved = None
+            self.last_refresh = refresh
         key = (p.get("session"), source, p.get("title"), p.get("allowed"))
         if key == self.resolved:
             return
@@ -494,6 +547,8 @@ class Worker:
                 provider=source,
                 kind="stream",
                 name=p.get("channel") or raw,
+                stream_title=raw,
+                live=p.get("live", False),
                 link=p.get("page", ""),
             )
             if not hit["link"]:
@@ -519,7 +574,13 @@ class Worker:
             if "://" in raw or "?" in raw or "/" in raw or chr(92) in raw:
                 return
             season = re.search(r"\bS(\d+)E(\d+)\b", raw, re.I)
-            title = (raw[: season.start()] if season else raw).strip(" ._-")
+            airdate = (
+                re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw)
+                if source == "tvmaze"
+                else None
+            )
+            numbering = season or airdate
+            title = (raw[: numbering.start()] if numbering else raw).strip(" ._-")
             if title.lower().endswith((".mkv", ".mp4", ".avi", ".flac", ".mp3")):
                 title = title.rsplit(".", 1)[0]
             title = title.replace(".", " ").strip()
@@ -535,16 +596,26 @@ class Worker:
                             p.get("artist"),
                             p.get("album"),
                             p.get("tmdb"),
-                            season.groups() if season else None,
+                            numbering.groups() if numbering else None,
+                            p.get("duration"),
                             p["path"] if source == "acoustid" else "",
+                            refresh,
                         ]
                     ).encode()
                 ).hexdigest()
             )
-            cache = self.get("cache", cache_key)
-            if cache.get("expires", 0) > time.time():
-                hit = cache.get("hit")
-            else:
+
+            def valid():
+                current = self.get("player", self.window)
+                if refresh != self.get("refresh", self.window) or key != (
+                    current.get("session"),
+                    current.get("source"),
+                    current.get("title"),
+                    current.get("allowed"),
+                ):
+                    raise AccountError("Playback or privacy settings changed.")
+
+            def fetch_hit():
                 if source.startswith("tmdb-") and p.get("tmdb", "").isdigit():
                     chosen = dict(
                         id=int(p["tmdb"]),
@@ -554,29 +625,50 @@ class Worker:
                     )
                 else:
                     if source == "acoustid":
-                        rows = fingerprint(p["path"], self.settings, self.throttle)
+                        rows = fingerprint(
+                            p["path"], self.settings, self.throttle, valid
+                        )
                     else:
-                        rows = candidates(source, title, self.settings, self.throttle)
+                        rows = candidates(
+                            source,
+                            title,
+                            self.settings,
+                            self.throttle,
+                            artist=p.get("artist", ""),
+                            album=p.get("album", ""),
+                        )
                     exact = [
                         r for r in rows if r["name"].casefold() == title.casefold()
                     ]
+                    if source == "musicbrainz":
+                        for tag in ("artist", "album"):
+                            if p.get(tag):
+                                exact = [
+                                    r
+                                    for r in exact
+                                    if r.get(tag, "").casefold() == p[tag].casefold()
+                                ]
+                        if p.get("duration", 0) > 0:
+                            exact = [
+                                r
+                                for r in exact
+                                if not r.get("duration_ms")
+                                or abs(r["duration_ms"] / 1000 - p["duration"]) <= 3
+                            ]
                     chosen = exact[0] if len(exact) == 1 else None
                 if chosen:
-                    hit = details(
+                    valid()
+                    return details(
                         source,
                         chosen,
                         self.settings,
                         self.throttle,
                         season.groups() if season else None,
+                        airdate[1] if airdate else None,
                     )
-                with self.transaction():
-                    if generation != self.get("generation", "data"):
-                        return
-                    self.put(
-                        "cache",
-                        cache_key,
-                        {"hit": hit, "expires": time.time() + (86400 if hit else 300)},
-                    )
+                return None
+
+            hit = self.cached_fetch(cache_key, "hit", fetch_hit, valid)
         with self.transaction():
             current = self.get("player", self.window)
             if key != (
@@ -592,7 +684,7 @@ class Worker:
                 dict(session=p["session"], source=source, title=raw, hit=hit or {}),
             )
 
-    def sample(self):
+    def sample(self, credit_only=False):
         p = self.get("player", self.window)
         a = self.get("account", "current")
         self.expected = (a.get("generation"), p.get("session"))
@@ -666,6 +758,22 @@ class Worker:
         if not credit:
             return
         self.reply(elapsed=elapsed)
+        if not credit_only:
+            self.propose(a, p, elapsed)
+
+    def propose(self, a, p, elapsed):
+        if (
+            not a.get("id")
+            or not p.get("active")
+            or not p.get("safe_episode")
+            or abs(time.time() * 1000 - p.get("wall", 0)) > 3000
+        ):
+            return
+        self.expected = (a.get("generation"), p.get("session"))
+        key = self.cycle(a, p)
+        if self.get("history", key) or self.get("skipped", key):
+            return
+        watch = self.get("watch", key)
         mode = p["tracking"].get("mode", "off")
         if mode not in ("ask", "auto") or elapsed < 60 * p["tracking"].get(
             "threshold", 15
@@ -750,7 +858,38 @@ class Worker:
         else:
             self.reply(proposal=prop, message="Episode ready to review.")
 
+    def credit_loop(self, stop):
+        # A separate SQLite connection keeps the monotonic sampler independent
+        # of browser approval, provider requests and AniList response times.
+        counter = Worker(self.db_path, self.window, self.settings)
+        try:
+            while not stop.is_set():
+                try:
+                    epoch = counter.get("generation", "data")
+                    if counter.data_generation != epoch or counter.get(
+                        "cancel", self.window
+                    ):
+                        counter.previous = None
+                        counter.data_generation = epoch
+                    counter.sample(credit_only=True)
+                except (AccountError, sqlite3.Error, KeyError, ValueError):
+                    counter.previous = None
+                stop.wait(0.25)
+        finally:
+            counter.db.close()
+
     def run(self):
+        stop = threading.Event()
+        sampler = threading.Thread(target=self.credit_loop, args=(stop,), daemon=True)
+        sampler.start()
+        try:
+            self.operations()
+        finally:
+            stop.set()
+            sampler.join()
+            self.db.close()
+
+    def operations(self):
         while True:
             row = None
             self.expected = None
@@ -788,8 +927,10 @@ class Worker:
                 else:
                     p = self.get("player", self.window)
                     self.recognize(p)
-                    if not self.previous or p != self.previous[0]:
-                        self.sample()
+                    a = self.get("account", "current")
+                    if a.get("id") and p.get("safe_episode"):
+                        watch = self.get("watch", self.cycle(a, p))
+                        self.propose(a, p, watch.get("elapsed", 0))
             except AccountError as exc:
                 if isinstance(exc, SessionExpired) and self.expected:
                     with self.transaction():
@@ -811,7 +952,7 @@ class Worker:
 
 
 if __name__ == "__main__":
-    settings = json.load(sys.stdin)
+    settings = json.loads(sys.argv[3]) if len(sys.argv) > 3 else json.load(sys.stdin)
     config = Path(sys.argv[1]).parent.parent / "script-opts" / "rich-presence.conf"
     if config.is_file():
         for line in config.read_text(encoding="utf-8-sig").splitlines():
