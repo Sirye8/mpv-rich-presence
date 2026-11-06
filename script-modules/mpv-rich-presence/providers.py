@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import urllib.parse as url
 import urllib.request
 from account import AccountError, graphql
@@ -33,7 +34,7 @@ def public_query(text):
     return text
 
 
-def candidates(provider, query, settings, throttle):
+def candidates(provider, query, settings, throttle, *, artist="", album=""):
     query = public_query(query)
     throttle(provider)
     if provider == "anilist":
@@ -86,11 +87,12 @@ def candidates(provider, query, settings, throttle):
                 id=m["id"],
                 kind="tv",
                 name=m["name"],
-                title="%s (%s, %s)"
+                title="%s (%s, %s, %s)"
                 % (
                     m["name"],
                     (m.get("premiered") or "?")[:4],
                     m.get("language") or "?",
+                    (m.get("network") or m.get("webChannel") or {}).get("name", "?"),
                 ),
                 cover=(m.get("image") or {}).get("original", ""),
                 link=m["url"],
@@ -98,9 +100,17 @@ def candidates(provider, query, settings, throttle):
             for m in [r["show"] for r in rows[:10]]
         ]
     if provider == "musicbrainz":
+
+        def quoted(text):
+            return '"' + text.replace('"', '\\"') + '"'
+
+        terms = ["recording:" + quoted(query)]
+        for name, value in (("artist", artist), ("release", album)):
+            if value:
+                terms.append(name + ":" + quoted(public_query(value)))
         rows = fetch(
             "https://musicbrainz.org/ws/2/recording/",
-            {"query": query, "fmt": "json", "limit": 8},
+            {"query": " AND ".join(terms), "fmt": "json", "limit": 8},
         )
         result = []
         for m in rows["recordings"]:
@@ -112,6 +122,12 @@ def candidates(provider, query, settings, throttle):
                         name=m["title"],
                         title=m["title"] + " · " + release["title"],
                         release=release["id"],
+                        album=release["title"],
+                        artist="".join(
+                            a.get("name", "") + a.get("joinphrase", "")
+                            for a in m.get("artist-credit", [])
+                        ),
+                        duration_ms=m.get("length"),
                         link="https://musicbrainz.org/recording/" + m["id"],
                         cover="https://coverartarchive.org/release/"
                         + release["id"]
@@ -122,19 +138,38 @@ def candidates(provider, query, settings, throttle):
     raise AccountError("Unsupported provider.")
 
 
-def fingerprint(path, settings, throttle):
+def fingerprint(path, settings, throttle, valid=lambda: None):
     if not settings.get("acoustid_key") or not os.path.isfile(path):
         raise AccountError(
             "Fingerprinting needs a local file, fpcalc, and acoustid_key."
         )
-    raw = subprocess.run(
+    valid()
+    with subprocess.Popen(
         ["fpcalc", "-json", "-length", "120", os.path.abspath(path)],
-        capture_output=True,
-        timeout=35,
-        check=True,
-    )
-    fp = json.loads(raw.stdout)
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ) as process:
+        deadline = time.monotonic() + 35
+        try:
+            while True:
+                valid()
+                if time.monotonic() >= deadline:
+                    raise AccountError("Fingerprinting timed out.")
+                try:
+                    output, _ = process.communicate(timeout=0.25)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        if process.returncode:
+            raise AccountError("fpcalc could not read this file.")
+    fp = json.loads(output)
     throttle("acoustid")
+    valid()
     data = fetch(
         "https://api.acoustid.org/v2/lookup",
         {
@@ -144,6 +179,10 @@ def fingerprint(path, settings, throttle):
             "fingerprint": fp["fingerprint"],
         },
     )
+    if data.get("status") != "ok":
+        raise AccountError(
+            "AcoustID rejected the lookup. Check your key and try again."
+        )
     return [
         dict(
             id=r["id"],
@@ -158,7 +197,7 @@ def fingerprint(path, settings, throttle):
     ][:10]
 
 
-def details(provider, hit, settings, throttle, episode):
+def details(provider, hit, settings, throttle, episode, airdate=None):
     item = dict(hit, provider=provider)
     if provider.startswith("tmdb-"):
         throttle(provider)
@@ -194,4 +233,14 @@ def details(provider, hit, settings, throttle, episode):
             {"season": episode[0], "number": episode[1]},
         )
         item["episode_title"] = data.get("name", "")
+        item["numbering"] = "S%02dE%02d" % tuple(map(int, episode))
+    elif provider == "tvmaze" and airdate:
+        throttle(provider)
+        matches = fetch(
+            "https://api.tvmaze.com/shows/%d/episodesbydate" % hit["id"],
+            {"date": airdate},
+        )
+        if len(matches) == 1:
+            item["episode_title"] = matches[0].get("name", "")
+            item["numbering"] = airdate
     return item

@@ -28,9 +28,11 @@ Matched anime can show episode numbers, release group, cover art and an AniList 
 
 The optional account and provider worker requires Python 3.9 or newer. Set `python` to its executable if mpv cannot find it. The native plugin and player menu work independently of Python.
 
-For a **personal application**, register a client in [AniList developer settings](https://anilist.co/settings/developer) with the redirect URL `http://127.0.0.1:47653/callback`. Set `anilist_personal_client=yes` and `anilist_client_id` to the public ID of the client you own. Select **Connect account** and approve access on AniList. Enter your application secret only on the local callback page. Do not put a secret or access token in the config. ID `55822` belongs to this project's developer.
+Open **Alt+p → AniList → Connect account** and approve access on AniList. The default client and sign-in service are included. You do not need to register an application, enter a client secret or create a hosting account. **Connect for this session** keeps the credential in memory until the account helper exits.
 
-For a **public installation**, the distributor supplies an HTTPS code exchange service in `anilist_exchange_url`. Viewers approve their own accounts on AniList. The application secret stays on the service. The Cloudflare Worker implementation and deployment instructions are included in this repository. See [the deployment notes](docs/anilist-exchange.md).
+The public service uses a Cloudflare relay and a Netlify function for the authorization-code exchange. The application secret stays on Netlify. Once connected, mpv talks directly to AniList for account and list requests. See [the deployment notes](docs/anilist-exchange.md) for the service design, limits and owner setup.
+
+If you want to use your own **personal application**, register a separate client in [AniList developer settings](https://anilist.co/settings/developer) with the redirect URL `http://127.0.0.1:47653/callback`. Set `anilist_personal_client=yes` and `anilist_client_id` to its public ID. Enter its secret only on the local callback page. Do not put a secret or access token in the config. Client `55822` uses the project's public callback and cannot also use a personal localhost callback.
 
 Windows uses Credential Manager. Linux can use the Python keyring package with Secret Service. If credential storage is unavailable, sign-in lasts for the worker session. Disconnect removes the local account credential. Use AniList's connected app settings to revoke remote access.
 
@@ -38,7 +40,7 @@ Windows uses Credential Manager. Linux can use the Python keyring package with S
 
 Tracking starts off. Manual mode lets you edit an entry without waiting. Ask and Automatic use a fixed threshold, initially 15 minutes of real playback. Watching at 2× earns the same time per minute as watching at 1×. Pauses, seeks, buffering and long observation gaps earn no extra time. Two windows share one watch record for an account and episode.
 
-The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Automatic changes require a suitable episode, a current list entry and the next consecutive progress value. Gaps and missing entries require review. A manual correction or skip suppresses a later automatic credit for that episode.
+The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Automatic changes require a suitable episode, a current list entry and the next consecutive progress value. Gaps and missing entries require review. A manual correction or skip suppresses a later automatic credit for that episode. Sampling runs independently of account and metadata requests, so a slow network response does not stop the eligible watch counter.
 
 ### Recognition and templates
 

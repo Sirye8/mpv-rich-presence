@@ -47,6 +47,7 @@ vcpkg_installed/
 .DS_Store
 Thumbs.db
 dist/
+.netlify/
 
 __pycache__/
 *.pyc

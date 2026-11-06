@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import base64
 import hashlib
+import html
 import json
 import os
 import re
@@ -12,6 +13,8 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+USER_AGENT = "mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)"
 
 
 class AccountError(Exception):
@@ -29,7 +32,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def graphql(query, variables, token=None):
     headers = {
-        "User-Agent": "mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)",
+        "User-Agent": USER_AGENT,
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
@@ -181,9 +184,13 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
                         <button>Finish sign-in</button></form>""",
                         )
                         return
-                    except (AccountError, OSError):
-                        self.server.error = "Sign-in failed during the code exchange."
-                        self.send_body(502, self.server.error)
+                    except (AccountError, OSError) as exc:
+                        self.server.error = (
+                            str(exc)
+                            if isinstance(exc, AccountError)
+                            else "Sign-in failed during the code exchange."
+                        )
+                        self.send_body(502, html.escape(self.server.error))
                         return
                 else:
                     self.server.result = code
@@ -299,7 +306,10 @@ def wake_exchange(
     while clock() < deadline:
         valid()
         try:
-            with open_url(broker + "/health", timeout=8) as response:
+            request = urllib.request.Request(
+                broker + "/health", headers={"User-Agent": USER_AGENT}
+            )
+            with open_url(request, timeout=8) as response:
                 health = json.load(response)
             if (
                 health.get("service") != "mpv-anilist-login"
@@ -308,6 +318,10 @@ def wake_exchange(
             ):
                 raise AccountError(
                     "The sign-in service is configured for a different AniList client."
+                )
+            if health.get("configured") is False:
+                raise AccountError(
+                    "The sign-in service is missing its AniList credential."
                 )
             return
         except urllib.error.HTTPError as exc:
@@ -339,10 +353,29 @@ def authorize(
         req = urllib.request.Request(
             broker + path,
             data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
         )
-        with urllib.request.build_opener(NoRedirect).open(req, timeout=10) as response:
-            return json.load(response)
+        try:
+            with urllib.request.build_opener(NoRedirect).open(
+                req, timeout=15
+            ) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            try:
+                message = json.loads(exc.read(2048)).get("error", "")
+            except (ValueError, OSError):
+                message = ""
+            if isinstance(message, str) and message.startswith(
+                ("AniList code exchange failed (HTTP ", "Sign-in failed at ")
+            ):
+                raise AccountError(message[:180]) from None
+            raise AccountError(
+                f"Sign-in service rejected {path[1:]} (HTTP {exc.code}). Reconnect in mpv."
+            ) from None
 
     def exchange(code, secret, remember):
         valid()
@@ -376,9 +409,7 @@ def authorize(
         query = urllib.parse.urlencode(params)
         url = "https://anilist.co/api/v2/oauth/authorize?" + query
         if broker:
-            progress(
-                "Starting the sign-in service. The first connection can take about a minute."
-            )
+            progress("Connecting to AniList sign-in…")
             wake_exchange(
                 broker, client_id, valid, urllib.request.build_opener(NoRedirect).open
             )
@@ -424,9 +455,9 @@ class Vault:
         except (ImportError, RuntimeError):
             pass
 
-    def write(self, key, value):
+    def write(self, key, value, remember=True):
         self.session[key] = value
-        if self.keyring:
+        if self.keyring and remember:
             try:
                 self.keyring.set_password("mpv-rich-presence", key, value)
                 return True

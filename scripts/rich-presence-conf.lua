@@ -41,7 +41,8 @@ local base = mp.command_native({"expand-path", "~~home/"})
 local database = utils.join_path(base, "rich-presence/data.sqlite3")
 local modules = utils.join_path(base, "script-modules/mpv-rich-presence")
 local function panel(req)
-    mp.commandv("script-message-to","rich_presence","panel",utils.format_json(req))
+    local encoded = utils.format_json(req)
+    if encoded then mp.commandv("script-message-to","rich_presence","panel",encoded) end
 end
 
 function pong()
@@ -68,11 +69,19 @@ pong()
 local worker
 mp.register_script_message("start-service", function(instance)
     if worker then return end
-    local args = {options.python, "-I", utils.join_path(modules,"backend.py"), database, instance}
+    -- These settings are public. Tokens and provider keys never pass through argv.
+    -- mpv does not reliably feed subprocess stdin on Windows.
+    local settings = utils.format_json({broker=options.anilist_exchange_url,
+        personal=options.anilist_personal_client,client_id=options.anilist_client_id})
+    local args = {options.python, "-I", utils.join_path(modules,"backend.py"), database, instance, settings}
     worker = mp.command_native_async({name="subprocess",args=args,playback_only=false,
-        stdin_data=utils.format_json({broker=options.anilist_exchange_url,personal=options.anilist_personal_client,client_id=options.anilist_client_id}),capture_stderr=true}, function(_,result)
+        capture_stderr=true}, function(_,result)
         worker=nil
-        if not result or result.status~=0 then mp.msg.warn("Account helper unavailable. Check the Python setting.") end
+        if not result or result.status~=0 then
+            local failure = result and (result.stderr or ""):match("([%a]+Error):")
+            mp.msg.warn("Account helper unavailable ("..tostring(result and result.status or "launch failed")..
+                (failure and ", "..failure or "").."). Check the Python setting.")
+        end
     end)
 end)
 mp.register_event("shutdown",function() if worker then mp.abort_async_command(worker) end end)
