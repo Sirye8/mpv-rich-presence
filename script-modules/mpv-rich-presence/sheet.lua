@@ -19,8 +19,23 @@ end
 return function(model)
     local ui = {open=false, page="Menu", memory={}, stack={}, hits={}}
     local overlay, timer, keys, editing, down = nil, nil, {}, false, nil
+    local last_frame
     local toast_timer
     local scale = 1
+    local function dimensions()
+        local w,h = mp.get_osd_size()
+        if not w or w<=0 or not h or h<=0 then return end
+        local factor = math.max(0.55, math.min(h/720, w/440, 2.5)) * (model.scale or 1)
+        return w/factor,h/factor,factor
+    end
+    function ui.text_columns(size)
+        local w = dimensions()
+        if not w then return 72 end
+        local wide = w>=900
+        local left = math.max(8,w-(wide and 824 or 512))
+        local pane = left+(wide and 216 or 0)
+        return math.max(3,math.floor((w-12-pane-40)/((size or 17)*0.58)))
+    end
     local function unbind()
         for _, id in ipairs(keys) do mp.remove_key_binding(id) end
         keys = {}
@@ -35,6 +50,7 @@ return function(model)
         if toast_timer then toast_timer:kill(); toast_timer=nil end
         if timer then timer:kill(); timer=nil end
         if overlay then overlay:remove(); overlay=nil end
+        last_frame=nil
         mp.unobserve_property(ui.draw)
         unbind()
         ui.stack, ui.hits, down = {}, {}, nil
@@ -55,17 +71,20 @@ return function(model)
         local rows = model.rows(ui.page)
         local mem = ui.memory[ui.page] or {focus=1, top=1}
         ui.memory[ui.page] = mem
+        if mem.id then
+            for i,row in ipairs(rows) do if row.id==mem.id then mem.focus=i; break end end
+        end
         mem.focus = math.max(1,math.min(#rows,mem.focus))
-        local w,h = mp.get_osd_size()
-        if not w or w<=0 or h<=0 then
+        mem.id=rows[mem.focus] and rows[mem.focus].id
+        local w,h,factor = dimensions()
+        if not w then
             local lines={ui.page}
             for i,row in ipairs(rows) do lines[#lines+1] = (i==mem.focus and "> " or "  ") .. row.label end
             mp.set_property("term-status-msg",table.concat(lines,"\n"))
             ui.terminal = true
             return
         end
-        scale = math.max(0.55, math.min(h/720, w/440, 2.5)) * (model.scale or 1)
-        w,h = w/scale,h/scale
+        scale = factor
         overlay.res_x,overlay.res_y = math.floor(w),math.floor(h)
         local wide = w >= 900
         local left = math.max(8,w-(wide and 824 or 512))
@@ -93,7 +112,10 @@ return function(model)
                 local y=top+64+(i-1)*44
                 if page==ui.page then box(left+8,y,pane-8,y+40,theme.focus) end
                 label(left+16,y+10,page,16,theme.text,188)
-                hit(left+8,y,pane-8,y+40,"nav"..i,function() ui.stack={"Menu"}; ui.page=page; ui.draw() end)
+                hit(left+8,y,pane-8,y+40,"nav"..i,function()
+                    if model.leaving then model.leaving(ui.page) end
+                    ui.stack={"Menu"}; ui.page=page; model.refresh(); ui.draw()
+                end)
             end
         end
         label(pane+16,top+14,ui.page,22,theme.text,right-pane-32)
@@ -107,8 +129,14 @@ return function(model)
             if down==i or row.primary then color=theme.primary end
             box(pane+8,y,right-8,y+40,color)
             label(pane+20,y+9,row.label,17,(row.primary or down==i) and theme.surface or
-                (row.disabled and theme.muted or theme.text),right-pane-40)
-            hit(pane+8,y,right-8,y+40,i,row.run)
+                (row.disabled and theme.muted or theme.text),right-pane-(row.toggle~=nil and 104 or 40))
+            if row.toggle~=nil then
+                local sx=right-76
+                box(sx,y+8,sx+52,y+32,row.toggle and theme.primary or theme.line,12)
+                local knob=sx+(row.toggle and 30 or 4)
+                box(knob,y+12,knob+18,y+28,row.toggle and theme.surface or theme.muted,8)
+            end
+            hit(pane+8,y,right-8,y+40,i,not row.disabled and row.run or nil)
         end
         if ui.page=="Appearance" then
             local mid=(pane+right)/2
@@ -125,10 +153,12 @@ return function(model)
         label(pane+20,bottom-39,ui.page=="Menu" and "Close" or "Back",16,theme.primary,right-pane-40)
         hit(pane+8,bottom-48,right-8,bottom-8,"back",ui.back)
         end
-        overlay.data=ass.text; overlay:update()
+        local frame=tostring(overlay.res_x)..":"..tostring(overlay.res_y)..ass.text
+        if frame~=last_frame then overlay.data=ass.text; overlay:update(); last_frame=frame end
     end
     local function focus(delta)
         local m=ui.memory[ui.page]
+        m.id=nil
         m.focus=m.focus+delta
         ui.draw()
     end
@@ -144,7 +174,7 @@ return function(model)
         x,y=x/scale,y/scale
         for _,r in ipairs(ui.hits) do
             if x>=r.x and x<r.r and y>=r.y and y<r.b then
-                if type(r.id)=="number" then ui.memory[ui.page].focus=r.id end
+                if type(r.id)=="number" then ui.memory[ui.page].focus=r.id; ui.memory[ui.page].id=nil end
                 if event=="down" then down=r.id end
                 if event=="up" and down==r.id and r.fn then down=nil; r.fn() end
                 ui.draw(); break
@@ -164,7 +194,7 @@ return function(model)
     end
     function ui.text(prompt, value, done)
         if not ok_input then model.notice("Text input unavailable. Use the script-message command."); return end
-        editing=true; unbind(); overlay:remove()
+        editing=true; unbind(); overlay:remove(); last_frame=nil
         input.get({prompt=prompt,default_text=value or "",submit=function(s) done(s) end,
             closed=function() editing=false; if ui.open then controls(); ui.draw() end end})
     end

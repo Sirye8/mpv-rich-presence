@@ -26,12 +26,18 @@ namespace mpvrp
             for (auto& [key,value] : fields.items())
             {
                 const auto token = "{" + key + "}";
-                auto offset = part.find(token);
-                if (offset == std::string::npos) continue;
                 const auto& text = value.get_ref<const std::string&>();
-                if (text.empty()) { missing = true; break; }
-                part.replace(offset,token.size(),text);
+                size_t offset = 0;
+                while ((offset = part.find(token, offset)) != std::string::npos)
+                {
+                    if (text.empty()) { missing = true; break; }
+                    part.replace(offset,token.size(),text);
+                    offset += text.size();
+                }
+                if (missing) break;
             }
+            const auto first = part.find_first_not_of(" \t\r\n");
+            part = first == std::string::npos ? "" : part.substr(first,part.find_last_not_of(" \t\r\n")-first+1);
             if (!missing && !part.empty())
             {
                 if (!result.empty()) result += " · ";
@@ -45,7 +51,12 @@ namespace mpvrp
     {
         json options = settings;
         auto layout = m.anime ? "anime_layout" : m.provider.value("kind",m.video ? std::string("video") : std::string("audio")) + "_layout";
-        if (settings.contains(layout) && settings.at(layout).is_object()) options.merge_patch(settings.at(layout));
+        if (settings.contains(layout) && settings.at(layout).is_object())
+        {
+            const auto& specific = settings.at(layout);
+            if (specific.contains("preset")) options = json::object();
+            options.merge_patch(specific);
+        }
         const auto preset = options.value("preset", std::string("original"));
         const bool generic = preset == "private";
         const bool clean = preset == "clean";
@@ -104,6 +115,16 @@ namespace mpvrp
             {
                 name = details = m.provider.value("name", song);
                 state = m.provider.value("numbering", std::string{});
+                if (m.provider.value("kind",std::string{}) == "stream")
+                {
+                    details = m.provider.value("stream_title", m.title);
+                    if (m.provider.value("live",false)) state = "Live";
+                }
+                if (m.provider.value("kind",std::string{}) == "recording" && preset == "detailed")
+                {
+                    details = m.artist;
+                    state = m.album;
+                }
                 if (state.empty() && preset == "detailed")
                 {
                     state = m.provider.value("year",std::string{});

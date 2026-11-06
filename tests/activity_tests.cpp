@@ -3,6 +3,7 @@
 #include "mpv_rich_presence/publish_activity.hpp"
 #include <fstream>
 #include <iostream>
+#include "mpv_rich_presence/string_utils.hpp"
 
 using namespace mpvrp;
 using nlohmann::json;
@@ -11,7 +12,7 @@ int main(int argc, char** argv)
 {
     if (argc != 3) return 1;
     auto expected = json::parse(std::ifstream(argv[2]));
-    boost::dll::shared_library sdk(argv[1]);
+    boost::dll::shared_library sdk{std::string(argv[1])};
     auto& take_calls = sdk.get<const char*()>("take_calls");
     rich_presence_state state;
     state.discord_api = std::make_shared<discord_api_importer>(sdk);
@@ -55,4 +56,34 @@ int main(int argc, char** argv)
             }
         }
     }
+    playback music;
+    music.video=false;
+    music.title="Track";
+    music.artist="Artist";
+    auto repeated = format_activity(music, {{"headline"," {title} / {title} | {album} "}});
+    if (repeated.at("name") != "Track / Track") return 1;
+    auto layout = format_activity(music, {{"headline","Old override"},{"audio_layout",{{"preset","clean"}}}});
+    if (layout.at("name") == "Old override") return 1;
+
+    const auto directory = std::filesystem::temp_directory_path() /
+        ("mpvrp-store-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto database = directory / std::filesystem::u8path("日本語.sqlite3");
+    {
+        profile_store store(database);
+        store.put("appearance","global",{{"audio_layout",{{"headline","Old"},{"preset","original"}}}});
+        store.save("appearance","global",{{"audio_layout",{{"preset","clean"}}}});
+        if (store.get("appearance","global").at("audio_layout").contains("headline")) return 1;
+        store.put("appearance","folder:/media",{{"audio_layout",{{"preset","detailed"}}}});
+        store.put("appearance","file:/media/track.flac",{{"group",false}});
+        auto effective = store.effective("appearance","/media/track.flac");
+        if (effective.at("audio_layout").at("preset") != "detailed" || effective.at("group") != false) return 1;
+        store.put("exclude","folder:/",{{"blocked",true}});
+        if (!store.blocked("/media/track.flac")) return 1;
+        store.clear("exclude","folder:/");
+        store.put("exclude","folder:/media",{{"blocked",true}});
+        if (store.blocked("/media-other/track.flac")) return 1;
+        if (path_utf8(database).find("日本語") == std::string::npos) return 1;
+    }
+    std::filesystem::remove(database);
+    std::filesystem::remove(directory);
 }

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -36,3 +37,4 @@ std::vector<std::string> parse_folder_list(const std::string& raw);
 std::string format_time_duration(double pos_s, double total_s);
 
 bool passes_folder_filter(const std::string& file_path, const std::string& mode, const std::vector<std::string>& folders);
+std::string path_utf8(const std::filesystem::path& path);
