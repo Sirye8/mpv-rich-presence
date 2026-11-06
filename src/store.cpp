@@ -72,7 +72,7 @@ namespace mpvrp
     void profile_store::close_window(const std::string& owner)
     {
         execute(db, "DELETE FROM records WHERE (category='pin' AND json_extract(value,'$.owner')=?) OR "
-                    "(category IN ('player','response','auto','cancel') AND scope=?) OR "
+                    "(category IN ('player','response','auto','cancel','refresh') AND scope=?) OR "
                     "(category='job' AND json_extract(value,'$.window')=?) OR "
                     "(category='account' AND json_extract(value,'$.persistent')=0 AND json_extract(value,'$.window')=?)",
                     {owner,owner,owner,owner});
@@ -88,12 +88,16 @@ namespace mpvrp
     json profile_store::records() const
     {
         auto result = json::array();
-        auto stmt = prepare(db, "SELECT category,scope FROM records WHERE category IN ('appearance','exclude','privacy','match','tracking','sources','provider','cache') "
-                                "OR (category IN ('watch','pending','history') AND substr(scope,1,instr(scope,'/')-1)= "
+        auto stmt = prepare(db, "SELECT category,scope,value FROM records WHERE category IN ('appearance','exclude','privacy','match','tracking','sources','provider','cache') "
+                                "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)= "
                                 "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT)) ORDER BY category,scope");
         int code;
         while ((code = sqlite3_step(stmt.get())) == SQLITE_ROW)
-            result.push_back({{"category",column(stmt.get(),0)},{"scope",column(stmt.get(),1)}});
+        {
+            auto row = json{{"category",column(stmt.get(),0)},{"scope",column(stmt.get(),1)}};
+            if (row.at("category") == "match") row["fields"] = json::parse(column(stmt.get(),2));
+            result.push_back(row);
+        }
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
         return result;
     }
@@ -101,7 +105,7 @@ namespace mpvrp
     bool profile_store::blocked(const std::string& path) const
     {
         auto stmt = prepare(db, "SELECT 1 FROM records WHERE category='exclude' AND json_extract(value,'$.blocked')=1 "
-                       "AND (scope='global' OR scope='file:'||? OR (substr(scope,1,7)='folder:' AND instr(?,substr(scope,8)||'/')=1)) LIMIT 1",
+                       "AND (scope='global' OR scope='file:'||? OR (substr(scope,1,7)='folder:' AND instr(?,rtrim(substr(scope,8),'/')||'/')=1)) LIMIT 1",
                        {path,path});
         int code = sqlite3_step(stmt.get());
         if (code == SQLITE_ROW) return true;
@@ -109,9 +113,29 @@ namespace mpvrp
         throw std::runtime_error(sqlite3_errmsg(db));
     }
 
-    json profile_store::effective(const std::string& category, const std::string& path) const
+    json profile_store::pending() const
+    {
+        auto rows = json::array();
+        auto stmt = prepare(db, "SELECT scope,value FROM records WHERE category='pending' AND "
+            "json_extract(value,'$.account')=(SELECT json_extract(value,'$.generation') FROM records "
+            "WHERE category='account' AND scope='current') ORDER BY rowid");
+        int code;
+        while ((code = sqlite3_step(stmt.get())) == SQLITE_ROW)
+        {
+            auto proposal = json::parse(column(stmt.get(),1));
+            auto base = proposal.value("base",json::object());
+            rows.push_back({{"key",column(stmt.get(),0)},{"title",proposal.value("title",std::string{})},
+                {"media",proposal.value("media",base.value("media",0))},{"episode",proposal.at("episode")},
+                {"before",proposal.value("before",0)},{"offline",proposal.value("offline",false)}});
+        }
+        if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
+        return rows;
+    }
+
+    json profile_store::effective(const std::string& category, const std::string& path, std::string* winning_scope) const
     {
         auto result = json::object();
+        if (winning_scope) *winning_scope = "configuration";
         auto stmt = prepare(db, "SELECT scope,value FROM records WHERE category=? ORDER BY "
                                 "CASE WHEN scope='global' THEN 0 WHEN scope LIKE 'folder:%' THEN 1 ELSE 2 END,length(scope)", {category});
         int code;
@@ -119,10 +143,15 @@ namespace mpvrp
         {
             auto scope = column(stmt.get(),0);
             if (scope == "global" || (!path.empty() && (scope == "file:" + path ||
-                (scope.starts_with("folder:") && path.starts_with(scope.substr(7) + "/")))))
+                (scope.starts_with("folder:") && path.starts_with(scope.back()=='/' ? scope.substr(7) : scope.substr(7) + "/")))))
             {
+                if (winning_scope) *winning_scope = scope == "global" ? "global" :
+                    scope.starts_with("file:") ? "file override" : "folder profile";
                 auto patch = json::parse(column(stmt.get(),1));
                 if (category == "appearance" && patch.contains("preset")) result = json::object();
+                if (category == "appearance")
+                    for (const auto& [key, value] : patch.items())
+                        if (key.ends_with("_layout") && value.is_object() && value.contains("preset")) result.erase(key);
                 result.merge_patch(patch);
             }
         }
@@ -147,8 +176,17 @@ namespace mpvrp
 
     void profile_store::save(const std::string& category, const std::string& scope, const json& patch)
     {
-        execute(db, "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) DO UPDATE "
-                    "SET value=json_patch(value,excluded.value)", {category,scope,patch.dump()});
+        std::string base = "value";
+        if (category == "appearance")
+        {
+            for (const auto* key : {"anime_layout","audio_layout","video_layout","movie_layout",
+                                    "tv_layout","recording_layout","stream_layout"})
+                if (patch.contains(key) && patch.at(key).is_object() && patch.at(key).contains("preset"))
+                    base = "json_remove(" + base + ",'$." + key + "')";
+        }
+        const auto sql = "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) DO UPDATE "
+                        "SET value=json_patch(" + base + ",excluded.value)";
+        execute(db, sql.c_str(), {category,scope,patch.dump()});
     }
 
     void profile_store::clear(const std::string& category, const std::string& scope)

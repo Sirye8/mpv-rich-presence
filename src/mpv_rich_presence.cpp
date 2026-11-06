@@ -343,7 +343,7 @@ static parsed_filename_info parse_anime_filename(const std::string& raw_filename
 
 static bool sharing_hidden(const rich_presence_state& state)
 {
-    return state.hidden_file || chrono::steady_clock::now() < state.hide_until
+    return state.hidden_file || state.hidden_until_exit || chrono::steady_clock::now() < state.hide_until
         || state.privacy.value("mode", std::string("full")) == "hidden";
 }
 
@@ -374,10 +374,10 @@ static void read_profiles(rich_presence_state& state)
         state.store_version = state.store->version();
         state.privacy = state.store->effective("privacy", state.scope_path);
         state.hard_block = state.store->blocked(state.scope_path);
-        state.appearance = state.store->effective("appearance", state.scope_path);
-        state.correction = state.store->effective("match", state.scope_path);
+        state.appearance = state.store->effective("appearance", state.scope_path, &state.appearance_scope);
+        state.correction = state.store->effective("match", state.scope_path, &state.match_scope);
         state.provider = state.store->effective("provider", state.scope_path);
-        state.sources = state.store->effective("sources", state.scope_path);
+        state.sources = state.store->effective("sources", state.scope_path, &state.source_scope);
         state.tracking = state.store->effective("tracking", state.scope_path);
     }
     if (!state.appearance.contains("preset")) state.appearance["preset"] = state.config_preset;
@@ -924,7 +924,7 @@ static void on_eligibility_changed(rich_presence_state& state)
             if (needs_lookup)
             {
                 int current_load_id = ++state.file_load_id;
-                std::string filename_str = fs::path(state.current_file_path).filename().string();
+                std::string filename_str = path_utf8(fs::u8path(state.current_file_path).filename());
                 {
                     std::lock_guard<std::mutex> lock(state.worker_mutex);
                     state.pending_load_id = current_load_id;
@@ -1046,6 +1046,13 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             }
             else if (action == "hide_file") state.hidden_file = !state.hidden_file;
             else if (action == "hide_hour") state.hide_until = chrono::steady_clock::now() + chrono::hours(1);
+            else if (action == "hide_until_exit") state.hidden_until_exit = req.at("enabled").get<bool>();
+            else if (action == "hide_minutes")
+            {
+                auto minutes = req.at("minutes").get<int>();
+                if (minutes < 0 || minutes > 1440) return;
+                state.hide_until = chrono::steady_clock::now() + chrono::minutes(minutes);
+            }
             else if ((action == "pin" || action == "unpin") && state.store)
             {
                 if (action == "pin" && local_permission(state))
@@ -1065,6 +1072,11 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             {
                 if (!lookup_allowed(state)) return;
                 clear_anilist_cache();
+                if (state.store)
+                {
+                    state.store->clear("auto",state.instance_id);
+                    state.store->put("refresh",state.instance_id,{{"id",generate_instance_id()}});
+                }
             }
             else if ((action == "apply" || action == "clear") && state.store)
             {
@@ -1073,7 +1085,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 auto scope = req.value("scope", std::string("global"));
                 if (scope == "file" && !state.scope_path.empty()) scope = "file:" + state.scope_path;
                 else if (scope == "folder" && !state.scope_path.empty())
-                    scope = "folder:" + fs::path(state.scope_path).parent_path().generic_string();
+                    scope = "folder:" + path_utf8(fs::u8path(state.scope_path).parent_path());
                 else if (scope != "global") return;
                 if (action == "clear")
                 {
@@ -1245,7 +1257,7 @@ static void handle_file_loaded(rich_presence_state& state)
     std::string filename_str = get_mpv_string(state.mpv, "filename");
     if (filename_str.empty() && !state.current_file_path.empty())
     {
-        filename_str = fs::path(state.current_file_path).filename().string();
+        filename_str = path_utf8(fs::u8path(state.current_file_path).filename());
     }
 
     // Bump file ID and reset anime state
@@ -1720,7 +1732,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             nlohmann::json sample = {{"session",state.file_session},{"media",media.anilist_id},{"episode",media.episode},
                 {"safe_episode",state.safe_episode.load()},{"total",media.total},{"pos",media.position},{"seek",last_seek},
                 {"scope_path",state.scope_path},{"path",allowed ? state.scope_path : ""},{"speed",media.speed},{"active",advancing},
-                {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now}};
+                {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
+                {"match_title",media.anime_title}};
             sample["source"] = source;
             if (extra)
             {
@@ -1728,6 +1741,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 sample["artist"] = media.artist;
                 sample["album"] = media.album;
                 sample["video"] = media.video;
+                double duration_s = 0;
+                mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
+                sample["duration"] = duration_s;
                 sample["recording"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_TRACKID");
                 sample["release"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_ALBUMID");
                 sample["tmdb"] = get_mpv_string(state.mpv,"metadata/by-key/TMDB");
@@ -1736,6 +1752,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     static const std::regex page(R"(^https://(?:www\.)?(?:youtube\.com/watch\?v=[A-Za-z0-9_-]{11}|youtu\.be/[A-Za-z0-9_-]{11}|twitch\.tv/[A-Za-z0-9_]+)$)");
                     if (std::regex_match(state.current_file_path,page)) sample["page"] = state.current_file_path;
                     sample["channel"] = media.channel;
+                    sample["live"] = duration_s <= 0;
                 }
             }
             state.store->put("player",state.instance_id,sample);
@@ -1770,17 +1787,25 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (state.privacy.value("mode", std::string("full")) == "generic") options = {{"preset", "private"}};
         if (!state.snapshot_request.empty())
         {
-            auto draft = state.replace_draft && state.panel_page=="Appearance" ? nlohmann::json::object() : options;
+            auto draft = state.replace_draft && state.privacy.value("mode",std::string("full")) != "generic" ? nlohmann::json::object() : options;
             if (valid_settings("appearance",state.preview) && state.privacy.value("mode", std::string("full")) != "generic")
+            {
+                for (const auto& [key,value] : state.preview.items())
+                    if (key.ends_with("_layout") && value.is_object() && value.contains("preset")) draft.erase(key);
                 draft.merge_patch(state.preview);
+            }
             auto snapshot = nlohmann::json{
                 {"session", state.file_session}, {"instance", state.instance_id}, {"allowed", lookup_allowed(state)},
                 {"configured", state.config_received}, {"owner", eligible && currently_active},{"pinned",state.pinned_here},{"pinned_elsewhere",state.pinned_elsewhere}, {"sdk", state.last_sdk},
                 {"match", media.anilist_id}, {"episode", media.episode}, {"total", media.total}, {"title", media.anime_title},
                 {"appearance", state.appearance}, {"privacy", state.privacy}, {"tracking", state.tracking},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
+                {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"appearance_scope",state.appearance_scope},
+                {"match_scope",state.match_scope},{"source_scope",state.source_scope},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",state.store ? state.store->get("account","current") : nlohmann::json::object()},
+                {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?
+                    state.store->pending() : nlohmann::json::array()},
                 {"sources",state.sources},{"provider",media.provider.value("provider",std::string("local"))},
                 {"hard_block",state.hard_block},{"records", state.store && state.panel_page=="Saved data" ? state.store->records() : nlohmann::json::array()},
                 {"reason", !state.config_received ? "Waiting for configuration" : state.store_failed ? "Saved data unavailable" :

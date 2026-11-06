@@ -59,17 +59,24 @@ uint64_t compute_fnv1a64(const char* data, std::size_t len)
     return hash;
 }
 
+std::string path_utf8(const fs::path& path)
+{
+    auto utf8 = path.generic_u8string();
+    return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
+}
+
 std::string normalize_path(const std::string& path_str)
 {
     if (path_str.empty())
         return {};
 
     std::error_code ec;
-    fs::path p = fs::weakly_canonical(path_str, ec);
+    auto input = fs::u8path(path_str);
+    fs::path p = fs::weakly_canonical(input, ec);
     if (ec)
-        p = fs::path(path_str).lexically_normal();
+        p = input.lexically_normal();
 
-    std::string result = p.generic_string();
+    std::string result = path_utf8(p);
 
 #if defined(_WIN32) || defined(__CYGWIN__)
     result = to_lower(result);

@@ -12,6 +12,12 @@ import tempfile
 
 root = Path(sys.argv[1]).resolve()
 mpv = sys.argv[2]
+subprocess.run(
+    [mpv,"--no-config","--load-scripts=no","--idle=yes","--vo=null","--ao=null",
+     "--script="+str(Path(__file__).with_name("sheet_tests.lua").resolve())],
+    env=dict(os.environ,MPVRP_MODULES=str(root/"script-modules/mpv-rich-presence")),
+    timeout=12,check=True,
+)
 with tempfile.TemporaryDirectory() as directory:
     config = Path(directory) / "mpv"
     for part in ("scripts", "script-opts", "script-modules"):
@@ -37,7 +43,7 @@ with tempfile.TemporaryDirectory() as directory:
         )
         text = log.read_text(encoding="utf-8", errors="replace")
         if "stack traceback" in text or "Could not load the Rich Presence menu" in text:
-            raise RuntimeError("Packaged Lua module failed to load")
+            raise RuntimeError("Packaged Lua module failed to load:\n" + text[-12000:])
         if "Configuration complete received from bridge" not in text:
             raise RuntimeError("Configuration bridge failed")
         with sqlite3.connect(config / "rich-presence/data.sqlite3") as db:

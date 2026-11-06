@@ -22,7 +22,8 @@ namespace mpvrp
         nlohmann::json get(const std::string& category, const std::string& scope) const;
         void put(const std::string& category, const std::string& scope, const nlohmann::json& value);
         nlohmann::json records() const;
-        nlohmann::json effective(const std::string& category, const std::string& path) const;
+        nlohmann::json pending() const;
+        nlohmann::json effective(const std::string& category, const std::string& path, std::string* winning_scope = nullptr) const;
         void save(const std::string& category, const std::string& scope, const nlohmann::json& patch);
         void clear(const std::string& category, const std::string& scope);
     };
