@@ -8,6 +8,8 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
+import contextlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,11 +47,19 @@ class CallbackTests(unittest.TestCase):
                         origin + "/callback?code=x&state=test-state"
                     ) as response:
                         self.assertIn(b'type="password"', response.read())
+                    # The foreign-origin check rejects the request before reading
+                    # its body. An empty POST avoids a TCP reset on Windows when
+                    # the server closes a socket with unread data.
+                    payload = (
+                        b""
+                        if expected == 403
+                        else urllib.parse.urlencode(
+                            dict(state="test-state", secret=supplied)
+                        ).encode()
+                    )
                     req = urllib.request.Request(
                         origin + "/finish",
-                        data=urllib.parse.urlencode(
-                            dict(state="test-state", secret=supplied)
-                        ).encode(),
+                        data=payload,
                         headers=(
                             {
                                 "Origin": origin
@@ -204,6 +214,88 @@ class AccountTests(unittest.TestCase):
                 worker.expected = ("old", 1)
                 worker.reply(entry={"viewer": 1, "progress": 7})
                 self.assertNotIn("entry", worker.get("response", "left"))
+            finally:
+                worker.db.close()
+
+    def test_disconnect_history_is_account_scoped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                worker.put("player", "window", {"session": 1})
+                for forget in (False, True):
+                    worker.put("account", "current", {"id": 1, "generation": "test"})
+                    for category in (
+                        "watch",
+                        "history",
+                        "skipped",
+                        "entry",
+                        "cycle",
+                        "pending",
+                    ):
+                        for viewer in (1, 10):
+                            worker.put(category, f"{viewer}/2", {"saved": True})
+                    with patch.object(worker.vault, "forget"):
+                        worker.handle(
+                            {
+                                "op": "disconnect",
+                                "account": "test",
+                                "session": 1,
+                                "forget_history": forget,
+                            }
+                        )
+                    self.assertEqual(worker.get("account", "current"), {})
+                    for category in (
+                        "watch",
+                        "history",
+                        "skipped",
+                        "entry",
+                        "cycle",
+                        "pending",
+                    ):
+                        self.assertEqual(
+                            bool(worker.get(category, "1/2")),
+                            not forget and category != "pending",
+                        )
+                        self.assertEqual(worker.get(category, "10/2"), {"saved": True})
+            finally:
+                worker.db.close()
+
+    def test_disconnect_during_sample_does_not_restore_watch_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                worker.put("account", "current", {"id": 1, "generation": "test"})
+                sample = dict(
+                    session=1,
+                    media=2,
+                    episode="7",
+                    safe_episode=True,
+                    active=True,
+                    speed=1,
+                    seek=0,
+                    tracking={"mode": "manual"},
+                    wall=time.time() * 1000,
+                )
+                worker.put("player", "window", dict(sample, time=100, pos=100))
+                worker.sample(credit_only=True)
+                worker.put("player", "window", dict(sample, time=101, pos=101))
+                transaction = worker.transaction
+
+                @contextlib.contextmanager
+                def disconnect_first():
+                    worker.delete("account", "current")
+                    with transaction():
+                        yield
+
+                with patch.object(worker, "transaction", disconnect_first):
+                    worker.sample(credit_only=True)
+                self.assertEqual(worker.get("watch", "1/2/7/0"), {})
             finally:
                 worker.db.close()
 

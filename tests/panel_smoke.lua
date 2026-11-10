@@ -10,7 +10,8 @@ mp.register_event("file-loaded",function()
     mp.add_timeout(0.6,function()
         menu(pages[1])
         local timer
-        timer=mp.add_periodic_timer(0.3,function()
+        -- Software video output needs time to present the new overlay.
+        timer=mp.add_periodic_timer(1,function()
             step=step+1
             local ok=mp.command_native({"screenshot-to-file",root.."/"..step..".png","window"})
             if step<#pages then menu(pages[step+1])

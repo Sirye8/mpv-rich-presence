@@ -313,8 +313,23 @@ class Worker:
                 with self.transaction():
                     self.delete("account", "current")
                     self.db.execute(
-                        "DELETE FROM records WHERE category IN ('job','pending','response')"
+                        "DELETE FROM records WHERE category IN ('job','response')"
                     )
+                    if account.get("id"):
+                        categories = ["pending"]
+                        if job.get("forget_history"):
+                            categories += [
+                                "watch",
+                                "history",
+                                "skipped",
+                                "entry",
+                                "cycle",
+                            ]
+                        for category in categories:
+                            self.db.execute(
+                                "DELETE FROM records WHERE category=? AND scope LIKE ?",
+                                (category, str(account["id"]) + "/%"),
+                            )
                     if op == "reset":
                         self.db.execute("DELETE FROM records WHERE category!='player'")
                         self.put(
@@ -685,6 +700,7 @@ class Worker:
             )
 
     def sample(self, credit_only=False):
+        epoch = self.get("generation", "data")
         p = self.get("player", self.window)
         a = self.get("account", "current")
         self.expected = (a.get("generation"), p.get("session"))
@@ -721,6 +737,13 @@ class Worker:
             return
         key = self.cycle(a, p)
         with self.transaction():
+            if (
+                self.get("generation", "data") != epoch
+                or self.get("account", "current").get("generation") != a["generation"]
+                or self.get("player", self.window) != p
+            ):
+                self.previous = None
+                return
             watch = self.get("watch", key)
             if (
                 watch.get("owner") not in (None, self.window)

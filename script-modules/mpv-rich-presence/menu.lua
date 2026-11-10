@@ -232,7 +232,7 @@ return function(make_sheet, send, options)
             end
             if account.name then
                 row("Refresh list entry",function() service("read") end)
-                row("Disconnect",function() confirm("Disconnect "..account.name,function() service("disconnect") end) end)
+                row("Disconnect",function() ui.push("Disconnect account") end)
             end
             row((snap.title or "").."   Playing episode "..tostring(snap.episode or "?"))
             if answer.read_state=="loading" then row("Loading list entry…") end
@@ -277,6 +277,19 @@ return function(make_sheet, send, options)
                 row("Update episode "..p.episode,function() confirm("Apply "..p.before.." → "..p.episode,function() service("accept",{proposal=p.key}) end) end)
                 row("Later",ui.back); row("Skip this episode",function() service("skip",{proposal=p.key}) end)
             end
+        elseif page=="Disconnect account" then
+            if not account.name then row("Not signed in"); return list end
+            row("Disconnect "..(account.name or "current account"))
+            row("Keep local watch history",function()
+                confirm("Disconnect "..account.name.." and keep local counters and history. Queued updates are cancelled.",function()
+                    service("disconnect"); ui.back()
+                end)
+            end)
+            row("Forget local watch history",function()
+                confirm("Disconnect "..account.name.." and remove its local timers, skipped prompts, cached list entries and history. Your AniList list stays unchanged.",function()
+                    service("disconnect",{forget_history=true}); ui.back()
+                end)
+            end)
         elseif page=="Pending updates" then
             for _,item in ipairs(snap.pending or {}) do
                 local prop=item

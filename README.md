@@ -48,6 +48,8 @@ AniList remains the default for video. Optional sources include TMDB movies and 
 
 Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `rich-presence/data.sqlite3` under the mpv config directory.
 
+See [implementation and verification](docs/verification.md) for the test commands and remaining manual release checks.
+
 ## Screenshots
 
 ### Anime Detection & Cover Art (AniList)
