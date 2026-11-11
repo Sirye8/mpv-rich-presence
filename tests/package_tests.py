@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as directory:
     for part in ("scripts", "script-opts"):
         shutil.copytree(root / part, config / part)
     applied = False
-    for mode in ("cancel", "apply", "cancel"):
+    for mode in ("cancel", "apply", "cancel", "position", "inherit-position"):
         log = Path(directory) / "mpv.log"
         subprocess.run(
             [
@@ -58,6 +58,9 @@ with tempfile.TemporaryDirectory() as directory:
             row = db.execute(
                 "SELECT value FROM records WHERE category='appearance' AND scope='global'"
             ).fetchone()
+            position = db.execute(
+                "SELECT value FROM records WHERE category='panel' AND scope='global'"
+            ).fetchone()
         db.close()
         if mode == "apply":
             applied = True
@@ -67,4 +70,8 @@ with tempfile.TemporaryDirectory() as directory:
             )
         else:
             assert row is None, "Cancel persisted a preview"
-    print("Packaged menu startup, Cancel, Apply and restart passed.")
+        if mode == "position":
+            assert position and json.loads(position[0])["position"] == "bottom-right"
+        else:
+            assert position is None, "Panel position did not inherit its conf default"
+    print("Packaged menu startup, Cancel, Apply, restart and panel position passed.")

@@ -2,7 +2,9 @@
 -- Exercise the same temporary bindings that mpv dispatches for a keyboard.
 local mode=os.getenv("MPVRP_MENU_TEST")
 local actions={"menu","DOWN","DOWN","DOWN","ENTER"}
-if mode=="apply" then
+if mode=="position" or mode=="inherit-position" then
+    actions={"menu","DOWN","DOWN","DOWN","DOWN",mode=="position" and "LEFT" or "RIGHT"}
+elseif mode=="apply" then
     actions[#actions+1]="END"; actions[#actions+1]="UP"; actions[#actions+1]="ENTER"
 else actions[#actions+1]="ESC" end
 actions[#actions+1]="ESC"

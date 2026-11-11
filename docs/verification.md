@@ -17,7 +17,7 @@ The implementation follows the in-player interface and tracking guide based on [
 
 - `ctest --test-dir build -C Release --output-on-failure`: native regressions, account/tracking tests and Original SDK-call fixtures. Account tests cover two-process credit/write deduplication, stale responses, scoped deletion, disconnect races and sampling during a blocked account operation.
 - `node --test tests/cloudflare.test.mjs`: encrypted ticket handoff, verifier checks, expiry, the registered public callback, and credential isolation and route restrictions for the TMDB relay.
-- `python -B tests/package_tests.py <installed-package> <mpv-executable>`: installed Lua modules, stable focus, unchanged-frame suppression, text handoff, resized hit targets, cleanup, Cancel, Apply and restart.
+- `python -B tests/package_tests.py <installed-package> <mpv-executable>`: installed Lua modules, stable focus, scoped notices, tooltip options, animation cleanup, text handoff, panel positions, OSC margins, Cancel, Apply and restart.
 - `tests/panel_smoke.lua`: captures the seven panels from an isolated mpv install. Allow each page to reach the video output before taking its screenshot.
 - `python -B tests/live_signin.py <installed-package> <mpv-executable>`: interactive, read-only public sign-in. It verifies Viewer, checks session-only storage, closes mpv and deletes the disposable config. It never edits the list.
 - `python -B tests/live_anime_match.py <package-or-install> <mpv-executable> <ffmpeg-executable>`: verify that the season-two filename resolves to Youjo Senki II episode 8 and an AniList outage keeps movie and TV fallback disabled. The test generates its own footage and disables Discord sharing.

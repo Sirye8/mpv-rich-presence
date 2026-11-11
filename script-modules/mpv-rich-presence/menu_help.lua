@@ -7,25 +7,26 @@ local help = {
     ["Privacy & windows"]="Control sharing, lookups, tracking, and the active Discord window.",
     ["Saved data"]="Review saved settings, matches, cache entries, and local watch history.",
     ["Diagnostics"]="See the current provider, privacy rules, and recent Discord or AniList results.",
-    ["View outgoing card"]="Inspect the text, artwork, links, and timestamps sent to Discord.",
-    ["Correct match"]="Open recognition options for this file.",
+    ["View outgoing card"]="Open the read-only preview of the text, artwork and links Discord receives.",
+    ["Preview"]="Open the read-only card preview with your current Appearance draft.",
+    ["Correct match"]="Open recognition settings to change the source, title match or episode offset.",
     ["Hide this file"]="Hide Discord for this file. The separate tracking permission still applies.",
     ["Share this file"]="Remove the temporary hide for this file.",
     ["Use this window for Discord"]="Make this window the active Discord publisher.",
     ["View AniList progress"]="Open the list entry for the current anime.",
     ["AniList progress"]="Open the list entry for the current anime.",
-    ["Save for"]="Global applies everywhere. Folder includes its descendants. File applies only to the current file.",
+    ["Save for"]="Choose where this change is saved.",
     ["Media layout"]="Set the card for all media or just one media type.",
     ["Preset"]="Original preserves the old layout. Clean removes extra details. Detailed adds context. Private uses a generic card.",
     ["Title language"]="Choose the anime title language. Missing translations fall back to the original title.",
     ["Episode numbering"]="Show the season-relative number, the original filename number, or both.",
-    ["Timer"]="Progress shows playback timestamps. Remaining shows the end time. Session starts at file open. Off hides timestamps.",
+    ["Timer"]="Choose how Discord shows time. AniList watch time uses a separate counter.",
     ["Release group"]="Show or hide the release group on the anime episode line.",
     ["Episode"]="Show or hide the anime episode number.",
     ["Artwork"]="Show available cover art or a poster from the matched source.",
     ["Badge"]="Show the small playback status icon.",
     ["Tooltip"]="Show playback status when someone hovers over the Discord badge.",
-    ["AniList button"]="Show or hide the button linking to the matched provider entry.",
+    ["Provider button"]="Show or hide the default link to the matched entry on its metadata provider.",
     ["Details"]="Show or hide the first text line under the activity name.",
     ["State"]="Show or hide the second text line under the activity name.",
     ["Compact status"]="Choose the card field Discord uses for compact status.",
@@ -62,11 +63,11 @@ local help = {
     ["Episode offset"]="Add a whole number from -9999 to 9999 to the filename episode number.",
     ["Mark as non-anime"]="Skip AniList matching for this file or folder.",
     ["Refresh match"]="Run recognition again while keeping saved corrections.",
-    ["Discord"]="Full shares the full card. Generic shares a plain card. Hidden clears the card.",
-    ["Private session: stop sharing and tracking"]="Stop Discord sharing, lookups, and tracking for this session.",
+    ["Discord"]="Choose what this scope shares.",
+    ["Start private session"]="Stop Discord sharing, lookups, and tracking for this session.",
     ["End private session"]="Restore the usual file and folder privacy rules.",
-    ["Exclude this folder from sharing and tracking"]="Block sharing, recognition, and tracking in this folder.",
-    ["Hide Discord for a time"]="Enter 1 to 1440 whole minutes. Enter 0 to resume sharing now.",
+    ["Exclude this folder"]="Review blocking Discord, recognition, and tracking in this folder and its subfolders.",
+    ["Hide Discord for a time"]="Enter a whole number from 1 to 1440 minutes. Enter 0 to end the timed hide.",
     ["Hide Discord until this window closes"]="Hide this window's Discord presence until it closes.",
     ["End window hide"]="Restore the usual sharing rules for this window.",
     ["Pin this window for Discord"]="Keep this eligible window as the Discord publisher.",
@@ -88,20 +89,18 @@ local help = {
     ["Apply progress"]="Review the progress and status change before sending it to AniList.",
     ["Reset draft"]="Restore the saved episode count in the draft.",
     ["Mark current episode watched"]="Review setting your progress to the episode playing now.",
-    ["Tracking"]="Off stops tracking. Manual enables edits. Ask proposes updates. Auto can apply eligible next episodes.",
+    ["Tracking"]="Choose when to record watch time and how list updates are applied.",
     ["Resume unfinished time"]="Keep the watch counter when you come back to an unfinished episode.",
     ["Keep offline proposals"]="Keep pending proposals locally while the connection is unavailable.",
     ["Pending updates"]="Review episodes that reached the threshold and are waiting for a decision.",
     ["Rewatch tracking"]="Enable separate watch counters for episodes you watch again.",
     ["Start new viewing cycle"]="Start a separate local watch counter for this episode.",
-    ["Threshold"]="Enter 1 to 1440 whole minutes of eligible playback per episode.",
-    ["Eligible time"]="Time counted toward the threshold. Paused time and seeks do not count.",
+    ["Threshold"]="Edit the minimum watch time per episode for Ask and Auto. Enter a whole number from 1 to 1440 minutes.",
     ["Later"]="Keep the proposal pending and return to the previous page.",
     ["Skip this episode"]="Dismiss the proposal and suppress automatic credit for the episode.",
     ["Filter records"]="Enter part of a record category or scope to narrow the list.",
     ["Reset everything"]="Review a local reset of settings, cache, watch history, and account connection.",
-    ["Pinned AniList ID"]="Review removing this saved anime match at its exact scope.",
-    ["Non-anime flag"]="Review removing this saved non-anime override.",
+    ["Fingerprint this file"]="Search AcoustID using the current local audio file. Requires fpcalc and an AcoustID key.",
     ["Sharing"]="Why this window is sharing or hidden.",
     ["SDK"]="Latest result from the Discord SDK.",
     ["Configuration"]="Whether the plugin received its configuration from Lua.",
@@ -117,16 +116,121 @@ local help = {
     ["Account operation"]="Latest message from the account or recognition helper.",
 }
 
-return function(label, page, action)
-    local key=label:match("^(.-)   ") or label
-    if help[key] then return help[key] end
-    if key:match("^Search ") then return "Find provider matches for the current file and review the results." end
+local choices = {
+    ["Save for"]={global="Apply to all media.",folder="Apply to this folder and its subfolders.",file="Apply only to the current file."},
+    ["Media layout"]={all="Every media type.",anime="Matched anime.",audio="Unmatched audio.",video="Unmatched video.",
+        movie="Matched movies.",tv="Matched TV episodes or shows.",recording="Matched music.",stream="Matched streams."},
+    ["Preset"]={original="Use the v1.0.10 layout.",clean="Keep the card compact and omit the release group.",
+        detailed="Include more context where available.",private="Use a generic card."},
+    ["Title language"]={original="Use the original match title.",english="Prefer the English title.",
+        romaji="Prefer the Romanized title.",native="Prefer the native-script title."},
+    ["Episode numbering"]={relative="Use the matched season’s numbering.",original="Use the number from the filename.",
+        both="Show both when they differ."},
+    ["Timer"]={progress="Show playback progress.",remaining="Show the time left.",session="Show time since the file opened.",
+        off="Hide the Discord timer."},
+    ["Compact status"]={name="Use the activity name.",details="Use the first text line.",state="Use the second text line."},
+    ["Discord"]={full="Share the full card.",generic="Share a plain card without the media details.",
+        hidden="Hide this activity on Discord."},
+    ["Status on Apply"]={unchanged="Keep the saved status.",CURRENT="Mark as watching.",COMPLETED="Mark as completed.",
+        REPEATING="Mark as rewatching.",PAUSED="Mark as paused.",DROPPED="Mark as dropped.",PLANNING="Mark as planned."},
+    ["Tracking"]={off="Stop recording watch time.",manual="Record time. Apply list changes yourself.",
+        ask="Review updates at the threshold.",auto="Apply eligible next episodes at the threshold."},
+    ["Panel position"]={config="Use the position in rich-presence.conf.",
+        ["top-left"]="Upper left, the default.",["top-center"]="Centered at the top.",["top-right"]="Upper right.",
+        ["bottom-left"]="Lower left above playback controls.",["bottom-center"]="Centered above playback controls.",
+        ["bottom-right"]="Lower right above playback controls."},
+    ["Track while hidden"]={On="Allow tracking without Discord sharing.",Off="Require normal sharing permission."},
+    ["Resume unfinished time"]={On="Resume the saved counter.",Off="Start over when opening the episode."},
+    ["Keep offline proposals"]={On="Keep pending proposals locally.",Off="Wait for AniList before creating a proposal."},
+    ["Rewatch tracking"]={On="Allow starting a new viewing cycle.",Off="Use the existing viewing cycle."},
+    ["Release group"]={On="Show the release group on the episode line.",Off="Hide the release group."},
+    Episode={On="Show the anime episode number.",Off="Hide the episode number."},
+    Artwork={On="Show available cover art.",Off="Hide the large artwork."},
+    Badge={On="Show the playback status icon.",Off="Hide the status icon."},
+    Tooltip={On="Show status when hovering over the badge.",Off="Hide the badge’s hover text."},
+    ["Provider button"]={On="Show the default provider link.",Off="Hide the default provider link."},
+    Details={On="Show the first text line.",Off="Hide the first text line."},
+    State={On="Show the second text line.",Off="Hide the second text line."},
+    ["Episode titles"]={On="Show matched TV episode titles.",Off="Hide episode titles to avoid spoilers."},
+}
+
+local read_only = {
+    ["Card preview"]={
+        Activity="Activity type and name that Discord receives.",
+        Details="First text line under the activity name. Change it in Appearance.",
+        State="Second text line under the activity name. Change it in Appearance.",
+        Artwork="Image URL for the large artwork on the card.",
+        ["Artwork tooltip"]="Text Discord shows when someone hovers over the large artwork.",
+        Badge="Image URL for the small playback status badge.",
+        ["Badge tooltip"]="Text Discord shows when someone hovers over the badge.",
+        ["Compact status"]="Field selected for Discord’s compact status.",
+        ["Artwork link"]="Public link attached to the large artwork.",
+        ["Details link"]="Public link attached to the first text line.",
+        ["State link"]="Public link attached to the second text line.",
+        ["Public button"]="This label and URL are sent to Discord. The button can be changed in Appearance.",
+    },
+    ["Now playing"]={Sharing="Current Discord sharing status.",Activity="Activity type and name on the current card.",
+        Details="First text line on the current Discord card.",State="Second text line on the current Discord card."},
+    ["AniList"]={Account="Account connected in mpv.",Anime="Title of the matched anime.",
+        ["Playing episode"]="Season-relative episode number used for AniList.",
+        ["Episode watch time"]="Actual time spent in eligible playback in this viewing cycle. Pauses, buffering and seeks add no time. At 2×, a real minute still adds one minute.",
+        ["Watch started"]="Local clock time of the first credited playback interval in this viewing cycle. Older records may only have elapsed time.",
+        ["Last watched"]="Local clock time of the latest credited playback interval in this viewing cycle.",
+        Draft="Proposed episode count. Use the plus and minus controls to change it.",
+        ["List entry"]="Most recently confirmed AniList progress and status for this anime.",
+        ["List status"]="Whether mpv has a current AniList entry for this anime."},
+    ["Recognition & folders"]={["Source rule"]="Scope that supplied the active recognition choice.",
+        ["Open a local file to set its folder source"]="A local file must be open before you can assign a folder rule."},
+    Providers={AniList="Public anime metadata and artwork. Signing in is only needed for list features.",
+        TMDB="Movie and TV metadata uses the shared service or the optional tmdb_key in rich-presence.conf.",
+        TVmaze="TV metadata and aired episode order. Data is licensed under CC BY-SA.",
+        Wikidata="Public film titles and release dates.",MusicBrainz="Public music recording and release data.",
+        ["Cover Art Archive"]="Artwork for matched MusicBrainz releases.",
+        AcoustID="Optional audio fingerprinting. Set acoustid_key in rich-presence.conf and install fpcalc."},
+    ["Saved match"]={Scope="File, folder or global scope of this saved correction."},
+    ["Disconnect account"]={Account="The account that the selected action will disconnect from mpv."},
+    ["Pending updates"]={Proposal="Anime and episode covered by this local proposal.",
+        ["Waiting to refresh remote progress"]="Refresh the AniList entry before applying this proposal.",
+        ["Play this episode to apply its update"]="Open the matching episode so mpv can verify the proposal’s playback context.",
+        ["No pending updates"]="There are no saved proposals for the connected account."},
+    ["Search results"]={["Searching…"]="Waiting for the selected provider to return matches.",
+        ["No results"]="The provider returned no matches for this search."},
+}
+
+return function(label, page, action, values, current, key)
+    key=key or label:match("^(.-)   ") or label
+    if values then
+        local descriptions=choices[key]
+        local options={}
+        for _,value in ipairs(values) do
+            options[#options+1]={label=value,selected=value==current,
+                detail=descriptions and descriptions[value] or
+                    (value=="On" and (help[key] or "Enable this setting.") or "Leave this off.")}
+        end
+        return {options=options}
+    end
+    if not page then return help[key] end
+    if not action then
+        local fields=read_only[page] or {}
+        local description=fields[key]
+        if key=="Message" then description="Latest status message from mpv or the account helper."
+        elseif page=="Card preview" and key:match("^Public button %d+$") then description=fields["Public button"]
+        elseif page=="Pending updates" and key:match("^Proposal ") then description=fields.Proposal
+        elseif page=="Diagnostics" then description=help[key]
+        elseif page=="Confirm" then description="Review the proposed action before you confirm."
+        elseif page=="Providers" then description=description or "Provider attribution or setup information." end
+        local value=label:match("^.-   (.+)$")
+        if page=="AniList" and (key=="Watch started" or key=="Last watched") and value then
+            description=value..". "..description
+        end
+        return "Read only. "..(description or "Information for this page.")
+    end
+    if page=="Saved match" then return "Review removing this field from the saved correction. Other fields stay saved." end
+    if page=="Search results" then return "Review saving this provider match at the selected scope." end
     if key:match("^Clear ") then return "Review which local records in this category will be removed." end
+    if page=="Saved data" and not help[key] then return "Open this local record or review removing it at the displayed scope." end
+    if key:match("^Search ") then return "Enter a title to find matches from this provider." end
     if key:match("^Update episode ") or key:match("^Apply ") then return "Review the proposed change before sending it to AniList." end
-    if key:match("^Skip ") then return "Dismiss the proposal and suppress automatic credit for this episode." end
-    if page=="Search results" and action then return "Review using this match at the selected scope." end
-    if page=="Saved data" and action then return "Review removal of this record at the displayed scope." end
-    if page=="Card preview" then return "Value in the outgoing Discord card. "..label end
-    if page=="Confirm" then return "Review the action and scope before confirming." end
-    return label
+    if key:match("^Skip ") then return "Dismiss the proposal and suppress automatic updates for this episode." end
+    return help[key] or "Select to continue."
 end

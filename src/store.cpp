@@ -183,6 +183,18 @@ namespace mpvrp
         return json::object();
     }
 
+    json profile_store::episode_watch(int viewer, int media, const std::string& episode) const
+    {
+        const auto series = std::to_string(viewer) + "/" + std::to_string(media);
+        auto stmt = prepare(db, "SELECT value FROM records WHERE category='watch' AND scope=? || "
+                                "COALESCE((SELECT json_extract(value,'$.number') FROM records "
+                                "WHERE category='cycle' AND scope=?),0)", {series + "/" + episode + "/",series});
+        const int code = sqlite3_step(stmt.get());
+        if (code == SQLITE_ROW) return json::parse(column(stmt.get(), 0));
+        if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
+        return json::object();
+    }
+
     void profile_store::put(const std::string& category, const std::string& scope, const json& value)
     {
         execute(db, "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) DO UPDATE SET value=excluded.value",

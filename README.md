@@ -2,14 +2,14 @@
 
 Share what you are watching or listening to in mpv with Discord. The plugin runs on Windows and Linux and automatically looks up anime, movies, TV episodes, and tagged music. The included config supplies the Discord application ID.
 
-Press **Alt+p** to open the compact panel in the upper left. Hover over any setting for help. Set `menu_animations=no` for instant transitions or adjust `menu_scale` to change the panel size. The Original preset preserves the v1.0.10 layout. Changes in Appearance are private until you choose **Apply**.
+Press **Alt+p** to open the translucent panel. Hover over a setting to see what it does and what each choice means. **Appearance → Panel position** moves the panel immediately. Choose **Config** to use the position in the conf file, which defaults to the upper left. Set `menu_animations=no` for instant transitions or adjust `menu_scale` to change the panel size. Discord card edits are private until you choose **Apply**.
 
 ## In the player
 
 | Section | What you can do |
 | --- | --- |
 | Now playing | Check the outgoing card, see why sharing is hidden, correct a match or claim Discord for this window. |
-| AniList | Connect an account, refresh a list entry, adjust the progress draft or review an episode that qualified for an update. |
+| AniList | See actual episode watch time, connect an account, adjust progress or review an episode that qualified for an update. |
 | Appearance | Preview Original, Clean, Detailed or Private. Change title language, numbering, artwork, buttons and timers. Choose a file, folder or global scope. |
 | Recognition & folders | Search for a match, pin an AniList ID, adjust episode numbering or select another provider for a folder. |
 | Privacy & windows | Hide a file, hide Discord for an hour, block a folder, pin a player or start a private session. |
@@ -39,6 +39,8 @@ Windows uses Credential Manager. Linux can use the Python keyring package with S
 ### Watch time and list edits
 
 Tracking starts off. Manual mode lets you edit an entry without waiting. Ask and Automatic use a fixed threshold, initially 15 minutes of real playback. Watching at 2× earns the same time per minute as watching at 1×. Pauses, seeks, buffering and long observation gaps earn no extra time. Two windows share one watch record for an account and episode.
+
+The AniList panel shows the elapsed watch time and the local clock times of the first and latest credited playback in the current viewing cycle. Existing records retain their elapsed time. They show **Not recorded** for clock times the plugin did not save.
 
 The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Automatic changes require a suitable episode, a current list entry and the next consecutive progress value. Gaps and missing entries require review. A manual correction or skip suppresses a later automatic credit for that episode. Sampling runs independently of account and metadata requests, so a slow network response does not stop the eligible watch counter.
 

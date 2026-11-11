@@ -349,6 +349,38 @@ class RecognitionTests(unittest.TestCase):
 
 
 class AccountTests(unittest.TestCase):
+    def test_quiet_and_manual_list_refresh(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                worker.put("account", "current", {"id": 5, "generation": "test"})
+                worker.put(
+                    "player", "window", {"session": 7, "media": 18, "allowed": True}
+                )
+                job = {"op": "read", "account": "test", "session": 7, "media": 18}
+                worker.notice_page = "AniList"
+                with (
+                    patch.object(worker, "credential", return_value="test"),
+                    patch("backend.read_entry", return_value={"progress": 3}),
+                ):
+                    worker.handle(dict(job, quiet=True))
+                    response = worker.get("response", "window")
+                    self.assertEqual(response["entry"]["progress"], 3)
+                    self.assertNotIn("notice", response)
+                    worker.handle(job)
+                    response = worker.get("response", "window")
+                    self.assertEqual(response["message"], "Progress refreshed.")
+                    self.assertEqual(response["notice_page"], "AniList")
+                    worker.handle(job)
+                    self.assertNotEqual(
+                        worker.get("response", "window")["notice"], response["notice"]
+                    )
+            finally:
+                worker.db.close()
+
     def test_conflict_and_lost_response(self):
         row = dict(
             id=10,
@@ -575,6 +607,8 @@ class AccountTests(unittest.TestCase):
                     (4, 1262, True, 1),
                     (5, 1264, True, 1),
                 ]:
+                    if t == 2:
+                        a.put("history", "1/2/7/0", {"progress": 7})
                     for w in workers:
                         w.put(
                             "player",
@@ -597,7 +631,10 @@ class AccountTests(unittest.TestCase):
 
                         with patch("backend.time.time", return_value=now + t):
                             w.sample()
-                self.assertAlmostEqual(a.get("watch", "1/2/7/0")["elapsed"], 2)
+                watch = a.get("watch", "1/2/7/0")
+                self.assertAlmostEqual(watch["elapsed"], 2)
+                self.assertAlmostEqual(watch["first_watched"], now * 1000)
+                self.assertAlmostEqual(watch["last_watched"], (now + 5) * 1000)
             finally:
                 for w in workers:
                     w.db.close()

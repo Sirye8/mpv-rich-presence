@@ -94,6 +94,15 @@ int main(int argc, char** argv)
         if (store.blocked("/media-other/track.flac")) return 1;
         if (path_utf8(database).find("日本語") == std::string::npos) return 1;
         store.put("account","current",{{"persistent",false},{"id",7}});
+        store.put("watch","7/18/2/0",{{"elapsed",73.0}});
+        store.put("watch","8/18/2/0",{{"elapsed",12.0}});
+        if (store.episode_watch(7,18,"2").value("elapsed",0.0) != 73.0) return 1;
+        if (store.episode_watch(7,18,"3") != nlohmann::json::object()) return 1;
+        store.put("cycle","7/18",{{"number",1}});
+        if (!store.episode_watch(7,18,"2").empty()) return 1;
+        store.put("watch","7/18/2/1",{{"elapsed",10.0},{"first_watched",123000.0},{"last_watched",133000.0}});
+        if (store.episode_watch(7,18,"2").value("last_watched",0.0) != 133000.0) return 1;
+        if (store.episode_watch(8,18,"2").value("elapsed",0.0) != 12.0) return 1;
         store.put("player","old-window",{{"session",2}});
     }
     const auto relocated = directory / "scripts" / "mpv-rich-presence" / "data.sqlite3";

@@ -21,6 +21,7 @@ namespace mpvrp
         bool blocked(const std::string& path) const;
         int version() const;
         nlohmann::json get(const std::string& category, const std::string& scope) const;
+        nlohmann::json episode_watch(int viewer, int media, const std::string& episode) const;
         void put(const std::string& category, const std::string& scope, const nlohmann::json& value);
         nlohmann::json records() const;
         nlohmann::json pending() const;

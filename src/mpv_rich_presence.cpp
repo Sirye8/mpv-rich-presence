@@ -997,6 +997,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             else if (!val.is_boolean()) return false;
         }
         if (category == "sources" && !(key == "source" && valid_source(val))) return false;
+        if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
+            val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
         if (category == "match" && !((key == "id" && val.is_number_integer() && val > 0 && val <= INT32_MAX)
             || (key == "offset" && val.is_number_integer() && val >= -9999 && val <= 9999)
             || (key == "not_anime" && val.is_boolean()))) return false;
@@ -1115,6 +1117,13 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             else if ((action == "apply" || action == "clear") && state.store)
             {
                 const auto category = req.at("category").get<std::string>();
+                if (category == "panel")
+                {
+                    if (action == "clear") state.store->clear("panel","global");
+                    else if (const auto& values = req.at("values"); valid_settings(category,values))
+                        state.store->save("panel","global",values);
+                    return;
+                }
                 if (category != "appearance" && category != "match" && category != "privacy" && category != "exclude" && category != "sources" && category != "tracking") return;
                 auto scope = req.value("scope", std::string("global"));
                 if (scope == "file" && !state.scope_path.empty()) scope = "file:" + state.scope_path;
@@ -1639,12 +1648,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         media.now = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         media.session_start = state.session_start;
         int completed_anime_lookup;
+        bool safe_episode = false;
         {
             std::lock_guard lock(state.anime_mutex);
             completed_anime_lookup = state.completed_anime_lookup;
             media.anime = state.is_anime;
             if (media.anime)
             {
+                safe_episode = state.safe_episode;
                 media.anime_title = state.anime_title;
                 media.english = state.anime_english;
                 media.romaji = state.anime_romaji;
@@ -1720,12 +1731,18 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         {
             auto response = state.store->get("response",state.instance_id);
             auto message = response.value("notice",std::string{});
-            if (!message.empty() && message != state.last_notice && local_permission(state))
+            if (!message.empty() && message != state.last_notice)
             {
                 state.last_notice = message;
-                auto notice = response.value("message",std::string{});
-                const char* args[] = {"script-message-to","mpv_rich_presence","notice",notice.c_str(),nullptr};
-                mpv_command(state.mpv,args);
+                const auto page = response.value("notice_page",std::string{});
+                const auto context = response.find("context");
+                if ((context == response.end() || context->is_null() || *context == state.file_session)
+                    && (!page.empty() || local_permission(state)))
+                {
+                    const auto notice = response.value("message",std::string{});
+                    const char* args[] = {"script-message-to","mpv_rich_presence","notice",notice.c_str(),page.c_str(),nullptr};
+                    mpv_command(state.mpv,args);
+                }
             }
             auto epoch = state.store->get("generation","cache").value("id",std::string{});
             if (epoch != state.cache_epoch)
@@ -1775,7 +1792,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             next_sample = now_steady + chrono::seconds(1);
             auto seconds = chrono::duration<double>(now_steady.time_since_epoch()).count();
             nlohmann::json sample = {{"session",state.file_session},{"media",media.anilist_id},{"episode",media.episode},
-                {"safe_episode",state.safe_episode.load()},{"total",media.total},{"pos",media.position},{"seek",last_seek},
+                {"safe_episode",safe_episode},{"total",media.total},{"pos",media.position},{"seek",last_seek},
                 {"scope_path",state.scope_path},{"path",allowed ? state.scope_path : ""},{"speed",media.speed},{"active",advancing},
                 {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
                 {"match_title",media.anime_title}};
@@ -1841,6 +1858,18 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     if (key.ends_with("_layout") && value.is_object() && value.contains("preset")) draft.erase(key);
                 draft.merge_patch(state.preview);
             }
+            auto account = state.store ? state.store->get("account","current") : nlohmann::json::object();
+            auto episode_watch = nlohmann::json::object();
+            const int viewer = account.value("id",0);
+            if (state.store && state.panel_page=="AniList" && allowed && viewer>0 && safe_episode)
+            {
+                const auto record = state.store->episode_watch(viewer,media.anilist_id,media.episode);
+                if (state.tracking.value("resume",true) || record.value("session",uint64_t{})==state.file_session)
+                {
+                    episode_watch = {{"elapsed",record.value("elapsed",0.0)},
+                        {"first_watched",record.value("first_watched",0.0)}, {"last_watched",record.value("last_watched",0.0)}};
+                }
+            }
             auto snapshot = nlohmann::json{
                 {"session", state.file_session}, {"instance", state.instance_id}, {"allowed", lookup_allowed(state)},
                 {"configured", state.config_received}, {"owner", eligible && currently_active},{"pinned",state.pinned_here},{"pinned_elsewhere",state.pinned_elsewhere}, {"sdk", state.last_sdk},
@@ -1851,7 +1880,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
                 {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-")},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
-                {"account",state.store ? state.store->get("account","current") : nlohmann::json::object()},
+                {"account",std::move(account)},{"safe_episode",safe_episode},{"episode_watch",std::move(episode_watch)},
+                {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?
                     state.store->pending() : nlohmann::json::array()},
                 {"sources",state.sources},{"provider",media.anime ? "anilist" : media.provider.value("provider",std::string("local"))},

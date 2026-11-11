@@ -9,11 +9,24 @@ return function(make_sheet, send, options, help)
     local snap, draft, pending, scope = {}, {}, nil, "global"
     local layout, replace = "all", false
     local edit, edit_key, edit_base, list_status
-    local status, search = "", nil
+    local status, status_timer, search
     local filter=""
     local last_read
     local record
     local ui
+    local panel_positions={"config","top-left","top-center","top-right","bottom-left","bottom-center","bottom-right"}
+    local config_position="top-left"
+    for _,position in ipairs(panel_positions) do
+        if position~="config" and position==options.panel_position then config_position=position end
+    end
+    local function clock_time(ms)
+        return ms and ms>0 and os.date("%d %b, %H:%M:%S",math.floor(ms/1000)) or "Not recorded"
+    end
+    local function duration(seconds)
+        local n=math.floor(seconds)
+        if n<3600 then return string.format("%02d:%02d",math.floor(n/60),n%60) end
+        return string.format("%d:%02d:%02d",math.floor(n/3600),math.floor(n/60)%60,n%60)
+    end
     local function copy(t) local r={}; for k,v in pairs(t or {}) do r[k]=v end; return r end
     local function request(action,fields)
         local r=fields or {}; r.action=action; r.session=snap.session; send(r)
@@ -28,9 +41,23 @@ return function(make_sheet, send, options, help)
     local function service(op,args)
         args=args or {}; args.op=op
         args.account=(snap.account or {}).generation
+        args.notice_page=args.notice_page or ui.page
         request("service",{job=args})
     end
-    local function notice(s) status=s; if ui and ui.open then ui.draw() end end
+    local function clear_notice()
+        if status_timer then status_timer:kill(); status_timer=nil end
+        status=nil
+    end
+    local function notice(message,page)
+        if page and page~="" and page~=ui.page then return end
+        clear_notice()
+        status=message
+        status_timer=mp.add_timeout(3.5,function()
+            status,status_timer=nil,nil
+            ui.draw()
+        end)
+        ui.draw()
+    end
     local function confirm(label,fn)
         pending={label=label,run=fn,session=snap.session,account=(snap.account or {}).generation}
         ui.push("Confirm")
@@ -44,17 +71,23 @@ return function(make_sheet, send, options, help)
         local list={}
         local function row(label,fn,primary,adjust,id)
             list[#list+1]={label=label,run=fn,primary=primary,adjust=adjust,disabled=not fn,
-                id=id or label:match("^(.-)   ") or label,tip=help(label,page,fn~=nil)}
+                id=id or label:match("^(.-)   ") or label,tip=help(label,page,fn~=nil,nil,nil,id)}
             return list[#list]
         end
-        local function choice(label,values,current,fn)
+        local function choice(label,values,current,fn,display)
             local function step(dir)
                 local idx=1
                 for i,v in ipairs(values) do if v==current then idx=i; break end end
                 fn(values[1+(idx-1+dir)%#values])
             end
-            local item=row(label.."   "..tostring(current),function() step(1) end,false,step)
-            item.tip=item.tip.." Choices are "..table.concat(values,", ").."."
+            local item=row(label.."   "..(display or tostring(current)),function() step(1) end,false,step)
+            item.tip=help(label,page,true,values,current)
+        end
+        local function switch(label,v,fn)
+            local value=v and "On" or "Off"
+            local item=row(label.."   "..value,fn)
+            item.toggle=v
+            item.tip=help(label,page,true,{"On","Off"},value)
         end
         local function scope_row()
             choice("Save for",{"global","folder","file"},scope,function(v) scope=v end)
@@ -65,7 +98,7 @@ return function(make_sheet, send, options, help)
             if v==nil and layout~="all" then v=(opts[layout.."_layout"] or {})[key] end
             if v==nil then v=opts[key] end
             if v==nil then v=default end
-            row(label.."   "..(v and "On" or "Off"),function() draft[key]=not v; refresh() end).toggle=v
+            switch(label,v,function() draft[key]=not v; refresh() end)
         end
         local account=snap.account or {}
         local answer=snap.service or {}
@@ -80,24 +113,38 @@ return function(make_sheet, send, options, help)
             -- Keep the entire target visible, including long folder names and titles.
             local text=pending and pending.label or "Action expired"
             local width=ui.text_columns()
-            local line,units="",0
-            for ch in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-                local size=#ch>2 and 2 or 1
-                if units+size>width then row(line); line=""; units=0 end
-                line=line..ch; units=units+size
+            local line,units,index="",0,0
+            local function add_line()
+                index=index+1
+                row(line,nil,false,nil,"Confirmation "..index).plain=true
+                line,units="",0
             end
-            if line~="" then row(line) end
+            for word in text:gmatch("%S+") do
+                local length=0
+                for ch in word:gmatch("[%z\1-\127\194-\244][\128-\191]*") do length=length+(#ch>2 and 2 or 1) end
+                if units>0 and units+length+1>width then add_line() end
+                if units>0 then line=line.." "; units=units+1 end
+                if length<=width then line=line..word; units=units+length
+                else
+                    for ch in word:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+                        local size=#ch>2 and 2 or 1
+                        if units+size>width then add_line() end
+                        line=line..ch; units=units+size
+                    end
+                end
+            end
+            if line~="" then add_line() end
             row("Confirm",function()
                 local p=pending; pending=nil; ui.back()
                 if p and p.session==snap.session and p.account==account.generation then p.run() else notice("Context changed. Review the action again.") end
             end,true)
             row("Cancel",ui.back)
         elseif page=="Now playing" then
-            row(snap.reason or "Waiting for mpv")
-            row((card.type or "").."   "..(card.name or ""))
-            if card.details then row(card.details) end
-            if card.state then row(card.state) end
-            row("View outgoing card",function() draft={}; replace=false; ui.push("Card preview"); refresh() end)
+            row("Sharing   "..(snap.reason or "Waiting for mpv"))
+            row("Activity   "..(card.type or "").." "..(card.name or ""))
+            if card.details then row("Details   "..card.details) end
+            if card.state then row("State   "..card.state) end
+            row("View outgoing card",function() draft={}; replace=false; ui.push("Card preview") end)
             row("Correct match",function() pick("Recognition & folders") end)
             row(snap.hidden_file and "Share this file" or "Hide this file",function() request("hide_file"); refresh() end)
             row("Use this window for Discord",function() request("claim"); refresh() end)
@@ -109,13 +156,12 @@ return function(make_sheet, send, options, help)
                 {"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
                 if card[field[2]] then row(field[1].."   "..card[field[2]]) end
             end
-            for _,button in ipairs(card.buttons or {}) do row(button.label.."   "..button.url) end
-            for _,field in ipairs({"start","end"}) do
-                if card[field] then row(field.."   "..os.date("%X",math.floor(card[field]/1000))) end
+            for i,button in ipairs(card.buttons or {}) do
+                row(button.label.."   "..button.url,nil,false,nil,"Public button "..i)
             end
         elseif page=="Appearance" then
             local opts=copy(replace and {} or snap.appearance); for k,v in pairs(opts[layout.."_layout"] or {}) do opts[k]=v end; for k,v in pairs(draft) do opts[k]=v end
-            row("Preview   "..(card.name or "mpv").."   "..(card.state or card.details or ""),function() ui.push("Card preview"); refresh() end)
+            row("Preview   "..(card.name or "mpv").." · "..(card.state or card.details or ""),function() ui.push("Card preview") end)
             scope_row()
             choice("Media layout",{"all","anime","audio","video","movie","tv","recording","stream"},layout,function(v)
                 layout=v; draft={}; replace=false; refresh()
@@ -125,13 +171,19 @@ return function(make_sheet, send, options, help)
                     timer=v=="private" and "off" or "progress",episode=true,tooltip=true,state=true,details=true,language="original",numbering="relative"}
                 refresh()
             end)
+            local position=snap.panel_position
+            if not position or position=="" then position="config" end
+            choice("Panel position",panel_positions,position,function(v)
+                if v=="config" then request("clear",{category="panel",scope="global"}); refresh()
+                else apply("panel",{position=v},"global") end
+            end,position=="config" and "Config · "..config_position or nil)
             for _,item in ipairs({{"Title language","language",{"original","english","romaji","native"}},
                 {"Episode numbering","numbering",{"relative","original","both"}},{"Timer","timer",{"progress","remaining","session","off"}}}) do
                 local key=item[2]
                 choice(item[1],item[3],opts[key] or item[3][1],function(v) draft[key]=v; refresh() end)
             end
             for _,item in ipairs({{"Release group","group"},{"Episode","episode"},{"Artwork","art"},{"Badge","badge"},
-                {"Tooltip","tooltip"},{"AniList button","button"},{"Details","details"},{"State","state"}}) do
+                {"Tooltip","tooltip"},{"Provider button","button"},{"Details","details"},{"State","state"}}) do
                 toggle(item[1],item[2],item[2]~="group" or opts.preset~="clean")
             end
             choice("Compact status",{"name","details","state"},opts.compact or "name",function(v) draft.compact=v; refresh() end)
@@ -168,23 +220,31 @@ return function(make_sheet, send, options, help)
             row("Source rule   "..(snap.source_scope or "configuration"))
             row("Provider settings and credits",function() ui.push("Providers") end)
             row("AniList search",function() ui.text("Search anime","",function(q)
-                service("search",{provider="anilist",query=q}); search="anilist"; ui.push("Search results")
+                service("search",{provider="anilist",query=q,notice_page="Search results"}); search="anilist"; ui.push("Search results")
             end) end)
             row("Enter AniList ID or URL",function() ui.text("AniList ID or URL","",function(s)
                 local id=tonumber(s:match("^%d+$") or s:match("^https://anilist%.co/anime/(%d+)"))
                 if id then confirm("Use AniList "..id.." for "..scope,function() apply("match",{id=id,not_anime=false}) end) end
             end) end)
-            row("Episode offset   "..((snap.correction or {}).offset or 0),function()
-                ui.text("Episode offset","0",function(s) if tonumber(s) then apply("match",{offset=tonumber(s)}) end end)
+            local offset=(snap.correction or {}).offset or 0
+            row("Episode offset   "..offset,function()
+                ui.text("Episode offset",tostring(offset),function(s)
+                    local value=tonumber(s)
+                    if value and value==math.floor(value) and value>=-9999 and value<=9999 then apply("match",{offset=value})
+                    else notice("Enter a whole number from -9999 to 9999.") end
+                end)
             end)
             row("Mark as non-anime",function() confirm("Skip anime matching for "..scope,function() apply("match",{not_anime=true}) end) end)
             row("Refresh match",function() request("refresh_match"); refresh() end)
-            for _,provider in ipairs({"tmdb-movie","tmdb-tv","tvmaze","musicbrainz","acoustid"}) do
-                local id=provider
-                row("Search "..id,function() ui.text("Search "..id,"",function(q)
-                    service("search",{provider=id,query=q}); search=id; ui.push("Search results")
+            for _,provider in ipairs({{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},{"musicbrainz","MusicBrainz"}}) do
+                local id,name=provider[1],provider[2]
+                row("Search "..name,function() ui.text("Search "..name,"",function(q)
+                    service("search",{provider=id,query=q,notice_page="Search results"}); search=id; ui.push("Search results")
                 end) end)
             end
+            row("Fingerprint this file",function()
+                service("search",{provider="acoustid",notice_page="Search results"}); search="acoustid"; ui.push("Search results")
+            end)
         elseif page=="Choose source" then
             row("Inherit recognition source",function()
                 confirm("Remove the recognition override for "..scope,function()
@@ -228,10 +288,10 @@ return function(make_sheet, send, options, help)
             choice("Discord",{"full","generic","hidden"},(snap.privacy or {}).mode or "full",function(v)
                 confirm("Set "..scope.." sharing to "..v,function() apply("privacy",{mode=v}) end)
             end)
-            row(snap.private and "End private session" or "Private session: stop sharing and tracking",function()
+            row(snap.private and "End private session" or "Start private session",function()
                 request("private",{enabled=not snap.private}); refresh()
             end)
-            row("Exclude this folder from sharing and tracking",function() confirm("Block lookups, tracking and Discord for this folder",function()
+            row("Exclude this folder",function() confirm("Block lookups, tracking and Discord for this folder?",function()
                 apply("exclude",{blocked=true},"folder")
             end) end)
             row("Hide Discord for a time",function()
@@ -249,11 +309,11 @@ return function(make_sheet, send, options, help)
                 request(snap.pinned and "unpin" or "pin"); refresh()
             end)
             row("Use this window",function() request("claim"); refresh() end)
-            row("Track while hidden   "..(tracking.without_sharing and "On" or "Off"),function()
+            switch("Track while hidden",tracking.without_sharing==true,function()
                 apply("tracking",{without_sharing=not tracking.without_sharing})
             end)
         elseif page=="AniList" then
-            row(account.name and ("Connected as "..account.name) or "Not signed in")
+            row("Account   "..(account.name or "Not signed in"))
             row(account.expired and "Reconnect to AniList" or account.name and "Switch or reconnect account" or "Connect account",function() service("connect") end)
             if not account.name then
                 row("Connect for this session",function() service("connect",{session_only=true}) end)
@@ -262,11 +322,22 @@ return function(make_sheet, send, options, help)
                 row("Refresh list entry",function() service("read") end)
                 row("Disconnect",function() ui.push("Disconnect account") end)
             end
-            row((snap.title or "").."   Playing episode "..tostring(snap.episode or "?"))
-            if answer.read_state=="loading" then row("Loading list entry…") end
-            if answer.read_state=="offline" and not valid_entry then row("Offline · no confirmed progress") end
+            row("Anime   "..((snap.match or 0)>0 and (snap.title or "Unknown title") or "No match"))
+            row("Playing episode   "..(snap.episode and snap.episode~="" and snap.episode or "Unknown"))
+            local watch=snap.episode_watch or {}
+            if not account.id then row("Episode watch time   Connect AniList")
+            elseif not snap.safe_episode then row("Episode watch time   No confirmed episode")
+            elseif not snap.allowed then row("Episode watch time   Lookup blocked")
+            else
+                row("Episode watch time   "..duration(watch.elapsed or 0))
+                row("Watch started   "..clock_time(watch.first_watched))
+                row("Last watched   "..clock_time(watch.last_watched))
+            end
+            if answer.read_state=="loading" then row("List status   Loading…") end
+            if answer.read_state=="offline" and not valid_entry then row("List status   Offline · no confirmed progress") end
             if valid_entry then
-                row(entry.id and ((answer.offline and "Offline · last known   " or "Saved   ")..entry.progress.." / "..(snap.total>0 and snap.total or "?").."   "..entry.status) or "Not on your list")
+                row(entry.id and ("List entry   "..entry.progress.." / "..(snap.total>0 and snap.total or "?")..
+                    " · "..entry.status..(answer.offline and " · Offline" or "")) or "List status   Not on your list")
                 local function bump(n) if not edit_base then edit_base=copy(entry) end; edit=math.max(0,(edit or entry.progress)+n); if snap.total>0 then edit=math.min(edit,snap.total) end end
                 row("−  One episode",function() bump(-1) end)
                 row("Draft   "..tostring(edit or entry.progress))
@@ -287,42 +358,46 @@ return function(make_sheet, send, options, help)
             end
             scope_row()
             choice("Tracking",{"off","manual","ask","auto"},tracking.mode or "off",function(v) apply("tracking",{mode=v}) end)
-            row("Resume unfinished time   "..(tracking.resume==false and "Off" or "On"),function()
+            switch("Resume unfinished time",tracking.resume~=false,function()
                 apply("tracking",{resume=tracking.resume==false})
             end)
-            row("Keep offline proposals   "..(tracking.keep_pending and "On" or "Off"),function()
+            switch("Keep offline proposals",tracking.keep_pending==true,function()
                 apply("tracking",{keep_pending=not tracking.keep_pending})
             end)
-            row("Pending updates   "..#(snap.pending or {}),function() ui.push("Pending updates"); refresh() end)
-            row("Rewatch tracking   "..(tracking.rewatch and "On" or "Off"),function() apply("tracking",{rewatch=not tracking.rewatch}) end)
+            row("Pending updates   "..#(snap.pending or {}),function() ui.push("Pending updates") end)
+            switch("Rewatch tracking",tracking.rewatch==true,function() apply("tracking",{rewatch=not tracking.rewatch}) end)
             if tracking.rewatch then row("Start new viewing cycle",function() confirm("Rearm tracking for "..(snap.title or ""),function() service("rearm") end) end) end
-            row("Threshold   "..(tracking.threshold or 15).." minutes",function()
-                ui.text("Minimum elapsed minutes","15",function(s) if tonumber(s) then apply("tracking",{threshold=tonumber(s)}) end end)
+            local threshold=tracking.threshold or 15
+            row("Threshold   "..threshold.." minutes",function()
+                ui.text("Minimum elapsed minutes",tostring(threshold),function(s)
+                    local value=tonumber(s)
+                    if value and value==math.floor(value) and value>=1 and value<=1440 then apply("tracking",{threshold=value})
+                    else notice("Enter a whole number from 1 to 1440 minutes.") end
+                end)
             end)
-            row(string.format("Eligible time   %02d:%02d / %02d:00",math.floor((answer.elapsed or 0)/60),math.floor(answer.elapsed or 0)%60,tracking.threshold or 15))
             if answer.proposal then
                 local p=answer.proposal
                 row("Update episode "..p.episode,function() confirm("Apply "..p.before.." → "..p.episode,function() service("accept",{proposal=p.key}) end) end)
                 row("Later",ui.back); row("Skip this episode",function() service("skip",{proposal=p.key}) end)
             end
         elseif page=="Disconnect account" then
-            if not account.name then row("Not signed in"); return list end
-            row("Disconnect "..(account.name or "current account"))
+            if not account.name then row("Account   Not signed in"); return list end
+            row("Account   "..account.name)
             row("Keep local watch history",function()
-                confirm("Disconnect "..account.name.." and keep local counters and history. Queued updates are cancelled.",function()
-                    service("disconnect"); ui.back()
+                confirm("Disconnect "..account.name.."? Keep local watch history and cancel queued updates.",function()
+                    service("disconnect",{notice_page="AniList"}); ui.back()
                 end)
             end)
             row("Forget local watch history",function()
-                confirm("Disconnect "..account.name.." and remove its local timers, skipped prompts, cached list entries and history. Your AniList list stays unchanged.",function()
-                    service("disconnect",{forget_history=true}); ui.back()
+                confirm("Disconnect "..account.name.." and forget local history? This clears local watch times, cached progress and pending updates.",function()
+                    service("disconnect",{forget_history=true,notice_page="AniList"}); ui.back()
                 end)
             end)
         elseif page=="Pending updates" then
             for _,item in ipairs(snap.pending or {}) do
                 local prop=item
                 local label=(prop.title~="" and prop.title or ("AniList "..prop.media)).." · Episode "..prop.episode
-                row(label)
+                row(label,nil,false,nil,"Proposal "..prop.key)
                 if prop.offline then row("Waiting to refresh remote progress")
                 elseif snap.allowed and prop.media==snap.match and prop.episode==tonumber(snap.episode) then
                     row("Apply "..prop.before.." → "..prop.episode,function() confirm(label.." · "..prop.before.." → "..prop.episode,function()
@@ -338,11 +413,14 @@ return function(make_sheet, send, options, help)
             for _,r in ipairs(snap.records or {}) do counts[r.category]=(counts[r.category] or 0)+1 end
             for _,r in ipairs(snap.records or {}) do
                 local cat=r.category; local target=r.scope
-                if (cat.." "..target):lower():find(filter:lower(),1,true) then row(cat.."   "..target,function()
-                    if cat=="match" then record=r; ui.push("Saved match"); return end
-                    confirm("Remove local "..cat.." for "..target,function()
-                    service("clear",{category=cat,scope=target})
-                end) end) end
+                if (cat.." "..target):lower():find(filter:lower(),1,true) then
+                    row(cat.."   "..target,function()
+                        if cat=="match" then record=r; ui.push("Saved match"); return end
+                        confirm("Remove local "..cat.." for "..target,function()
+                            service("clear",{category=cat,scope=target})
+                        end)
+                    end,false,nil,cat..":"..target)
+                end
             end
             for _,cat in ipairs({"cache","watch","pending","skipped","history","entry"}) do
                 local category=cat
@@ -352,7 +430,7 @@ return function(make_sheet, send, options, help)
             end
             row("Reset everything",function() confirm("Clear all local profiles, matches, caches and watch history; disconnect and turn sharing off",function() service("reset") end) end)
         elseif page=="Saved match" and record then
-            row(record.scope)
+            row("Scope   "..record.scope)
             for _,field in ipairs({{"id","Pinned AniList ID"},{"not_anime","Non-anime flag"},{"offset","Episode offset"}}) do
                 local key,label=field[1],field[2]
                 if record.fields[key]~=nil then
@@ -379,21 +457,22 @@ return function(make_sheet, send, options, help)
             row("AniList ID   "..tostring(snap.match or 0)); row("Preset   "..((snap.appearance or {}).preset or "original"))
             row("Account operation   "..(answer.message or "None"))
         end
-        if status~="" then row(status) end
-        if page~="Menu" and answer.message then row(answer.message) end
+        if status then row(status,nil,false,nil,"Message") end
         return list
     end
     ui=make_sheet({sections=sections,rows=rows,refresh=refresh,notice=notice,scale=options.menu_scale,
-        animate=options.menu_animations,help=help,
+        animate=options.menu_animations,help=help,changed=clear_notice,position=function()
+            return snap.panel_position and snap.panel_position~="" and snap.panel_position or config_position
+        end,
         leaving=function(page) if page=="Appearance" then draft={}; replace=false end end,
-        closed=function() draft={}; edit=nil; edit_base=nil; list_status=nil; pending=nil; status=""; if ui.terminal then mp.set_property("term-status-msg",ui.old_term or "") end end})
+        closed=function() draft={}; edit=nil; edit_base=nil; list_status=nil; pending=nil; clear_notice(); if ui.terminal then mp.set_property("term-status-msg",ui.old_term or "") end end})
     ui.update=function(value)
         if not ui.open then return end
         local key=tostring(value.session).."/"..tostring(value.match).."/"..tostring((value.account or {}).generation)
         if key~=edit_key then edit=nil; edit_base=nil; list_status=nil; pending=nil; draft={}; edit_key=key end
         snap=value
         if ui.page=="AniList" and value.allowed and (value.match or 0)>0 and (value.account or {}).id and last_read~=key then
-            last_read=key; service("read")
+            last_read=key; service("read",{quiet=true})
         end
         ui.draw()
     end

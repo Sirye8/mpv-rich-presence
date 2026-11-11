@@ -59,6 +59,7 @@ class Worker:
     def __init__(self, db_path, window, settings):
         self.db_path = db_path
         self.db = sqlite3.connect(db_path, isolation_level=None, timeout=4)
+        self.notice_page = ""
         self.directory = Path(db_path).parent
         self.window = window
         self.settings = settings
@@ -110,8 +111,11 @@ class Worker:
             ):
                 response = {}
 
-            if "message" in fields and fields["message"] != response.get("message"):
+            if "message" in fields and (
+                self.notice_page or fields["message"] != response.get("message")
+            ):
                 fields["notice"] = secrets.token_hex(8)
+                fields["notice_page"] = self.notice_page
             response.update(fields)
             response["context"] = self.get("player", self.window).get("session")
             response["generation"] = self.get("account", "current").get("generation")
@@ -363,12 +367,13 @@ class Worker:
             with self.transaction():
                 self.context(job, True)
                 self.put("entry", scope, dict(entry, checked=time.time()))
+            notice = {} if job.get("quiet") else {"message": "Progress refreshed."}
             self.reply(
                 entry=dict(entry, session=p["session"]),
                 offline=False,
                 read_state="ready",
                 last_read=time.time(),
-                message="Progress refreshed.",
+                **notice,
             )
         elif op == "rearm":
             if (
@@ -385,7 +390,7 @@ class Worker:
                     {"number": self.get("cycle", scope).get("number", 0) + 1},
                 )
             self.previous = None
-            self.reply(elapsed=0, proposal=None, message="New viewing cycle started.")
+            self.reply(proposal=None, message="New viewing cycle started.")
         elif op == "write":
             self.write(job)
         elif op in ("accept", "skip"):
@@ -492,9 +497,7 @@ class Worker:
                     raise AccountError("Nothing to clear for this account.")
                 self.put("generation", "data", {"id": secrets.token_hex(12)})
             self.previous = None
-            self.reply(
-                message="Local records cleared.", elapsed=0, proposal=None, results=[]
-            )
+            self.reply(message="Local records cleared.", proposal=None, results=[])
         elif op == "search":
             provider = job["provider"]
             query = job.get("query", "")
@@ -858,7 +861,6 @@ class Worker:
             r"[1-9]\d*", p["episode"]
         ):
             return
-        key = self.cycle(a, p)
         with self.transaction():
             if (
                 self.get("generation", "data") != epoch
@@ -867,6 +869,7 @@ class Worker:
             ):
                 self.previous = None
                 return
+            key = self.cycle(a, p)
             watch = self.get("watch", key)
             if (
                 watch.get("owner") not in (None, self.window)
@@ -886,9 +889,14 @@ class Worker:
                 or watch.get("session") != p["session"]
             ):
                 watch["elapsed"] = 0
-            if self.get("history", key) or self.get("skipped", key):
-                return
-            elapsed = watch.get("elapsed", 0) + credit
+                watch.pop("first_watched", None)
+                watch.pop("last_watched", None)
+            elapsed = watch.get("elapsed", 0)
+            if credit:
+                if elapsed == 0:
+                    watch["first_watched"] = p["wall"] - credit * 1000
+                watch["last_watched"] = p["wall"]
+            elapsed += credit
             self.put(
                 "watch",
                 key,
@@ -903,7 +911,6 @@ class Worker:
             )
         if not credit:
             return
-        self.reply(elapsed=elapsed)
         if not credit_only:
             self.propose(a, p, elapsed)
 
@@ -1038,7 +1045,9 @@ class Worker:
     def operations(self):
         while True:
             row = None
+            job = None
             self.expected = None
+            self.notice_page = ""
             try:
                 epoch = self.get("generation", "data")
                 if self.data_generation != epoch:
@@ -1067,6 +1076,7 @@ class Worker:
                         self.delete("job", row[0])
                 if row:
                     job = json.loads(row[1])
+                    self.notice_page = job.get("notice_page", "")
                     if job["op"] not in ("connect", "disconnect", "reset"):
                         self.expected = (job.get("account"), job.get("session"))
                     self.handle(job)
@@ -1085,15 +1095,17 @@ class Worker:
                             0
                         ] and not current.get("expired"):
                             self.put("account", "current", dict(current, expired=True))
-                if row and json.loads(row[1]).get("account") != self.get(
-                    "account", "current"
-                ).get("generation"):
-                    continue
+                if job:
+                    if job.get("quiet") or job.get("account") != self.get(
+                        "account", "current"
+                    ).get("generation"):
+                        continue
                 self.reply(message=str(exc), offline=True)
             except Exception:
-                self.reply(
-                    message="Operation failed. Check the connection and settings."
-                )
+                if not job or not job.get("quiet"):
+                    self.reply(
+                        message="Operation failed. Check the connection and settings."
+                    )
             time.sleep(0.25)
 
 

@@ -24,6 +24,7 @@ local options = {
     menu_key = "Alt+p",
     menu_scale = 1,
     menu_animations = true,
+    panel_position = "top-left",
     anilist_personal_client = false,
     anilist_exchange_url = "",
     anilist_client_id = "55822",

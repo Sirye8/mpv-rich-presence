@@ -4,9 +4,11 @@ local quit=mp.commandv
 local original=mp
 local bindings,timers,observed={},{},{}
 local updates,removes,closed=0,0,0
+local clock=0
 local width,height=1280,720
 local x,y=0,0
-local bounds,mouse_enabled,mouse_bindings,paint
+local bounds,mouse_enabled,mouse_bindings,paint,paint_height
+local margins={}
 local input
 package.loaded["mp.input"]={get=function(value) input=value end}
 mp={
@@ -15,23 +17,27 @@ mp={
     observe_property=function(name,kind,fn) observed[fn]=true end,
     unobserve_property=function(fn) observed[fn]=nil end,
     get_osd_size=function() return width,height end,
+    get_time=function() return clock end,
     get_property=function() return "old terminal status" end,
+    get_property_native=function(name,fallback) return name=="user-data/osc/margins" and margins or fallback end,
     set_property=function() end,
     set_key_bindings=function(list) mouse_bindings=list end,
     enable_key_bindings=function() mouse_enabled=true end,
     disable_key_bindings=function() mouse_enabled=false end,
     set_mouse_area=function(...) bounds={...} end,
     get_mouse_pos=function() return x,y end,
-    create_osd_overlay=function() return {update=function(self) updates=updates+1; paint=self.data end,remove=function() removes=removes+1 end} end,
+    create_osd_overlay=function() return {update=function(self) updates=updates+1; paint=self.data; paint_height=self.res_y end,
+        remove=function() removes=removes+1 end} end,
     add_periodic_timer=function(seconds,fn)
-        local timer={killed=false,fn=fn}; timer.kill=function(self) self.killed=true end
+        local timer={killed=false,fn=fn,seconds=seconds}; timer.kill=function(self) self.killed=true end
         timers[#timers+1]=timer; return timer
     end,
 }
 mp.add_timeout=mp.add_periodic_timer
 local rows={{id="a",label="First",tip="Description for the first option.",run=function() end},{id="b",label="Second",run=function() end}}
 local function verify()
-    local sheet=dofile(os.getenv("MPVRP_MODULES").."/sheet.lua")
+    local modules=os.getenv("MPVRP_MODULES")
+    local sheet=dofile(modules.."/sheet.lua")
     local ui=sheet({sections={},animate=false,rows=function() return rows end,refresh=function() end,
         closed=function() closed=closed+1 end})
     ui.show("Test")
@@ -41,7 +47,7 @@ local function verify()
     assert(bounds[1]<24 and bounds[2]<24 and bounds[4]<height*.65 and mouse_enabled)
     assert(mouse_bindings[3][1]=="mbtn_left","Pointer clicks must use the scoped mouse section")
     local first=ui.hits[1]
-    x,y=(first.x+1)*height/820,(first.y+1)*height/820
+    x,y=(first.x+1)*height/paint_height,(first.y+1)*height/paint_height
     ui.mouse_moved(nil,{hover=true})
     local hover=timers[#timers]
     hover.killed=true
@@ -70,6 +76,114 @@ local function verify()
     before=updates
     ui.draw()
     assert(updates==before,"Closed menu redrew")
+
+    width,height=1280,720
+    local builds=0
+    local position="top-left"
+    local help=dofile(modules.."/menu_help.lua")
+    local options=help("Discord","Privacy & windows",true,{"full","generic","hidden"},"generic")
+    local animated=sheet({sections={"Recognition & folders"},animate=true,position=function() return position end,
+        rows=function()
+            builds=builds+1
+            return {{id="discord",label="Discord   generic",tip=options,run=function() end}}
+        end,
+        refresh=function() end,closed=function() end})
+    animated.show("Test")
+    assert(paint:find("Recognition & folders",1,true),"Sidebar label was truncated")
+    local function animation()
+        local active
+        for _,timer in ipairs(timers) do
+            if not timer.killed and timer.seconds<=1/60 then
+                assert(not active,"More than one animation ticker")
+                active=timer
+            end
+        end
+        return active
+    end
+    local opening=assert(animation())
+    local initial=paint
+    clock=clock+.09
+    opening.fn()
+    assert(builds==1 and paint~=initial,"An animation frame rebuilt the layout or failed to paint")
+    clock=clock+.15
+    opening.fn()
+    assert(not animation(),"Animation remained active after opening")
+    assert(paint:find("\\1a&H21&",1,true),"Panel fill is not translucent")
+    local hit=animated.hits[2]
+    x,y=(hit.x+4)*height/paint_height,(hit.y+4)*height/paint_height
+    animated.mouse_moved(nil,{hover=true})
+    local wait=timers[#timers]
+    wait.killed=true
+    wait.fn()
+    assert(paint:find("Options",1,true) and paint:find("• Generic",1,true) and paint:find("Hidden",1,true),
+        "Choice help did not show distinct options and the current selection")
+    clock=clock+.2
+    animation().fn()
+    assert(not animation(),"Hover animation remained active")
+    for _,anchor in ipairs({"top-left","top-center","top-right","bottom-left","bottom-center","bottom-right"}) do
+        position=anchor
+        animated.draw()
+        local left,top,right,bottom=bounds[1],bounds[2],bounds[3],bounds[4]
+        assert(left>=0 and right<=width and bottom<height*.88,"Panel leaves the playback area")
+        if anchor:find("bottom",1,true) then assert(top>height*.4) else assert(top<24) end
+        if anchor:find("center",1,true) then assert(math.abs(left+right-width)<3) end
+        if anchor:find("right",1,true) then assert(right>width-24) end
+    end
+    margins={t=.1,b=.18}
+    position="top-left"
+    animated.draw()
+    assert(bounds[2]>height*.1,"Panel overlapped the OSC title bar")
+    position="bottom-right"
+    animated.draw()
+    assert(bounds[4]<height*.82,"Panel overlapped the bottom OSC")
+    margins={}
+    animated.push("Next")
+    assert(animation())
+    animated.close()
+    assert(not mouse_enabled and next(bindings)==nil,"Closing kept input captured")
+    clock=clock+.05
+    animation().fn()
+    animated.show("Test")
+    clock=clock+.2
+    animation().fn()
+    assert(animated.open and not animation(),"Rapid reopen failed to settle")
+    animated.close()
+    clock=clock+.2
+    animation().fn()
+    assert(not animation() and next(observed)==nil,"Closing left an animation or observer active")
+
+    local model,job
+    local menu=dofile(modules.."/menu.lua")(function(value)
+        model=value
+        local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
+        panel.push=function(page) panel.page=page end
+        return panel
+    end,function(req) job=req.job or job end,{tmdb_key="",acoustid_key=""},help)
+    menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",safe_episode=true,
+        account={id=5,name="Viewer",generation="test"},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
+        card={details="Fixture details",state="Fixture state",start=1,["end"]=2},
+        service={message="Progress refreshed.",elapsed=999}})
+    assert(job and job.op=="read" and job.quiet,"Automatic list read sent a normal notification")
+    local function find(page,id)
+        for _,row in ipairs(model.rows(page)) do if row.id==id then return row end end
+    end
+    assert(find("AniList","Episode watch time").label=="Episode watch time   01:40","Watch time was not read from the current record")
+    assert(find("AniList","Watch started") and find("AniList","Last watched"))
+    assert(not find("Card preview","start") and not find("Card preview","end"),"Discord timestamps leaked into the preview")
+    assert(find("Card preview","Details").tip:match("^Read only%.") and type(find("Appearance","Details").tip)=="table",
+        "Preview and editable help were mixed")
+    assert(not find("AniList","Message"),"A saved worker message was repeated")
+    model.notice("Disconnected.","AniList")
+    assert(find("AniList","Message").label=="Disconnected.")
+    menu.page="Privacy & windows"
+    model.changed()
+    model.notice("Progress refreshed.","AniList")
+    assert(not find("Privacy & windows","Message"),"Account notice appeared on a different page")
+    find("Disconnect account","Forget local watch history").run()
+    assert(menu.page=="Confirm")
+    local parts={}
+    for _,row in ipairs(model.rows("Confirm")) do if row.plain then parts[#parts+1]=row.label end end
+    assert(table.concat(parts," "):find("forget local history?",1,true),"Confirmation split a word")
 end
 local ok,err=pcall(verify)
 mp=original
