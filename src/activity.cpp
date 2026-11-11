@@ -120,15 +120,16 @@ namespace mpvrp
                     details = m.provider.value("stream_title", m.title);
                     if (m.provider.value("live",false)) state = "Live";
                 }
-                if (m.provider.value("kind",std::string{}) == "recording" && preset == "detailed")
+                const auto kind = m.provider.value("kind", std::string{});
+                if (kind == "recording")
                 {
-                    details = m.artist;
-                    state = m.album;
+                    details = m.provider.value("artist", m.artist);
+                    state = m.provider.value("album", m.album);
                 }
-                if (state.empty() && preset == "detailed")
+                if (state.empty() && (kind == "movie" || preset == "detailed"))
                 {
                     state = m.provider.value("year",std::string{});
-                    auto genre = m.provider.value("genre",std::string{});
+                    auto genre = preset == "detailed" ? m.provider.value("genre",std::string{}) : std::string{};
                     if (!genre.empty()) state += (state.empty() ? "" : " · ") + genre;
                 }
                 if (options.value("art", true) && m.provider.contains("cover") && m.provider.at("cover") != "")
@@ -137,8 +138,15 @@ namespace mpvrp
                     card["large_text"] = truncate_utf8_bytes(name,128);
                 }
                 if (options.value("button",true) && m.provider.contains("link"))
-                    card["buttons"] = json::array({{{"label", "View on " + m.provider.value("provider", std::string("provider"))},
+                {
+                    auto source = m.provider.value("provider", std::string("provider"));
+                    if (source.starts_with("tmdb-")) source = "TMDB";
+                    else if (source == "tvmaze") source = "TVmaze";
+                    else if (source == "wikidata") source = "Wikidata";
+                    else if (source == "musicbrainz") source = "MusicBrainz";
+                    card["buttons"] = json::array({{{"label", "View on " + source},
                                                     {"url",m.provider.at("link")}}});
+                }
             }
             if (m.buffering)
                 state += state.empty() ? "Buffering... (" + duration + ")" : " (Buffering... " + duration + ")";

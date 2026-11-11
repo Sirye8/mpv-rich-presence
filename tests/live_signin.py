@@ -15,7 +15,7 @@ import time
 def verify(package, mpv):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        for part in ("scripts", "script-modules", "script-opts"):
+        for part in ("scripts", "script-opts"):
             shutil.copytree(package / part, root / part)
         # Use the interpreter running the test, even if the GUI has a different PATH.
         with (root / "script-opts" / "rich-presence.conf").open(
@@ -30,7 +30,7 @@ def verify(package, mpv):
 local utils=require("mp.utils")
 local keys={"DOWN","DOWN","ENTER"}
 mp.add_timeout(1,function()
-    mp.commandv("script-message-to","rich_presence_conf","menu","AniList")
+    mp.commandv("script-message-to","mpv_rich_presence","menu","AniList")
     local timer
     timer=mp.add_periodic_timer(.4,function()
         local key=table.remove(keys,1)
@@ -57,7 +57,7 @@ end)
             env=dict(os.environ, MPVRP_SIGNIN_DONE=str(stop)),
         )
         try:
-            db_path = root / "rich-presence" / "data.sqlite3"
+            db_path = root / "scripts" / "mpv-rich-presence" / "data.sqlite3"
             deadline = time.monotonic() + 240
             while time.monotonic() < deadline and process.poll() is None:
                 time.sleep(0.5)
@@ -70,7 +70,7 @@ end)
                         errors = [
                             line
                             for line in messages.splitlines()
-                            if "[f]" in line or "[w][rich_presence_conf]" in line
+                            if "[f]" in line or "[w][mpv_rich_presence]" in line
                         ]
                         raise RuntimeError(
                             "Player startup failed:\n" + "\n".join(errors)

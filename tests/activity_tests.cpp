@@ -65,6 +65,16 @@ int main(int argc, char** argv)
     auto layout = format_activity(music, {{"headline","Old override"},{"audio_layout",{{"preset","clean"}}}});
     if (layout.at("name") == "Old override") return 1;
 
+    music.provider = {{"kind","recording"},{"name","Matched track"},{"artist","Matched artist"},{"album","Matched album"}};
+    const auto music_card = format_activity(music, json::object());
+    if (music_card.at("name") != "Matched track" || music_card.at("details") != "Matched artist" ||
+        music_card.at("state") != "Matched album") return 1;
+    playback movie;
+    movie.video = true;
+    movie.provider = {{"kind","movie"},{"provider","tmdb-movie"},{"name","Matched film"},{"year","2014"}};
+    const auto movie_card = format_activity(movie, json::object());
+    if (movie_card.at("name") != "Matched film" || movie_card.at("state") != "2014") return 1;
+
     const auto directory = std::filesystem::temp_directory_path() /
         ("mpvrp-store-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto database = directory / std::filesystem::u8path("日本語.sqlite3");
@@ -83,7 +93,23 @@ int main(int argc, char** argv)
         store.put("exclude","folder:/media",{{"blocked",true}});
         if (store.blocked("/media-other/track.flac")) return 1;
         if (path_utf8(database).find("日本語") == std::string::npos) return 1;
+        store.put("account","current",{{"persistent",false},{"id",7}});
+        store.put("player","old-window",{{"session",2}});
     }
+    const auto relocated = directory / "scripts" / "mpv-rich-presence" / "data.sqlite3";
+    {
+        profile_store store(relocated, database);
+        if (!store.blocked("/media/track.flac")) return 1;
+        if (!store.get("account","current").empty() || !store.get("player","old-window").empty()) return 1;
+        store.clear("exclude","folder:/media");
+    }
+    {
+        profile_store store(relocated, database);
+        if (store.blocked("/media/track.flac")) return 1;
+    }
+    std::filesystem::remove(relocated);
+    std::filesystem::remove(relocated.parent_path());
+    std::filesystem::remove(relocated.parent_path().parent_path());
     std::filesystem::remove(database);
     std::filesystem::remove(directory);
 }

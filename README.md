@@ -1,8 +1,8 @@
 # mpv-rich-presence
 
-Share what you are watching or listening to in mpv with Discord. The plugin runs on Windows and Linux. Anime filenames are parsed with Anitomy and matched against AniList. Music uses the artist and track title from mpv. No AniList account is needed for either feature.
+Share what you are watching or listening to in mpv with Discord. The plugin runs on Windows and Linux and automatically looks up anime, movies, TV episodes, and tagged music. The included config supplies the Discord application ID.
 
-Press **Alt+p** to open the player panel. The Original preset keeps the v1.0.10 Discord card. Changes in Appearance are private until you choose **Apply**. Account details, watch time and list progress stay in the player.
+Press **Alt+p** to open the compact panel in the upper left. Hover over any setting for help. Set `menu_animations=no` for instant transitions or adjust `menu_scale` to change the panel size. The Original preset preserves the v1.0.10 layout. Changes in Appearance are private until you choose **Apply**.
 
 ## In the player
 
@@ -16,17 +16,17 @@ Press **Alt+p** to open the player panel. The Original preset keeps the v1.0.10 
 | Saved data | Filter local records and confirm what to remove. Clearing local progress leaves your AniList list alone. |
 | Diagnostics | Check the active provider, ownership, permission and most recent SDK or account result. |
 
-Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Click or scroll to navigate with a mouse. Search and ID entry use mpv's text input when available. You can also open a page from the mpv console, for example `script-message-to rich_presence_conf menu Appearance`.
+Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Click or scroll to navigate with a mouse. Search and ID entry use mpv's text input when available. You can also open a page from the mpv console, for example `script-message-to mpv_rich_presence menu Appearance`.
 
 ### Sharing and privacy
 
 The native plugin waits for the Lua configuration bridge before searching or publishing. A blank Discord application ID disables ordinary Discord sharing and its anime lookups. Explicitly enabling **Track while hidden** gives AniList separate permission. Folder exclusions and a private session take precedence. A new file or a resumed window can claim Discord unless a different player is pinned.
 
-Matched anime can show episode numbers, release group, cover art and an AniList link. Other videos use mpv's title. Audio uses a Listening activity. Playback timestamps account for speed, and buffering suspends the display timer. Paused presence is hidden after 30 minutes by default.
+Matched anime can show episode numbers, release group, cover art and an AniList link. Other matched videos can show their title, release year or episode number, and available artwork. Audio uses a Listening activity. Playback timestamps account for speed, and buffering suspends the display timer. Paused presence is hidden after 30 minutes by default.
 
 ### Connecting AniList
 
-The optional account and provider worker requires Python 3.9 or newer. Set `python` to its executable if mpv cannot find it. The native plugin and player menu work independently of Python.
+The Windows ZIP includes a portable Python runtime for recognition and account features. Linux and source installs can use Python 3.9 or newer from the system. Set `python` to choose a different interpreter.
 
 Open **Alt+p → AniList → Connect account** and approve access on AniList. The default client and sign-in service are included. You do not need to register an application, enter a client secret or create a hosting account. **Connect for this session** keeps the credential in memory until the account helper exits.
 
@@ -44,9 +44,11 @@ The minus and plus controls edit a draft. Apply shows the account and proposed c
 
 ### Recognition and templates
 
-AniList remains the default for video. Optional sources include TMDB movies and TV, TVmaze, MusicBrainz, Cover Art Archive, stream metadata and AcoustID. Select a source under **Recognition & folders**. TMDB needs a read access token. AcoustID needs a client key and `fpcalc` on PATH. Fingerprinting runs only when selected. Configure provider keys in your own mpv config and keep that file private.
+**Automatic** checks AniList for anime, prefers TMDB for movies and TV when the shared service is available, and looks up tagged tracks in MusicBrainz. Wikidata provides film titles and years, and TVmaze provides series and episode details when TMDB is unavailable. Cover Art Archive supplies available release artwork. Ambiguous matches keep the local title and tags.
 
-Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `rich-presence/data.sqlite3` under the mpv config directory.
+Choose **Recognition & folders → Automatic source** to set a file or folder override. **Original** uses the earlier AniList and local metadata behavior. You can supply your own TMDB read token in `tmdb_key`. AcoustID fingerprinting requires a client key and `fpcalc` on PATH and runs only when selected. See the [shared TMDB setup](docs/tmdb-metadata.md).
+
+Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `scripts/mpv-rich-presence/data.sqlite3` under the mpv config directory.
 
 See [implementation and verification](docs/verification.md) for the test commands and remaining manual release checks.
 
@@ -80,13 +82,12 @@ See [implementation and verification](docs/verification.md) for the test command
 
 ## Installation
 
-1. Download the latest release package from the [Releases](https://github.com/Sirye8/mpv-rich-presence/releases) page.
+1. Use a package built from this revision. The build instructions below include the Windows ZIP command.
 2. Copy the files into your mpv configuration directory (`%APPDATA%/mpv` on Windows, or `~/.config/mpv` on Linux):
    - Place `rich-presence.dll` (or `rich-presence.so` on Linux) into your mpv `scripts/` folder.
-   - Place `rich-presence-conf.lua` into your mpv `scripts/` folder.
-   - Copy the entire `script-modules/mpv-rich-presence/` directory into the corresponding `script-modules/` directory in your config.
+   - Copy the entire `scripts/mpv-rich-presence/` folder into your mpv `scripts/` folder.
    - On a new installation, place `rich-presence.conf` in `script-opts/`. On an upgrade, keep your existing config.
-3. Open `script-opts/rich-presence.conf` in a text editor to configure your Discord Application ID and optional settings.
+3. Restart mpv. On an upgrade, close mpv first and remove the old `scripts/rich-presence-conf.lua` so only the new bridge loads. The plugin copies saved settings and history from `rich-presence/data.sqlite3` on first start. Keep that old database until you have checked the migrated settings.
 
 ## Configuration
 
@@ -94,7 +95,7 @@ Edit `script-opts/rich-presence.conf`:
 
 ```ini
 # Discord Application ID (from https://discord.com/developers/applications)
-application_id=
+application_id=1462038267183628308
 
 # Enable rich presence by default (yes/no)
 on=yes
@@ -168,7 +169,7 @@ Available script messages:
    ctest --test-dir build -C Release --output-on-failure
    ```
 
-To create a local Windows archive from a clean install tree, run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. This rebuilds Release, runs CTest and packages the installed DLL, scripts, documentation and licenses. It does not publish to GitHub.
+To create a local Windows archive, run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. This builds Release, runs CTest, and includes the verified embeddable Python distribution with its license.
 
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 

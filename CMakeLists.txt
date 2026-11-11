@@ -187,7 +187,7 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
         RUNTIME DESTINATION "${mpv-rich-presence_INSTALL_SCRIPTS}")
 
     install(FILES ${mpv-rich-presence_LUA}
-        DESTINATION "${mpv-rich-presence_INSTALL_SCRIPTS}")
+        DESTINATION "${mpv-rich-presence_INSTALL_SCRIPTS}/mpv-rich-presence" RENAME main.lua)
 
     install(FILES ${mpv-rich-presence_CONF}
         DESTINATION "${mpv-rich-presence_INSTALL_SCRIPT_OPTS}")
@@ -198,8 +198,8 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
             "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
 
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/script-modules"
-        DESTINATION "${mpv-rich-presence_INSTALL_DIR}" PATTERN "__pycache__" EXCLUDE)
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/script-modules/mpv-rich-presence/"
+        DESTINATION "${mpv-rich-presence_INSTALL_SCRIPTS}/mpv-rich-presence/modules" PATTERN "__pycache__" EXCLUDE)
 
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")

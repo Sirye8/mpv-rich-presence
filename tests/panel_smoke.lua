@@ -4,7 +4,7 @@ local root=os.getenv("MPVRP_CAPTURE")
 local pages={"Now playing","AniList","Appearance","Recognition & folders","Privacy & windows","Saved data","Diagnostics"}
 local step=0
 local function menu(page)
-    mp.commandv("script-message-to","rich_presence_conf","menu",page)
+    mp.commandv("script-message-to","mpv_rich_presence","menu",page)
 end
 mp.register_event("file-loaded",function()
     mp.add_timeout(0.6,function()

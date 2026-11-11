@@ -9,7 +9,7 @@ mpv / browser -> Cloudflare relay -> Netlify exchange -> AniList OAuth
 mpv          ---------------------------------------> AniList GraphQL
 ```
 
-The relay at `https://mpv-anilist-login.si-based.workers.dev` forwards four fixed routes to `https://mpv-anilist-login.netlify.app`. It cannot proxy arbitrary destinations. Netlify stores the application secret and exchanges authorization codes. Playback, Discord updates and authenticated list requests do not use either hosting service.
+The relay at `https://mpv-anilist-login.si-based.workers.dev` forwards four fixed sign-in routes to `https://mpv-anilist-login.netlify.app`. Netlify stores the AniList application secret and exchanges authorization codes. Authenticated AniList list requests go directly to AniList. The Worker also has a separate route for [shared TMDB metadata](tmdb-metadata.md).
 
 This split addresses two failures observed during deployment: AniList rejected token requests from the Worker, while the test PC could not connect directly to the Netlify domain. Cloudflare could reach Netlify, and Netlify could reach AniList. The complete route passed a read-only sign-in test from a fresh Windows mpv installation on 6 November 2026, including the authenticated Viewer query and session-only storage. This verifies that route at the time of the test, not availability on every network.
 

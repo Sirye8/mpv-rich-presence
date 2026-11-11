@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
-return function(make_sheet, send, options)
+return function(make_sheet, send, options, help)
     local sections={"Now playing","AniList","Appearance","Recognition & folders","Privacy & windows","Saved data","Diagnostics"}
     local snap, draft, pending, scope = {}, {}, nil, "global"
     local layout, replace = "all", false
@@ -39,7 +39,7 @@ return function(make_sheet, send, options)
         local list={}
         local function row(label,fn,primary,adjust,id)
             list[#list+1]={label=label,run=fn,primary=primary,adjust=adjust,disabled=not fn,
-                id=id or label:match("^(.-)   ") or label}
+                id=id or label:match("^(.-)   ") or label,tip=help(label,page,fn~=nil)}
             return list[#list]
         end
         local function choice(label,values,current,fn)
@@ -48,7 +48,8 @@ return function(make_sheet, send, options)
                 for i,v in ipairs(values) do if v==current then idx=i; break end end
                 fn(values[1+(idx-1+dir)%#values])
             end
-            row(label.."   "..tostring(current),function() step(1) end,false,step)
+            local item=row(label.."   "..tostring(current),function() step(1) end,false,step)
+            item.tip=item.tip.." Choices are "..table.concat(values,", ").."."
         end
         local function scope_row()
             choice("Save for",{"global","folder","file"},scope,function(v) scope=v end)
@@ -152,10 +153,7 @@ return function(make_sheet, send, options)
         elseif page=="Recognition & folders" then
             scope_row()
             row("Provider settings and credits",function() ui.push("Providers") end)
-            choice("Automatic source",{"original","tmdb-movie","tmdb-tv","tvmaze","musicbrainz","stream","acoustid"},
-                (snap.sources or {}).source or "original",function(v)
-                    confirm("Use "..v.." for "..scope,function() apply("sources",{source=v}) end)
-                end)
+            row("Automatic source   "..((snap.sources or {}).source or "auto"),function() ui.push("Choose source") end)
             row("AniList search",function() ui.text("Search anime","",function(q)
                 service("search",{provider="anilist",query=q}); search="anilist"; ui.push("Search results")
             end) end)
@@ -174,10 +172,24 @@ return function(make_sheet, send, options)
                     service("search",{provider=id,query=q}); search=id; ui.push("Search results")
                 end) end)
             end
+        elseif page=="Choose source" then
+            for _,source in ipairs({{"auto","Automatic"},{"original","Original"},{"wikidata","Wikidata"},
+                    {"tvmaze","TVmaze"},{"musicbrainz","MusicBrainz"},{"stream","Stream metadata"},
+                    {"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"acoustid","AcoustID"}}) do
+                local value,label=source[1],source[2]
+                row(label,function()
+                    confirm("Use "..label.." for "..scope,function()
+                        apply("sources",{source=value}); ui.back()
+                    end)
+                end)
+            end
         elseif page=="Providers" then
             row("AniList   Anime titles, covers and sequels")
-            row("TMDB   "..(options.tmdb_key~="" and "Key configured" or "Set tmdb_key in rich-presence.conf"))
+            row("TMDB   "..(options.tmdb_key~="" and "Personal token configured" or "Uses the shared service when available"))
+            row("This product uses the TMDB API")
+            row("but is not endorsed or certified by TMDB.")
             row("TVmaze   Aired episode order and artwork · CC BY-SA")
+            row("Wikidata   Public film titles and release dates")
             row("MusicBrainz   Recording and release IDs · 1 request per second")
             row("Cover Art Archive   Release artwork")
             row("AcoustID   "..(options.acoustid_key~="" and "Key configured" or "Set acoustid_key in rich-presence.conf"))
@@ -356,6 +368,7 @@ return function(make_sheet, send, options)
         return list
     end
     ui=make_sheet({sections=sections,rows=rows,refresh=refresh,notice=notice,scale=options.menu_scale,
+        animate=options.menu_animations,help=help,
         leaving=function(page) if page=="Appearance" then draft={}; replace=false end end,
         closed=function() draft={}; edit=nil; edit_base=nil; list_status=nil; pending=nil; status=""; if ui.terminal then mp.set_property("term-status-msg",ui.old_term or "") end end})
     ui.update=function(value)

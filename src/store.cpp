@@ -40,7 +40,7 @@ namespace
 
 namespace mpvrp
 {
-    profile_store::profile_store(const fs::path& path)
+    profile_store::profile_store(const fs::path& path, const fs::path& legacy)
     {
         fs::create_directories(path.parent_path());
         const auto utf8 = path.u8string();
@@ -50,13 +50,28 @@ namespace mpvrp
                                       SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
             check(db, opened);
             sqlite3_busy_timeout(db, 1500);
-            auto version = prepare(db, "PRAGMA user_version");
+            auto existing_version = prepare(db, "PRAGMA main.user_version");
+            const bool uninitialized = sqlite3_step(existing_version.get()) == SQLITE_ROW
+                && sqlite3_column_int(existing_version.get(), 0) == 0;
+            existing_version.reset();
+            const bool migrate = uninitialized && !legacy.empty() && legacy != path && fs::is_regular_file(legacy);
+            if (migrate) execute(db, "ATTACH DATABASE ? AS legacy", {path_utf8(legacy)});
+            check(db, sqlite3_exec(db, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr));
+            auto version = prepare(db, "PRAGMA main.user_version");
             if (sqlite3_step(version.get()) != SQLITE_ROW || sqlite3_column_int(version.get(), 0) > 1)
                 throw std::runtime_error("Unsupported saved data version");
+            const bool initialize = sqlite3_column_int(version.get(), 0) == 0;
             version.reset();
-            check(db, sqlite3_exec(db, "BEGIN IMMEDIATE;"
-                "CREATE TABLE IF NOT EXISTS records(category TEXT, scope TEXT, value TEXT NOT NULL, PRIMARY KEY(category,scope));"
-                "PRAGMA user_version=1; COMMIT;", nullptr, nullptr, nullptr));
+            execute(db, "CREATE TABLE IF NOT EXISTS main.records(category TEXT, scope TEXT, value TEXT NOT NULL, PRIMARY KEY(category,scope))", {});
+            if (migrate && initialize)
+            {
+                // Session-only tokens and jobs belong to the old process.
+                execute(db, "INSERT OR IGNORE INTO main.records SELECT category,scope,value FROM legacy.records "
+                            "WHERE category NOT IN ('player','response','job','auto','cancel','refresh','flight','pin') "
+                            "AND (category!='account' OR json_extract(value,'$.persistent')=1)", {});
+            }
+            check(db, sqlite3_exec(db, "PRAGMA main.user_version=1; COMMIT;", nullptr, nullptr, nullptr));
+            if (migrate) execute(db, "DETACH DATABASE legacy", {});
         }
         catch (...) { sqlite3_close(db); throw; }
     }

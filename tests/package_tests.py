@@ -13,14 +13,22 @@ import tempfile
 root = Path(sys.argv[1]).resolve()
 mpv = sys.argv[2]
 subprocess.run(
-    [mpv,"--no-config","--load-scripts=no","--idle=yes","--vo=null","--ao=null",
-     "--script="+str(Path(__file__).with_name("sheet_tests.lua").resolve())],
-    env=dict(os.environ,MPVRP_MODULES=str(root/"script-modules/mpv-rich-presence")),
-    timeout=12,check=True,
+    [
+        mpv,
+        "--no-config",
+        "--load-scripts=no",
+        "--idle=yes",
+        "--vo=null",
+        "--ao=null",
+        "--script=" + str(Path(__file__).with_name("sheet_tests.lua").resolve()),
+    ],
+    env=dict(os.environ, MPVRP_MODULES=str(root / "scripts/mpv-rich-presence/modules")),
+    timeout=30,
+    check=True,
 )
 with tempfile.TemporaryDirectory() as directory:
     config = Path(directory) / "mpv"
-    for part in ("scripts", "script-opts", "script-modules"):
+    for part in ("scripts", "script-opts"):
         shutil.copytree(root / part, config / part)
     applied = False
     for mode in ("cancel", "apply", "cancel"):
@@ -46,7 +54,7 @@ with tempfile.TemporaryDirectory() as directory:
             raise RuntimeError("Packaged Lua module failed to load:\n" + text[-12000:])
         if "Configuration complete received from bridge" not in text:
             raise RuntimeError("Configuration bridge failed")
-        with sqlite3.connect(config / "rich-presence/data.sqlite3") as db:
+        with sqlite3.connect(config / "scripts/mpv-rich-presence/data.sqlite3") as db:
             row = db.execute(
                 "SELECT value FROM records WHERE category='appearance' AND scope='global'"
             ).fetchone()

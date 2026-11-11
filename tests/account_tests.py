@@ -141,6 +141,149 @@ class PublicSignInTests(unittest.TestCase):
             wake_exchange(base, "other", lambda: None, opening)
 
 
+class RecognitionTests(unittest.TestCase):
+    def test_default_dispatch_and_ambiguous_remakes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                cases = [
+                    (
+                        "Interstellar.2014.1080p.mkv",
+                        True,
+                        {},
+                        "wikidata",
+                        "Interstellar",
+                        [
+                            dict(
+                                id="Q1", kind="movie", name="Interstellar", year="2014"
+                            ),
+                            dict(
+                                id="Q2", kind="movie", name="Interstellar", year="2024"
+                            ),
+                        ],
+                        "Q1",
+                    ),
+                    (
+                        "Severance_S01E02.mkv",
+                        True,
+                        {},
+                        "tvmaze",
+                        "Severance",
+                        [
+                            dict(id=7, kind="tv", name="Severance"),
+                        ],
+                        7,
+                    ),
+                    (
+                        "Dune.Part.Two.2024.mkv",
+                        True,
+                        {},
+                        "tmdb-movie",
+                        "Dune Part Two (2024)",
+                        [dict(id=9, kind="movie", name="Dune: Part Two", year="2024")],
+                        9,
+                    ),
+                    (
+                        "Track Title",
+                        False,
+                        {"artist": "Artist", "album": "Album"},
+                        "musicbrainz",
+                        "Track Title",
+                        [
+                            dict(
+                                id="track",
+                                kind="recording",
+                                name="Track Title",
+                                artist="Artist",
+                                album="Album",
+                            ),
+                        ],
+                        "track",
+                    ),
+                    (
+                        "Interstellar.mkv",
+                        True,
+                        {},
+                        "wikidata",
+                        "Interstellar",
+                        [
+                            dict(
+                                id="Q1", kind="movie", name="Interstellar", year="2014"
+                            ),
+                            dict(
+                                id="Q2", kind="movie", name="Interstellar", year="2024"
+                            ),
+                        ],
+                        None,
+                    ),
+                ]
+                for session, (
+                    label,
+                    video,
+                    tags,
+                    source,
+                    title,
+                    hits,
+                    expected,
+                ) in enumerate(cases, 1):
+                    player = dict(
+                        source="auto",
+                        session=session,
+                        title=label,
+                        allowed=True,
+                        video=video,
+                        **tags,
+                    )
+                    worker.put("player", "window", player)
+
+                    def lookup(provider, *_args, **_kwargs):
+                        if provider.startswith("tmdb-") and provider != source:
+                            raise AccountError("Shared TMDB token unavailable")
+                        return hits
+
+                    with (
+                        patch("backend.candidates", side_effect=lookup) as search,
+                        patch(
+                            "backend.details",
+                            side_effect=lambda provider, hit, *_: dict(
+                                hit, provider=provider
+                            ),
+                        ) as detail,
+                    ):
+                        worker.recognize(player)
+                    self.assertEqual(search.call_args.args[:2], (source, title))
+                    if source in ("wikidata", "tvmaze"):
+                        preferred = "tmdb-movie" if source == "wikidata" else "tmdb-tv"
+                        self.assertEqual(search.call_args_list[0].args[0], preferred)
+                    self.assertEqual(
+                        worker.get("auto", "window")["hit"].get("id"), expected
+                    )
+                    if source == "tvmaze":
+                        self.assertEqual(detail.call_args.args[4], ("01", "02"))
+
+                for session, player in enumerate(
+                    [
+                        dict(
+                            title="https://host.example/signed?id=token",
+                            remote=True,
+                            allowed=True,
+                        ),
+                        dict(title="Interstellar", allowed=False),
+                    ],
+                    6,
+                ):
+                    player.update(source="auto", session=session, video=True)
+                    worker.put("player", "window", player)
+                    with patch("backend.candidates") as search:
+                        worker.recognize(player)
+                        search.assert_not_called()
+            finally:
+                worker.db.close()
+
+
 class AccountTests(unittest.TestCase):
     def test_conflict_and_lost_response(self):
         row = dict(

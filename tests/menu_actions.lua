@@ -12,7 +12,7 @@ mp.add_timeout(.5,function()
     timer=mp.add_periodic_timer(.18,function()
         index=index+1
         local key=actions[index]
-        if key=="menu" then mp.commandv("script-message-to","rich_presence_conf","menu","Appearance")
+        if key=="menu" then mp.commandv("script-message-to","mpv_rich_presence","menu","Appearance")
         elseif key then mp.commandv("keypress",key)
         else timer:kill(); mp.commandv("quit","0") end
     end)

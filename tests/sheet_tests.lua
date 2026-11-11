@@ -5,6 +5,8 @@ local original=mp
 local bindings,timers,observed={},{},{}
 local updates,removes,closed=0,0,0
 local width,height=1280,720
+local x,y=0,0
+local bounds,mouse_enabled,mouse_bindings,paint
 local input
 package.loaded["mp.input"]={get=function(value) input=value end}
 mp={
@@ -15,21 +17,38 @@ mp={
     get_osd_size=function() return width,height end,
     get_property=function() return "old terminal status" end,
     set_property=function() end,
-    create_osd_overlay=function() return {update=function() updates=updates+1 end,remove=function() removes=removes+1 end} end,
+    set_key_bindings=function(list) mouse_bindings=list end,
+    enable_key_bindings=function() mouse_enabled=true end,
+    disable_key_bindings=function() mouse_enabled=false end,
+    set_mouse_area=function(...) bounds={...} end,
+    get_mouse_pos=function() return x,y end,
+    create_osd_overlay=function() return {update=function(self) updates=updates+1; paint=self.data end,remove=function() removes=removes+1 end} end,
     add_periodic_timer=function(seconds,fn)
         local timer={killed=false,fn=fn}; timer.kill=function(self) self.killed=true end
         timers[#timers+1]=timer; return timer
     end,
 }
-local rows={{id="a",label="First",run=function() end},{id="b",label="Second",run=function() end}}
+mp.add_timeout=mp.add_periodic_timer
+local rows={{id="a",label="First",tip="Description for the first option.",run=function() end},{id="b",label="Second",run=function() end}}
 local function verify()
     local sheet=dofile(os.getenv("MPVRP_MODULES").."/sheet.lua")
-    local ui=sheet({sections={},rows=function() return rows end,refresh=function() end,
+    local ui=sheet({sections={},animate=false,rows=function() return rows end,refresh=function() end,
         closed=function() closed=closed+1 end})
     ui.show("Test")
     local before=updates
     ui.draw()
     assert(updates==before,"Unchanged frame was redrawn")
+    assert(bounds[1]<24 and bounds[2]<24 and bounds[4]<height*.65 and mouse_enabled)
+    assert(mouse_bindings[3][1]=="mbtn_left","Pointer clicks must use the scoped mouse section")
+    local first=ui.hits[1]
+    x,y=(first.x+1)*height/820,(first.y+1)*height/820
+    ui.mouse_moved(nil,{hover=true})
+    local hover=timers[#timers]
+    hover.killed=true
+    hover.fn()
+    assert(paint:find("Description for the first option.",1,true),"Hover help was not drawn")
+    ui.mouse_moved(nil,{hover=false})
+    assert(not paint:find("Description for the first option.",1,true),"Hover help survived pointer exit")
     bindings.DOWN()
     assert(ui.memory.Test.focus==2)
     table.insert(rows,1,{id="new",label="Added asynchronously"})
@@ -43,10 +62,10 @@ local function verify()
     assert(pasted=="123456 日本語" and bindings.DOWN,"Text entry did not restore controls")
     width,height=480,720
     ui.draw()
-    assert(ui.text_columns()==42,"Confirmation width disagrees with the narrow sheet")
+    assert(ui.text_columns()>30 and bounds[3]<width,"Narrow sheet exceeded the window")
     for _,hit in ipairs(ui.hits) do assert(hit.x<hit.r and hit.y<hit.b,"Invalid resized hit target") end
     ui.close()
-    assert(next(bindings)==nil and next(observed)==nil and closed==1)
+    assert(next(bindings)==nil and next(observed)==nil and closed==1 and not mouse_enabled)
     for _,timer in ipairs(timers) do assert(timer.killed,"Timer remained active after close") end
     before=updates
     ui.draw()
@@ -55,4 +74,4 @@ end
 local ok,err=pcall(verify)
 mp=original
 if not ok then mp.msg.error(err) end
-mp.add_timeout(0,function() quit("quit",ok and "0" or "1") end)
+mp.add_timeout(.15,function() quit("quit",ok and "0" or "1") end)

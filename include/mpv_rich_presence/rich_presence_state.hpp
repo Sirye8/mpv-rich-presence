@@ -74,6 +74,7 @@ namespace mpvrp
 
         std::mutex anime_mutex;
         std::atomic<int> file_load_id = 0;
+        std::atomic<int> completed_anime_lookup = -1;
 
         std::atomic<bool> safe_episode{false};
         bool is_anime = false;
@@ -119,6 +120,7 @@ namespace mpvrp
         std::condition_variable worker_cv;
         bool has_pending_lookup = false;
         nlohmann::json pending_correction;
+        bool pending_strict_anime_match = false;
         int pending_load_id = 0;
         std::string pending_filename = "";
         std::string pending_file_path = "";

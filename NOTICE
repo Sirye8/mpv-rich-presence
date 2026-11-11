@@ -70,9 +70,14 @@ Third-Party Components & Licenses:
 
 SQLite is in the public domain. See licenses/LICENSE-SQLite.
 
+The Windows ZIP includes the Python Software Foundation's x64 embeddable
+distribution. Its license and third-party notices are in
+scripts/mpv-rich-presence/runtime/LICENSE.txt.
+
 Optional metadata services:
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
 - TVmaze data is provided by TVmaze under CC BY-SA. https://www.tvmaze.com/api
+- Film titles and release dates from Wikidata are available under CC0. https://www.wikidata.org/
 - MusicBrainz metadata is provided by the MetaBrainz Foundation and its contributors.
 - Cover images are supplied by their respective providers and rights holders.
 - AcoustID supplies optional fingerprint matches. Chromaprint is installed separately.

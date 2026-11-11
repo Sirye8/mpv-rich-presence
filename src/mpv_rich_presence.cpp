@@ -566,7 +566,8 @@ static bool is_media_title_match(const std::string& query, const anilist_media& 
 }
 
 // Anime lookup logic processed in worker thread
-static void process_anime_lookup(rich_presence_state& state, const std::string& filename_str, const std::string& file_path_str, int current_load_id, const nlohmann::json& correction)
+static void process_anime_lookup(rich_presence_state& state, const std::string& filename_str, const std::string& file_path_str,
+                                 int current_load_id, const nlohmann::json& correction, bool strict_match)
 {
     if (correction.value("not_anime", false) || filename_str.empty())
         return;
@@ -625,6 +626,12 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     }
 
     bool confident = correction.contains("id");
+    auto exact_title = [](const anilist_media& item, const std::string& query)
+    {
+        const auto wanted = to_lower(query);
+        return to_lower(item.title) == wanted || std::any_of(item.matching_titles.begin(),item.matching_titles.end(),
+            [&](const auto& name) { return to_lower(name) == wanted; });
+    };
     auto unique_exact_title = [](const auto& page, const auto& chosen, const std::string& query)
     {
         const auto wanted = to_lower(query);
@@ -655,7 +662,8 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         std::optional<anilist_media> best = std::nullopt;
         for (const auto& m : page)
         {
-            if (!is_media_title_match(a_title, m))
+            if (strict_match ? (!exact_title(m, q_str) && !exact_title(m, a_title))
+                             : !is_media_title_match(a_title, m))
                 continue;
 
             std::string title_lower = to_lower(m.title);
@@ -728,7 +736,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         auto base_page = search_anilist_page(a_title);
         for (const auto& m : base_page)
         {
-            if (is_media_title_match(a_title, m))
+            if (strict_match ? exact_title(m, a_title) : is_media_title_match(a_title, m))
             {
                 confident = parsed_season<=1 && parsed_part==0 && unique_exact_title(base_page,m,a_title);
                 candidate = m;
@@ -850,6 +858,7 @@ static void anime_worker_loop(rich_presence_state& state)
     while (true)
     {
         int current_load_id = 0;
+        bool strict_match = false;
         nlohmann::json correction;
         std::string filename_str;
         std::string file_path_str;
@@ -868,6 +877,7 @@ static void anime_worker_loop(rich_presence_state& state)
 
             current_load_id = state.pending_load_id;
             correction = state.pending_correction;
+            strict_match = state.pending_strict_anime_match;
             filename_str = std::move(state.pending_filename);
             file_path_str = std::move(state.pending_file_path);
             state.has_pending_lookup = false;
@@ -875,12 +885,21 @@ static void anime_worker_loop(rich_presence_state& state)
 
         try
         {
-            process_anime_lookup(state, filename_str, file_path_str, current_load_id, correction);
+            process_anime_lookup(state, filename_str, file_path_str, current_load_id, correction, strict_match);
         }
         catch (...)
         {
         }
+        state.completed_anime_lookup = current_load_id;
     }
+}
+
+static bool use_anilist(const rich_presence_state& state)
+{
+    if (state.correction.value("not_anime", false)) return false;
+    const auto source = state.sources.value("source", std::string("auto"));
+    if (state.correction.contains("id") || source == "original") return true;
+    return source == "auto" && !state.scope_path.starts_with("stream-");
 }
 
 // React to configuration or eligibility changes
@@ -912,7 +931,7 @@ static void on_eligibility_changed(rich_presence_state& state)
     {
         // If newly eligible and video media is loaded without resolved anime metadata, enqueue lookup
         if (state.media_has_video && state.provider.empty() && !state.current_file_path.empty() &&
-            state.sources.value("source",std::string("original")) == "original")
+            use_anilist(state))
         {
             bool needs_lookup = false;
             {
@@ -931,6 +950,7 @@ static void on_eligibility_changed(rich_presence_state& state)
                     state.pending_filename = filename_str;
                     state.pending_file_path = state.current_file_path;
                     state.pending_correction = state.correction;
+                    state.pending_strict_anime_match = state.sources.value("source", std::string("auto")) == "auto";
                     state.has_pending_lookup = true;
                 }
                 state.worker_cv.notify_one();
@@ -965,8 +985,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             { if (!val.is_string()) return false; }
             else if (!val.is_boolean()) return false;
         }
-        if (category == "sources" && !(key == "source" && (val == "original" || val == "tmdb-movie" || val == "tmdb-tv" ||
-            val == "tvmaze" || val == "musicbrainz" || val == "acoustid" || val == "stream"))) return false;
+        if (category == "sources" && !(key == "source" && (val == "auto" || val == "original" || val == "tmdb-movie" || val == "tmdb-tv" ||
+            val == "tvmaze" || val == "wikidata" || val == "musicbrainz" || val == "acoustid" || val == "stream"))) return false;
         if (category == "match" && !((key == "id" && val.is_number_integer() && val > 0 && val <= INT32_MAX)
             || (key == "offset" && val.is_number_integer() && val >= -9999 && val <= 9999)
             || (key == "not_anime" && val.is_boolean()))) return false;
@@ -1007,7 +1027,8 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 {
                     state.store_failed = true;
                     auto path = fs::u8path(req.at("database").get<std::string>());
-                    state.store = std::make_unique<profile_store>(path);
+                    auto legacy = fs::u8path(req.value("legacy_database", std::string{}));
+                    state.store = std::make_unique<profile_store>(path, legacy);
                     state.store_failed = false;
                 }
                 read_profiles(state);
@@ -1027,7 +1048,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     job["media"] = state.anime_anilist_id;
                 }
                 state.store->put("job", generate_instance_id(), job);
-                const char* args[] = {"script-message-to","rich_presence_conf","start-service",state.instance_id.c_str(),nullptr};
+                const char* args[] = {"script-message-to","mpv_rich_presence","start-service",state.instance_id.c_str(),nullptr};
                 mpv_command(state.mpv,args);
                 return;
             }
@@ -1292,13 +1313,14 @@ static void handle_file_loaded(rich_presence_state& state)
     }
 
     // Only dispatch background anime lookup if eligible video file
-    if (state.media_has_video && lookup_allowed(state) && state.provider.empty() && state.sources.value("source",std::string("original")) == "original")
+    if (state.media_has_video && lookup_allowed(state) && state.provider.empty() && use_anilist(state))
     {
         std::lock_guard<std::mutex> lock(state.worker_mutex);
         state.pending_load_id = current_load_id;
         state.pending_filename = filename_str;
         state.pending_file_path = state.current_file_path;
         state.pending_correction = state.correction;
+        state.pending_strict_anime_match = state.sources.value("source", std::string("auto")) == "auto";
         state.has_pending_lookup = true;
         state.worker_cv.notify_one();
     }
@@ -1373,8 +1395,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     state.worker_thread = std::thread(anime_worker_loop, std::ref(state));
 
     // Initialization
-    mpv_print(state.mpv, "Pinging rich_presence_conf for config data...");
-    auto ping_args = std::array<const char*, 4> { "script-message-to", "rich_presence_conf", "ping", nullptr };
+    mpv_print(state.mpv, "Pinging mpv_rich_presence for config data...");
+    auto ping_args = std::array<const char*, 4> { "script-message-to", "mpv_rich_presence", "ping", nullptr };
     mpv_command(state.mpv, ping_args.data());
 
     std::atomic<bool> is_ready = false;
@@ -1684,7 +1706,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             {
                 state.last_notice = message;
                 auto notice = response.value("message",std::string{});
-                const char* args[] = {"script-message-to","rich_presence_conf","notice",notice.c_str(),nullptr};
+                const char* args[] = {"script-message-to","mpv_rich_presence","notice",notice.c_str(),nullptr};
                 mpv_command(state.mpv,args);
             }
             auto epoch = state.store->get("generation","cache").value("id",std::string{});
@@ -1718,8 +1740,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         }
         const bool watch = lookup_allowed(state) && state.tracking.value("mode", std::string("off")) != "off";
         bool allowed = lookup_allowed(state);
-        auto source = state.sources.value("source",std::string("original"));
-        if (!state.provider.empty() || state.correction.value("not_anime",false) || !allowed) source = "original";
+        auto source = state.sources.value("source",std::string("auto"));
+        const auto load_id = state.file_load_id.load();
+        const bool anime_pending = state.media_has_video && use_anilist(state) &&
+            state.pending_load_id == load_id && state.completed_anime_lookup != load_id;
+        const bool pinned_anime = state.correction.contains("id") && !state.correction.value("not_anime", false);
+        if (!state.provider.empty() || !allowed || media.anime || pinned_anime || anime_pending)
+            source = "original";
         const bool extra = source != "original";
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
@@ -1741,13 +1768,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 sample["artist"] = media.artist;
                 sample["album"] = media.album;
                 sample["video"] = media.video;
+                sample["remote"] = state.scope_path.starts_with("stream-");
+                if (!sample["remote"].get<bool>()) sample["filename"] = get_mpv_string(state.mpv, "filename");
                 double duration_s = 0;
                 mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
                 sample["duration"] = duration_s;
                 sample["recording"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_TRACKID");
                 sample["release"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_ALBUMID");
                 sample["tmdb"] = get_mpv_string(state.mpv,"metadata/by-key/TMDB");
-                if (source == "stream")
+                if (source == "stream" || (source == "auto" && state.scope_path.starts_with("stream-")))
                 {
                     static const std::regex page(R"(^https://(?:www\.)?(?:youtube\.com/watch\?v=[A-Za-z0-9_-]{11}|youtu\.be/[A-Za-z0-9_-]{11}|twitch\.tv/[A-Za-z0-9_]+)$)");
                     if (std::regex_match(state.current_file_path,page)) sample["page"] = state.current_file_path;
@@ -1767,7 +1796,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             observed = watch;
             if ((extra || watch) && !service_started)
             {
-                const char* args[] = {"script-message-to","rich_presence_conf","start-service",state.instance_id.c_str(),nullptr};
+                const char* args[] = {"script-message-to","mpv_rich_presence","start-service",state.instance_id.c_str(),nullptr};
                 mpv_command(state.mpv,args);
                 service_started = true;
             }
@@ -1806,7 +1835,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"account",state.store ? state.store->get("account","current") : nlohmann::json::object()},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?
                     state.store->pending() : nlohmann::json::array()},
-                {"sources",state.sources},{"provider",media.provider.value("provider",std::string("local"))},
+                {"sources",state.sources},{"provider",media.anime ? "anilist" : media.provider.value("provider",std::string("local"))},
                 {"hard_block",state.hard_block},{"records", state.store && state.panel_page=="Saved data" ? state.store->records() : nlohmann::json::array()},
                 {"reason", !state.config_received ? "Waiting for configuration" : state.store_failed ? "Saved data unavailable" :
                     state.private_session ? "Private session" : !state.is_enabled.value_or(false) ? "Sharing off" :
@@ -1815,7 +1844,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     state.rpc_hidden_by_timeout ? "Pause timeout" : !is_ready ? "Waiting for Discord SDK" : "Sharing"},
                 {"card", format_activity(media, draft)}, {"nonce", state.snapshot_request}
             }.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-            const char* args[] = {"script-message-to", "rich_presence_conf", "snapshot", snapshot.c_str(), nullptr};
+            const char* args[] = {"script-message-to", "mpv_rich_presence", "snapshot", snapshot.c_str(), nullptr};
             mpv_command(state.mpv, args);
             state.snapshot_request.clear();
         }

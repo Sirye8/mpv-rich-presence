@@ -11,7 +11,8 @@ namespace mpvrp
     {
         sqlite3* db = nullptr;
     public:
-        explicit profile_store(const std::filesystem::path& path);
+        explicit profile_store(const std::filesystem::path& path,
+                               const std::filesystem::path& legacy = {});
         ~profile_store();
         profile_store(const profile_store&) = delete;
         profile_store& operator=(const profile_store&) = delete;

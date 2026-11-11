@@ -24,7 +24,14 @@ from account import (
     read_entry,
     save_progress,
 )
-from providers import candidates, details, fingerprint
+from providers import (
+    candidates,
+    details,
+    fingerprint,
+    match_name,
+    musicbrainz_album,
+    video_query,
+)
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
 
@@ -543,18 +550,36 @@ class Worker:
             raise AccountError("Unknown action.")
 
     def recognize(self, p):
-        source = p.get("source", "original")
+        profile_source = p.get("source", "original")
         refresh = self.get("refresh", self.window)
         if refresh != getattr(self, "last_refresh", None):
             self.resolved = None
             self.last_refresh = refresh
-        key = (p.get("session"), source, p.get("title"), p.get("allowed"))
+        key = (p.get("session"), profile_source, p.get("title"), p.get("allowed"))
         if key == self.resolved:
             return
         self.resolved = key
-        if source == "original" or not p.get("allowed"):
+        if profile_source == "original" or not p.get("allowed"):
             return
         raw = p.get("title", "")
+        source = profile_source
+        title, year, episode, airdate = raw, "", None, None
+        if p["video"] and not p.get("remote"):
+            title, year, episode, airdate = video_query(raw)
+            filename = video_query(p.get("filename", ""))
+            if filename[2] or filename[3] or not title or (filename[1] and not year):
+                title, year, episode, airdate = filename
+        if source == "auto":
+            if p.get("remote"):
+                if not p.get("page") and not p.get("channel"):
+                    return
+                source = "stream"
+            elif not p["video"]:
+                source = "musicbrainz"
+            elif episode or airdate:
+                source = "tvmaze"
+            else:
+                source = "wikidata"
         generation = self.get("generation", "data")
         hit = None
         if source == "stream":
@@ -578,31 +603,30 @@ class Worker:
                 kind="recording",
                 id=p["recording"],
                 name=raw,
+                artist=p.get("artist", ""),
+                album=p.get("album", ""),
                 link="https://musicbrainz.org/recording/" + p["recording"],
             )
             if re.fullmatch(r"[0-9a-fA-F-]{36}", p.get("release", "")):
                 hit["cover"] = (
                     "https://coverartarchive.org/release/" + p["release"] + "/front-250"
                 )
-        elif (source in ("tmdb-movie", "tmdb-tv", "tvmaze")) == p["video"]:
+        elif (source in ("tmdb-movie", "tmdb-tv", "tvmaze", "wikidata")) == p[
+            "video"
+        ] and not p.get("remote"):
             # Search only a title. Never pass a path, URI or query string.
-            if "://" in raw or "?" in raw or "/" in raw or chr(92) in raw:
+            if not title or re.search(r"[/\\?&#\x00-\x1f]|://", title):
                 return
-            season = re.search(r"\bS(\d+)E(\d+)\b", raw, re.I)
-            airdate = (
-                re.search(r"\b(\d{4}-\d{2}-\d{2})\b", raw)
-                if source == "tvmaze"
-                else None
-            )
-            numbering = season or airdate
-            title = (raw[: numbering.start()] if numbering else raw).strip(" ._-")
-            if title.lower().endswith((".mkv", ".mp4", ".avi", ".flac", ".mp3")):
-                title = title.rsplit(".", 1)[0]
-            title = title.replace(".", " ").strip()
-            if not title:
+            if (
+                source == "musicbrainz"
+                and profile_source == "auto"
+                and not p.get("artist")
+            ):
                 return
             cache_key = (
-                source
+                profile_source
+                + ":"
+                + source
                 + "/"
                 + hashlib.sha256(
                     json.dumps(
@@ -611,7 +635,9 @@ class Worker:
                             p.get("artist"),
                             p.get("album"),
                             p.get("tmdb"),
-                            numbering.groups() if numbering else None,
+                            year,
+                            episode,
+                            airdate,
                             p.get("duration"),
                             p["path"] if source == "acoustid" else "",
                             refresh,
@@ -638,30 +664,46 @@ class Worker:
                         name=title,
                         title=title,
                     )
-                else:
-                    if source == "acoustid":
-                        rows = fingerprint(
-                            p["path"], self.settings, self.throttle, valid
-                        )
-                    else:
-                        rows = candidates(
-                            source,
-                            title,
-                            self.settings,
-                            self.throttle,
-                            artist=p.get("artist", ""),
-                            album=p.get("album", ""),
-                        )
+                    return details(
+                        source, chosen, self.settings, self.throttle, episode, airdate
+                    )
+
+                if source == "acoustid":
+                    rows = fingerprint(p["path"], self.settings, self.throttle, valid)
                     exact = [
-                        r for r in rows if r["name"].casefold() == title.casefold()
+                        r for r in rows if match_name(r["name"]) == match_name(title)
                     ]
-                    if source == "musicbrainz":
+                    return dict(exact[0], provider=source) if len(exact) == 1 else None
+
+                def matching(provider):
+                    valid()
+                    query = title.replace(":", " ")
+                    if provider.startswith("tmdb-") and year:
+                        query += f" ({year})"
+                    rows = candidates(
+                        provider,
+                        query,
+                        self.settings,
+                        self.throttle,
+                        artist=p.get("artist", ""),
+                        album=p.get("album", ""),
+                    )
+                    exact = [
+                        r
+                        for r in rows
+                        if match_name(r.get("match", r["name"])) == match_name(title)
+                    ]
+                    if year and provider in ("wikidata", "tvmaze"):
+                        exact = [
+                            r for r in exact if year in r.get("years", [r.get("year")])
+                        ]
+                    if provider == "musicbrainz":
                         for tag in ("artist", "album"):
                             if p.get(tag):
                                 exact = [
                                     r
                                     for r in exact
-                                    if r.get(tag, "").casefold() == p[tag].casefold()
+                                    if match_name(r.get(tag, "")) == match_name(p[tag])
                                 ]
                         if p.get("duration", 0) > 0:
                             exact = [
@@ -670,18 +712,71 @@ class Worker:
                                 if not r.get("duration_ms")
                                 or abs(r["duration_ms"] / 1000 - p["duration"]) <= 3
                             ]
-                    chosen = exact[0] if len(exact) == 1 else None
-                if chosen:
+                        recordings = {r["id"] for r in exact}
+                        if len(recordings) == 1 and len(exact) > 1:
+                            # Several editions can share a recording. Keep the
+                            # track identity and omit uncertain release art.
+                            track = dict(exact[0])
+                            track.pop("cover", None)
+                            track["album"] = p.get("album", "")
+                            return [track]
+                    return exact
+
+                if (
+                    profile_source == "auto"
+                    and source in ("wikidata", "tvmaze")
+                    and not airdate
+                ):
+                    preferred = "tmdb-movie" if source == "wikidata" else "tmdb-tv"
+                    if p.get("tmdb", "").isdigit():
+                        tmdb_hits = [
+                            dict(
+                                id=int(p["tmdb"]),
+                                kind=preferred.split("-")[1],
+                                name=title,
+                            )
+                        ]
+                    else:
+                        try:
+                            tmdb_hits = matching(preferred)
+                        except AccountError:
+                            tmdb_hits = []
+                    if len(tmdb_hits) == 1:
+                        valid()
+                        try:
+                            return details(
+                                preferred,
+                                tmdb_hits[0],
+                                self.settings,
+                                self.throttle,
+                                episode,
+                                airdate,
+                            )
+                        except AccountError:
+                            # A movie or show may be known even if details are unavailable.
+                            pass
+
+                provider = source
+                try:
+                    exact = matching(provider)
+                except (OSError, ValueError):
+                    if provider != "musicbrainz":
+                        raise
+                    exact = []
+                if provider == "musicbrainz" and len(exact) != 1:
                     valid()
-                    return details(
-                        source,
-                        chosen,
-                        self.settings,
-                        self.throttle,
-                        season.groups() if season else None,
-                        airdate[1] if airdate else None,
+                    return musicbrainz_album(
+                        title, p.get("artist", ""), p.get("album", ""), self.throttle
                     )
-                return None
+                if profile_source == "auto" and provider == "wikidata" and not exact:
+                    provider = "tvmaze"
+                    exact = matching(provider)
+                if len(exact) != 1:
+                    return None
+                valid()
+                return details(
+                    provider, exact[0], self.settings, self.throttle, episode, airdate
+                )
 
             hit = self.cached_fetch(cache_key, "hit", fetch_hit, valid)
         with self.transaction():
@@ -696,7 +791,12 @@ class Worker:
             self.put(
                 "auto",
                 self.window,
-                dict(session=p["session"], source=source, title=raw, hit=hit or {}),
+                dict(
+                    session=p["session"],
+                    source=profile_source,
+                    title=raw,
+                    hit=hit or {},
+                ),
             )
 
     def sample(self, credit_only=False):
@@ -976,7 +1076,11 @@ class Worker:
 
 if __name__ == "__main__":
     settings = json.loads(sys.argv[3]) if len(sys.argv) > 3 else json.load(sys.stdin)
-    config = Path(sys.argv[1]).parent.parent / "script-opts" / "rich-presence.conf"
+    config = (
+        Path(sys.argv[4])
+        if len(sys.argv) > 4
+        else (Path(sys.argv[1]).parent.parent / "script-opts" / "rich-presence.conf")
+    )
     if config.is_file():
         for line in config.read_text(encoding="utf-8-sig").splitlines():
             key, sep, value = line.partition("=")
