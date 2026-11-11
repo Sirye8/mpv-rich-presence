@@ -4,6 +4,33 @@ import assert from "node:assert/strict";
 import worker from "../tools/login/exchange.mjs";
 import relay from "../tools/cloudflare/worker.mjs";
 
+test("TMDB relay accepts only public metadata requests and keeps the credential server-side", async t => {
+  const root = "https://login.example.org";
+  const request = path => new Request(root + path, { headers: { Cookie: "private", Authorization: "private" } });
+  const env = { TMDB_READ_TOKEN: "test-token", TMDB_LIMIT: { limit: async () => ({ success: true }) } };
+  assert.deepEqual(await (await relay.fetch(request("/metadata/health"))).json(), { configured: false });
+  assert.equal((await relay.fetch(request("/metadata/search/movie?query=Interstellar"))).status, 503);
+  const upstream = t.mock.method(globalThis, "fetch", async (target, options) => {
+    assert.equal(target.href, "https://api.themoviedb.org/3/search/movie?query=Interstellar&year=2014");
+    assert.equal(options.headers.Authorization, "Bearer test-token");
+    assert.equal(options.headers.Cookie, undefined);
+    assert.equal(options.redirect, "manual");
+    return Response.json({ results: [{ id: 157336, title: "Interstellar", overview: "Unused data" }] });
+  });
+  for (const path of ["/metadata/account", "/metadata/search/movie?query=%2Fprivate%2Fpath",
+    "/metadata/search/movie?query=Interstellar&append_to_response=account",
+    "/metadata/search/movie?query=One&query=Two", "/metadata/movie/12?api_key=bad"]) {
+    assert.ok((await relay.fetch(request(path), env)).status >= 400);
+  }
+  assert.equal(upstream.mock.callCount(), 0);
+  const response = await relay.fetch(request("/metadata/search/movie?query=Interstellar&year=2014"), env);
+  assert.deepEqual(await response.json(), { results: [{ id: 157336, title: "Interstellar" }] });
+  assert.equal(response.headers.get("Cache-Control"), "no-store");
+  env.TMDB_LIMIT.limit = async () => ({ success: false });
+  assert.equal((await relay.fetch(request("/metadata/search/movie?query=Interstellar"), env)).status, 429);
+  assert.equal(upstream.mock.callCount(), 1);
+});
+
 test("a viewer exchanges one code with the original verifier", async t => {
   const origin = "https://login.example.org";
   const env = { ANILIST_CLIENT_ID: "55822", ANILIST_CLIENT_SECRET: "test-only" };

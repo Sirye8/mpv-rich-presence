@@ -5,5 +5,10 @@
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": false },
-  "vars": { "ANILIST_CLIENT_ID": "55822" }
+  "vars": { "ANILIST_CLIENT_ID": "55822" },
+  "ratelimits": [{
+    "name": "TMDB_LIMIT",
+    "namespace_id": "5582201",
+    "simple": { "limit": 30, "period": 60 }
+  }]
 }

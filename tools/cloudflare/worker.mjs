@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Fixed public entrance. The exchange and client credential live on Netlify.
+import { metadata } from "./metadata.mjs";
+
 const upstream = "https://mpv-anilist-login.netlify.app";
 const routes = {"/health":"GET", "/start":"POST", "/callback":"GET", "/redeem":"POST"};
 
 export default {
-  async fetch(request) {
+  async fetch(request, env = {}) {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/metadata/")) return metadata(request, url, env);
     if (routes[url.pathname] !== request.method) return new Response(null, {status:404});
     if (Number(request.headers.get("Content-Length")) > 8192 || url.search.length > 8192)
       return new Response(null, {status:413});
