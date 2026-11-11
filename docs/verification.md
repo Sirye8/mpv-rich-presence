@@ -20,6 +20,7 @@ The implementation follows the in-player interface and tracking guide based on v
 - `python -B tests/package_tests.py <installed-package> <mpv-executable>`: installed Lua modules, stable focus, unchanged-frame suppression, text handoff, resized hit targets, cleanup, Cancel, Apply and restart.
 - `tests/panel_smoke.lua`: captures the seven panels from an isolated mpv install. Allow each page to reach the video output before taking its screenshot.
 - `python -B tests/live_signin.py <installed-package> <mpv-executable>`: interactive, read-only public sign-in. It verifies Viewer, checks session-only storage, closes mpv and deletes the disposable config. It never edits the list.
+- `python -B tests/live_anime_match.py <package-or-install> <mpv-executable> <ffmpeg-executable>`: verify that the season-two filename resolves to Youjo Senki II episode 8 and an AniList outage keeps movie and TV fallback disabled. The test generates its own footage and disables Discord sharing.
 
 The public sign-in check passed on Windows on 6 November 2026. Windows and Linux builds, regression suites and packaged menu checks have passed. Captures have been inspected over bright footage in wide and narrow windows. Tests use disposable data rather than the user's installed mpv configuration.
 

@@ -44,9 +44,9 @@ The minus and plus controls edit a draft. Apply shows the account and proposed c
 
 ### Recognition and templates
 
-**Automatic** checks AniList for anime, prefers TMDB for movies and TV when the shared service is available, and looks up tagged tracks in MusicBrainz. Wikidata provides film titles and years, and TVmaze provides series and episode details when TMDB is unavailable. Cover Art Archive supplies available release artwork. Ambiguous matches keep the local title and tags.
+**Automatic** checks AniList first for video. It tries movie or TV recognition only after AniList finishes without a match. If AniList cannot complete the lookup, the card uses the local title. Movie and TV matching prefers TMDB, with Wikidata and TVmaze as fallbacks. Audio-only files use MusicBrainz for tagged tracks and Cover Art Archive for available artwork.
 
-Choose **Recognition & folders → Automatic source** to set a file or folder override. **Original** uses the earlier AniList and local metadata behavior. You can supply your own TMDB read token in `tmdb_key`. AcoustID fingerprinting requires a client key and `fpcalc` on PATH and runs only when selected. See the [shared TMDB setup](docs/tmdb-metadata.md).
+Choose **Recognition & folders → Automatic source** to set a file or folder override. Automatic and Original use the same anime resolver as v1.0.10, including season and sequel matching. Original uses local titles and tags for other media. You can supply your own TMDB read token in `tmdb_key`. AcoustID fingerprinting requires a client key and `fpcalc` on PATH and runs only when selected. See the [shared TMDB setup](docs/tmdb-metadata.md).
 
 Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `scripts/mpv-rich-presence/data.sqlite3` under the mpv config directory.
 

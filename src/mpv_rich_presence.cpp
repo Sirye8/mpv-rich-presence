@@ -403,13 +403,16 @@ static void clear_anilist_cache()
     anilist_id_cache.clear();
 }
 
-static std::vector<anilist_media> search_anilist_page(const std::string& search)
+static std::vector<anilist_media> search_anilist_page(const std::string& search, bool& confirmed)
 {
     if (search.empty() || search.size() > 256 || search.find("://") != std::string::npos ||
         search.starts_with("/") || search.starts_with("\\") || (search.size() > 2 && search[1] == ':' &&
         (search[2] == '/' || search[2] == '\\')) ||
         (search.find('?') != std::string::npos && search.find('=') != std::string::npos))
+    {
+        confirmed = false;
         return {};
+    }
     auto generation = cache_generation.load();
     {
         std::lock_guard<std::mutex> lock(anilist_cache_mutex);
@@ -441,11 +444,16 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search)
             if (parse_anilist_page_response(j, results))
             {
                 std::lock_guard<std::mutex> lock(anilist_cache_mutex);
-                if (generation != cache_generation.load()) return {};
+                if (generation != cache_generation.load())
+                {
+                    confirmed = false;
+                    return {};
+                }
                 auto now = chrono::steady_clock::now();
                 for (const auto& item : results)
                     anilist_id_cache[item.id] = {item, now + 24h};
                 anilist_page_cache[search] = {results, now + (results.empty() ? 5min : 24h)};
+                return results;
             }
         }
         catch (...)
@@ -453,6 +461,7 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search)
         }
     }
 
+    confirmed = false;
     return results;
 }
 
@@ -567,7 +576,7 @@ static bool is_media_title_match(const std::string& query, const anilist_media& 
 
 // Anime lookup logic processed in worker thread
 static void process_anime_lookup(rich_presence_state& state, const std::string& filename_str, const std::string& file_path_str,
-                                 int current_load_id, const nlohmann::json& correction, bool strict_match)
+                                 int current_load_id, const nlohmann::json& correction, bool& confirmed)
 {
     if (correction.value("not_anime", false) || filename_str.empty())
         return;
@@ -626,12 +635,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     }
 
     bool confident = correction.contains("id");
-    auto exact_title = [](const anilist_media& item, const std::string& query)
-    {
-        const auto wanted = to_lower(query);
-        return to_lower(item.title) == wanted || std::any_of(item.matching_titles.begin(),item.matching_titles.end(),
-            [&](const auto& name) { return to_lower(name) == wanted; });
-    };
+    // Confidence controls tracking eligibility only. Selection follows v1.0.10.
     auto unique_exact_title = [](const auto& page, const auto& chosen, const std::string& query)
     {
         const auto wanted = to_lower(query);
@@ -655,15 +659,14 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
             return;
 
-        auto page = search_anilist_page(q_str);
+        auto page = search_anilist_page(q_str, confirmed);
         if (page.empty())
             continue;
 
         std::optional<anilist_media> best = std::nullopt;
         for (const auto& m : page)
         {
-            if (strict_match ? (!exact_title(m, q_str) && !exact_title(m, a_title))
-                             : !is_media_title_match(a_title, m))
+            if (!is_media_title_match(a_title, m))
                 continue;
 
             std::string title_lower = to_lower(m.title);
@@ -733,10 +736,10 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
             return;
 
-        auto base_page = search_anilist_page(a_title);
+        auto base_page = search_anilist_page(a_title, confirmed);
         for (const auto& m : base_page)
         {
-            if (strict_match ? exact_title(m, a_title) : is_media_title_match(a_title, m))
+            if (is_media_title_match(a_title, m))
             {
                 confident = parsed_season<=1 && parsed_part==0 && unique_exact_title(base_page,m,a_title);
                 candidate = m;
@@ -858,7 +861,6 @@ static void anime_worker_loop(rich_presence_state& state)
     while (true)
     {
         int current_load_id = 0;
-        bool strict_match = false;
         nlohmann::json correction;
         std::string filename_str;
         std::string file_path_str;
@@ -877,20 +879,22 @@ static void anime_worker_loop(rich_presence_state& state)
 
             current_load_id = state.pending_load_id;
             correction = state.pending_correction;
-            strict_match = state.pending_strict_anime_match;
             filename_str = std::move(state.pending_filename);
             file_path_str = std::move(state.pending_file_path);
             state.has_pending_lookup = false;
         }
 
+        bool confirmed = true;
         try
         {
-            process_anime_lookup(state, filename_str, file_path_str, current_load_id, correction, strict_match);
+            process_anime_lookup(state, filename_str, file_path_str, current_load_id, correction, confirmed);
         }
         catch (...)
         {
+            confirmed = false;
         }
-        state.completed_anime_lookup = current_load_id;
+        // A failed search does not establish that the file is non-anime.
+        if (confirmed) state.completed_anime_lookup = current_load_id;
     }
 }
 
@@ -950,7 +954,6 @@ static void on_eligibility_changed(rich_presence_state& state)
                     state.pending_filename = filename_str;
                     state.pending_file_path = state.current_file_path;
                     state.pending_correction = state.correction;
-                    state.pending_strict_anime_match = state.sources.value("source", std::string("auto")) == "auto";
                     state.has_pending_lookup = true;
                 }
                 state.worker_cv.notify_one();
@@ -1320,7 +1323,6 @@ static void handle_file_loaded(rich_presence_state& state)
         state.pending_filename = filename_str;
         state.pending_file_path = state.current_file_path;
         state.pending_correction = state.correction;
-        state.pending_strict_anime_match = state.sources.value("source", std::string("auto")) == "auto";
         state.has_pending_lookup = true;
         state.worker_cv.notify_one();
     }
@@ -1622,8 +1624,10 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         media.playtime_left = playtime_left_s;
         media.now = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         media.session_start = state.session_start;
+        int completed_anime_lookup;
         {
             std::lock_guard lock(state.anime_mutex);
+            completed_anime_lookup = state.completed_anime_lookup;
             media.anime = state.is_anime;
             if (media.anime)
             {
@@ -1742,10 +1746,10 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         bool allowed = lookup_allowed(state);
         auto source = state.sources.value("source",std::string("auto"));
         const auto load_id = state.file_load_id.load();
-        const bool anime_pending = state.media_has_video && use_anilist(state) &&
-            state.pending_load_id == load_id && state.completed_anime_lookup != load_id;
+        const bool anime_unconfirmed = state.media_has_video && use_anilist(state) &&
+            state.pending_load_id == load_id && completed_anime_lookup != load_id;
         const bool pinned_anime = state.correction.contains("id") && !state.correction.value("not_anime", false);
-        if (!state.provider.empty() || !allowed || media.anime || pinned_anime || anime_pending)
+        if (!state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
             source = "original";
         const bool extra = source != "original";
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;

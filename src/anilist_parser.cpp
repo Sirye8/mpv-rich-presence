@@ -73,8 +73,10 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
         {
             std::string native = media["title"]["native"].get<std::string>();
             if (!native.empty())
+            {
                 result.native = native;
                 result.matching_titles.push_back(native);
+            }
         }
     }
 
