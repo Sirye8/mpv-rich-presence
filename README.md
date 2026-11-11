@@ -46,7 +46,20 @@ The minus and plus controls edit a draft. Apply shows the account and proposed c
 
 **Automatic** checks AniList first for video. It tries movie or TV recognition only after AniList finishes without a match. If AniList cannot complete the lookup, the card uses the local title. Movie and TV matching prefers TMDB, with Wikidata and TVmaze as fallbacks. Audio-only files use MusicBrainz for tagged tracks and Cover Art Archive for available artwork.
 
-Choose **Recognition & folders → Automatic source** to set a file or folder override. Automatic and Original use the same anime resolver as v1.0.10, including season and sequel matching. Original uses local titles and tags for other media. You can supply your own TMDB read token in `tmdb_key`. AcoustID fingerprinting requires a client key and `fpcalc` on PATH and runs only when selected. See the [shared TMDB setup](docs/tmdb-metadata.md).
+To classify a folder, open a file inside it and press `Alt+p`. Go to **Recognition & folders**, set **Save for** to **folder**, and choose **Media recognition**. The rule applies to that folder and its subfolders.
+
+| Choice | What gets checked |
+| --- | --- |
+| **Automatic** | AniList first for video, then movie or TV on a completed anime miss. Audio-only files use music recognition. |
+| **Anime** | AniList only, with a local title if there is no match. |
+| **Movies & TV** | TV for filenames with episode numbers or air dates. Otherwise, try movies first and try TV if no movie matches. |
+| **Movies** | TMDB movies, with Wikidata as a fallback. |
+| **TV** | TMDB TV, with TVmaze as a fallback. Air-date episodes use TVmaze. |
+| **Original** | AniList for anime and local titles and tags for other media. |
+
+Automatic, Anime, and Original share the v1.0.10 anime resolver, including its season and sequel rules. Saved manual match corrections still apply. Choose **Inherit recognition source** to remove an override. The effective order is file, nearest matching folder, global panel setting, then `recognition_source` in the conf file. The panel shows the active choice and where it came from.
+
+You can supply your own TMDB read token in `tmdb_key`. AcoustID fingerprinting requires a client key and `fpcalc` on PATH and runs only when selected. See the [shared TMDB setup](docs/tmdb-metadata.md).
 
 Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `scripts/mpv-rich-presence/data.sqlite3` under the mpv config directory.
 
@@ -91,7 +104,7 @@ See [implementation and verification](docs/verification.md) for the test command
 
 ## Configuration
 
-Edit `script-opts/rich-presence.conf`:
+Use the in-player panel for per-file and per-folder choices. Edit `script-opts/rich-presence.conf` for startup settings and defaults, then restart mpv. Existing configs without `recognition_source` default to `auto`.
 
 ```ini
 # Discord Application ID (from https://discord.com/developers/applications)
@@ -106,6 +119,9 @@ folder_filter_mode=disabled
 # Semicolon-separated list of folder paths (quotes are optional)
 # Example: D:\Anime;E:\Videos\Movies
 folder_list=
+
+# Default recognition: auto, anime, movie-tv, movie, tv, or original
+recognition_source=auto
 
 # Pause timeout in seconds before presence is hidden (set to 0 to never hide)
 pause_timeout=1800

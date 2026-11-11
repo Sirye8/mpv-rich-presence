@@ -142,6 +142,70 @@ class PublicSignInTests(unittest.TestCase):
 
 
 class RecognitionTests(unittest.TestCase):
+    def test_scoped_video_sources(self):
+        cases = [
+            ("movie", "Film.2024.mkv", True, ["tmdb-movie", "wikidata"], "wikidata"),
+            ("movie", "Missing Film.mkv", True, ["tmdb-movie", "wikidata"], None),
+            ("tv", "Show.mkv", True, ["tmdb-tv"], "tmdb-tv"),
+            ("tv", "Daily.2024-01-02.mkv", True, ["tvmaze"], "tvmaze"),
+            ("movie-tv", "Show.S01E02.mkv", True, ["tmdb-tv"], "tmdb-tv"),
+            ("movie-tv", "Film.mkv", True, ["tmdb-movie", "wikidata"], "wikidata"),
+            (
+                "movie-tv",
+                "Show.mkv",
+                True,
+                ["tmdb-movie", "wikidata", "tmdb-tv"],
+                "tmdb-tv",
+            ),
+            ("movie-tv", "Track.flac", False, [], None),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                for session, (source, title, video, calls, expected) in enumerate(
+                    cases, 1
+                ):
+                    with self.subTest(source=source, title=title):
+                        player = dict(
+                            source=source,
+                            session=session,
+                            title=title,
+                            allowed=True,
+                            video=video,
+                        )
+                        worker.put("player", "window", player)
+
+                        def lookup(provider, query, *_args, **_kwargs):
+                            if provider != expected:
+                                return []
+                            name = query.split(" (")[0]
+                            kind = "movie" if provider == "wikidata" else "tv"
+                            return [dict(id=7, name=name, kind=kind, year="2024")]
+
+                        with (
+                            patch("backend.candidates", side_effect=lookup) as search,
+                            patch(
+                                "backend.details",
+                                side_effect=lambda provider, hit, *_: dict(
+                                    hit, provider=provider
+                                ),
+                            ),
+                        ):
+                            worker.recognize(player)
+                        self.assertEqual(
+                            [call.args[0] for call in search.call_args_list], calls
+                        )
+                        if video:
+                            self.assertEqual(
+                                worker.get("auto", "window")["hit"].get("provider"),
+                                expected,
+                            )
+            finally:
+                worker.db.close()
+
     def test_default_dispatch_and_ambiguous_remakes(self):
         with tempfile.TemporaryDirectory() as directory:
             worker = Worker(Path(directory) / "db", "window", {})

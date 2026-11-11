@@ -381,6 +381,7 @@ static void read_profiles(rich_presence_state& state)
         state.tracking = state.store->effective("tracking", state.scope_path);
     }
     if (!state.appearance.contains("preset")) state.appearance["preset"] = state.config_preset;
+    if (!state.sources.contains("source")) state.sources["source"] = state.config_source;
 }
 
 // AniList API caching
@@ -903,7 +904,7 @@ static bool use_anilist(const rich_presence_state& state)
     if (state.correction.value("not_anime", false)) return false;
     const auto source = state.sources.value("source", std::string("auto"));
     if (state.correction.contains("id") || source == "original") return true;
-    return source == "auto" && !state.scope_path.starts_with("stream-");
+    return (source == "auto" || source == "anime") && !state.scope_path.starts_with("stream-");
 }
 
 // React to configuration or eligibility changes
@@ -964,6 +965,13 @@ static void on_eligibility_changed(rich_presence_state& state)
 
 // Event handlers
 
+static bool valid_source(const nlohmann::json& value)
+{
+    return value == "auto" || value == "anime" || value == "movie-tv" || value == "movie" || value == "tv"
+        || value == "original" || value == "tmdb-movie" || value == "tmdb-tv" || value == "tvmaze"
+        || value == "wikidata" || value == "musicbrainz" || value == "acoustid" || value == "stream";
+}
+
 static bool valid_settings(const std::string& category, const nlohmann::json& values)
 {
     if (!values.is_object() || values.size() > 32) return false;
@@ -988,8 +996,7 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             { if (!val.is_string()) return false; }
             else if (!val.is_boolean()) return false;
         }
-        if (category == "sources" && !(key == "source" && (val == "auto" || val == "original" || val == "tmdb-movie" || val == "tmdb-tv" ||
-            val == "tvmaze" || val == "wikidata" || val == "musicbrainz" || val == "acoustid" || val == "stream"))) return false;
+        if (category == "sources" && !(key == "source" && valid_source(val))) return false;
         if (category == "match" && !((key == "id" && val.is_number_integer() && val > 0 && val <= INT32_MAX)
             || (key == "offset" && val.is_number_integer() && val >= -9999 && val <= 9999)
             || (key == "not_anime" && val.is_boolean()))) return false;
@@ -1026,6 +1033,9 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             if (action == "setup")
             {
                 state.config_preset = req.value("preset", std::string("original"));
+                const auto source = req.value("source", std::string("auto"));
+                state.config_source = valid_source(source) ? source : "auto";
+                if (state.config_source != source) mpv_print(state.mpv, "Invalid recognition_source. Using Automatic.");
                 if (!state.store)
                 {
                     state.store_failed = true;
@@ -1108,8 +1118,12 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 if (category != "appearance" && category != "match" && category != "privacy" && category != "exclude" && category != "sources" && category != "tracking") return;
                 auto scope = req.value("scope", std::string("global"));
                 if (scope == "file" && !state.scope_path.empty()) scope = "file:" + state.scope_path;
-                else if (scope == "folder" && !state.scope_path.empty())
-                    scope = "folder:" + path_utf8(fs::u8path(state.scope_path).parent_path());
+                else if (scope == "folder" && !state.scope_path.starts_with("stream-"))
+                {
+                    auto folder = path_utf8(fs::u8path(state.scope_path).parent_path());
+                    if (folder.empty()) return;
+                    scope = "folder:" + folder;
+                }
                 else if (scope != "global") return;
                 if (action == "clear")
                 {
@@ -1749,7 +1763,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         const bool anime_unconfirmed = state.media_has_video && use_anilist(state) &&
             state.pending_load_id == load_id && completed_anime_lookup != load_id;
         const bool pinned_anime = state.correction.contains("id") && !state.correction.value("not_anime", false);
-        if (!state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
+        if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
             source = "original";
         const bool extra = source != "original";
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
@@ -1835,6 +1849,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
                 {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"appearance_scope",state.appearance_scope},
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
+                {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-")},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",state.store ? state.store->get("account","current") : nlohmann::json::object()},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?

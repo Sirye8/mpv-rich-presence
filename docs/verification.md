@@ -1,6 +1,6 @@
 # Implementation and verification
 
-The implementation follows the in-player interface and tracking guide based on v1.0.10 (`a739587`). This page separates automated checks from checks that need an external account or desktop.
+The implementation follows the in-player interface and tracking guide based on [`v1.0.10`](https://github.com/Sirye8/mpv-rich-presence/tree/v1.0.10). This page separates automated checks from checks that need an external account or desktop.
 
 ## Implemented areas
 
@@ -9,7 +9,7 @@ The implementation follows the in-player interface and tracking guide based on v
 | Player panel | Seven sections, nested pages and confirmations, mouse and keyboard navigation, text entry handoff, resizing, private previews and scoped Apply/Cancel. |
 | AniList account | Public authorization-code exchange, verified Viewer identity, OS credential storage or session-only login, manual progress drafts, conflict checks, reconnect and disconnect. Disconnect can separately forget the current account's local history. |
 | Watch tracking | Monotonic elapsed time, independent sampling during network requests, shared ownership across processes, Ask/Automatic policies, gap review, skips, pending proposals and explicit rewatch cycles. |
-| Recognition | Automatic AniList anime matching, shared TMDB movie and TV lookups, Wikidata and TVmaze fallback, tagged music and album artwork, manual corrections, folder profiles, and optional AcoustID. Requests are cached, deduplicated and checked against playback changes. |
+| Recognition | Automatic AniList anime matching, Anime, Movies & TV, Movies and TV folder rules, shared TMDB lookups, Wikidata and TVmaze fallback, tagged music and album artwork, manual corrections, and optional AcoustID. Requests are cached, deduplicated and checked against playback changes. |
 | Appearance | Original SDK-call fixtures, optional presets, templates, language and numbering controls, per-media layouts, artwork, timers, buttons and supported links. |
 | Local data | SQLite records by category and scope, individual match-field removal, account-scoped clears, cancellation of stale work and privacy protection after removing restrictions. |
 

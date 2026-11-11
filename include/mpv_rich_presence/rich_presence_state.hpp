@@ -56,6 +56,7 @@ namespace mpvrp
         bool private_session = false, hidden_file = false;
         std::chrono::steady_clock::time_point hide_until{};
         std::string config_preset = "original";
+        std::string config_source = "auto";
         nlohmann::json appearance = nlohmann::json::object(), privacy = nlohmann::json::object();
         nlohmann::json sources = nlohmann::json::object();
         nlohmann::json provider = nlohmann::json::object();

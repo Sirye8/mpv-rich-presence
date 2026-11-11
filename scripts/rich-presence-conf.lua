@@ -34,6 +34,7 @@ local options = {
     on = false,
     folder_filter_mode = "disabled",
     folder_list = "",
+    recognition_source = "auto",
     pause_timeout = 1800,
 }
 mp_options.read_options(options, "rich-presence")
@@ -68,7 +69,8 @@ function pong()
     mp.commandv("script-message-to", "rich_presence", "folder_filter_mode", options.folder_filter_mode)
     mp.commandv("script-message-to", "rich_presence", "folder_list", options.folder_list)
     mp.commandv("script-message-to", "rich_presence", "pause_timeout", tostring(options.pause_timeout))
-    panel({action="setup",database=database,legacy_database=legacy_database,preset=options.appearance_preset})
+    panel({action="setup",database=database,legacy_database=legacy_database,
+        preset=options.appearance_preset,source=options.recognition_source})
     mp.commandv("script-message-to", "rich_presence", "config_complete")
 end
 

@@ -1,6 +1,11 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 return function(make_sheet, send, options, help)
     local sections={"Now playing","AniList","Appearance","Recognition & folders","Privacy & windows","Saved data","Diagnostics"}
+    local sources={
+        {"auto","Automatic"},{"anime","Anime"},{"movie-tv","Movies & TV"},{"movie","Movies"},{"tv","TV"},
+        {"original","Original"},{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},
+        {"wikidata","Wikidata"},{"musicbrainz","MusicBrainz"},{"acoustid","AcoustID"},{"stream","Stream metadata"},
+    }
     local snap, draft, pending, scope = {}, {}, nil, "global"
     local layout, replace = "all", false
     local edit, edit_key, edit_base, list_status
@@ -152,8 +157,16 @@ return function(make_sheet, send, options, help)
             row("Cancel",ui.back)
         elseif page=="Recognition & folders" then
             scope_row()
+            local current=(snap.sources or {}).source or "auto"
+            local label=current
+            for _,source in ipairs(sources) do if source[1]==current then label=source[2]; break end end
+            if scope=="folder" and not snap.has_local_folder then
+                row("Open a local file to set its folder source")
+            else
+                row("Media recognition   "..label,function() ui.push("Choose source") end)
+            end
+            row("Source rule   "..(snap.source_scope or "configuration"))
             row("Provider settings and credits",function() ui.push("Providers") end)
-            row("Automatic source   "..((snap.sources or {}).source or "auto"),function() ui.push("Choose source") end)
             row("AniList search",function() ui.text("Search anime","",function(q)
                 service("search",{provider="anilist",query=q}); search="anilist"; ui.push("Search results")
             end) end)
@@ -173,9 +186,12 @@ return function(make_sheet, send, options, help)
                 end) end)
             end
         elseif page=="Choose source" then
-            for _,source in ipairs({{"auto","Automatic"},{"original","Original"},{"wikidata","Wikidata"},
-                    {"tvmaze","TVmaze"},{"musicbrainz","MusicBrainz"},{"stream","Stream metadata"},
-                    {"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"acoustid","AcoustID"}}) do
+            row("Inherit recognition source",function()
+                confirm("Remove the recognition override for "..scope,function()
+                    request("clear",{category="sources",scope=scope}); refresh(); ui.back()
+                end)
+            end)
+            for _,source in ipairs(sources) do
                 local value,label=source[1],source[2]
                 row(label,function()
                     confirm("Use "..label.." for "..scope,function()

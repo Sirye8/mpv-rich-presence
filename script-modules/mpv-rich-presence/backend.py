@@ -563,12 +563,19 @@ class Worker:
             return
         raw = p.get("title", "")
         source = profile_source
+        video_profile = source in ("movie-tv", "movie", "tv")
+        if video_profile and (not p["video"] or p.get("remote")):
+            return
         title, year, episode, airdate = raw, "", None, None
         if p["video"] and not p.get("remote"):
             title, year, episode, airdate = video_query(raw)
             filename = video_query(p.get("filename", ""))
             if filename[2] or filename[3] or not title or (filename[1] and not year):
                 title, year, episode, airdate = filename
+        mixed_title = source == "movie-tv" and not (episode or airdate)
+        if video_profile:
+            tv_profile = source == "tv" or (source == "movie-tv" and not mixed_title)
+            source = "tvmaze" if tv_profile else "wikidata"
         if source == "auto":
             if p.get("remote"):
                 if not p.get("page") and not p.get("channel"):
@@ -722,13 +729,9 @@ class Worker:
                             return [track]
                     return exact
 
-                if (
-                    profile_source == "auto"
-                    and source in ("wikidata", "tvmaze")
-                    and not airdate
-                ):
-                    preferred = "tmdb-movie" if source == "wikidata" else "tmdb-tv"
-                    if p.get("tmdb", "").isdigit():
+                def preferred_tmdb(fallback):
+                    preferred = "tmdb-movie" if fallback == "wikidata" else "tmdb-tv"
+                    if not mixed_title and p.get("tmdb", "").isdigit():
                         tmdb_hits = [
                             dict(
                                 id=int(p["tmdb"]),
@@ -755,12 +758,26 @@ class Worker:
                         except AccountError:
                             # A movie or show may be known even if details are unavailable.
                             pass
+                    return None
+
+                if (
+                    (profile_source == "auto" or video_profile)
+                    and source in ("wikidata", "tvmaze")
+                    and (not airdate or profile_source == "movie")
+                ):
+                    preferred = preferred_tmdb(source)
+                    if preferred:
+                        return preferred
 
                 provider = source
                 try:
                     exact = matching(provider)
+                except AccountError:
+                    if not mixed_title:
+                        raise
+                    exact = []
                 except (OSError, ValueError):
-                    if provider != "musicbrainz":
+                    if not mixed_title and provider != "musicbrainz":
                         raise
                     exact = []
                 if provider == "musicbrainz" and len(exact) != 1:
@@ -768,8 +785,14 @@ class Worker:
                     return musicbrainz_album(
                         title, p.get("artist", ""), p.get("album", ""), self.throttle
                     )
-                if profile_source == "auto" and provider == "wikidata" and not exact:
+                if not exact and (
+                    (profile_source == "auto" and provider == "wikidata") or mixed_title
+                ):
                     provider = "tvmaze"
+                    if mixed_title:
+                        preferred = preferred_tmdb(provider)
+                        if preferred:
+                            return preferred
                     exact = matching(provider)
                 if len(exact) != 1:
                     return None
