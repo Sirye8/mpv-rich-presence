@@ -195,18 +195,10 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
     install(FILES
             "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
             "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE"
-            "${CMAKE_CURRENT_SOURCE_DIR}/README.md"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
 
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/script-modules/mpv-rich-presence/"
         DESTINATION "${mpv-rich-presence_INSTALL_SCRIPTS}/mpv-rich-presence/modules" PATTERN "__pycache__" EXCLUDE)
-
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs"
-        DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
-
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/screenshots"
-        DESTINATION "${mpv-rich-presence_INSTALL_DIR}"
-        FILES_MATCHING PATTERN "*.png" PATTERN "*.jpg")
 
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
