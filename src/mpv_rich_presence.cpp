@@ -640,17 +640,6 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         search_queries.push_back(a_title);
     }
 
-    bool confident = correction.contains("id");
-    // Keep the extra title check for list updates only.
-    auto unique_exact_title = [](const auto& page, const auto& chosen, const std::string& query)
-    {
-        const auto wanted = to_lower(query);
-        auto exact = [&](const auto& item) {
-            return to_lower(item.title) == wanted || std::any_of(item.matching_titles.begin(),item.matching_titles.end(),
-                [&](const auto& name) { return to_lower(name) == wanted; });
-        };
-        return exact(chosen) && std::count_if(page.begin(),page.end(),exact)==1;
-    };
     std::optional<anilist_media> candidate = std::nullopt;
 
     if (correction.contains("id"))
@@ -731,7 +720,6 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
 
         if (best)
         {
-            confident = unique_exact_title(page,*best,q_str);
             candidate = best;
             break;
         }
@@ -747,7 +735,6 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         {
             if (is_media_title_match(a_title, m))
             {
-                confident = parsed_season<=1 && parsed_part==0 && unique_exact_title(base_page,m,a_title);
                 candidate = m;
                 break;
             }
@@ -862,7 +849,6 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         const bool eligible_episode = integer_episode && parsed_ep > 0 && current_resolved_ep > 0
             && (current_resolved_media.episodes <= 0 || current_resolved_ep <= current_resolved_media.episodes)
             && is_anilist_tracking_series(current_resolved_media);
-        state.safe_episode = confident && eligible_episode;
         state.watch_episode = eligible_episode && unambiguous_numbering;
         state.is_anime = true;
         state.conflicting_anime_minutes = conflicting_anime_minutes;
@@ -1565,7 +1551,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     nlohmann::json automatic = nlohmann::json::object();
     uint64_t observed_session = UINT64_MAX;
     bool last_allowed = false;
-    bool last_sample_active = false, last_safe_episode = false, last_watch_episode = false;
+    bool last_sample_active = false, last_watch_episode = false;
+    std::string last_sample_episode;
     int last_sample_id = -1;
     double last_sample_speed = 1;
     uint64_t sampled_seek = 0;
@@ -1687,14 +1674,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         media.session_start = state.session_start;
         int completed_anime_lookup;
         int conflicting_anime_minutes = 0;
-        bool safe_episode = false, watch_episode = false;
+        bool watch_episode = false;
         {
             std::lock_guard lock(state.anime_mutex);
             completed_anime_lookup = state.completed_anime_lookup;
             media.anime = state.is_anime;
             if (media.anime)
             {
-                safe_episode = state.safe_episode;
                 watch_episode = state.watch_episode;
                 conflicting_anime_minutes = state.conflicting_anime_minutes;
                 media.anime_title = state.anime_title;
@@ -1829,24 +1815,25 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         else if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
             source = "original";
         const bool extra = source != "original";
-        if (verify_movie) safe_episode = watch_episode = false;
+        if (verify_movie) watch_episode = false;
         if (!media.video && !state.scope_path.starts_with("stream-") &&
             (source == "auto" || source == "musicbrainz" || source == "acoustid"))
             media.track_title = state.track_title;
         const int tracked_media = verify_movie ? 0 : media.anilist_id;
+        const auto tracked_episode = verify_movie ? "" : media.episode;
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
             || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
                 observed_artist != media.artist || observed_album != media.album))
             || last_allowed != allowed || observed != watch || last_sample_id != tracked_media
-            || last_safe_episode != safe_episode || last_watch_episode != watch_episode
+            || last_sample_episode != tracked_episode || last_watch_episode != watch_episode
             || (watch && (advancing != last_sample_active || sampled_seek != last_seek || last_sample_speed != media.speed))))
         {
             next_sample = now_steady + chrono::seconds(1);
             auto seconds = chrono::duration<double>(now_steady.time_since_epoch()).count();
             nlohmann::json sample = {{"session",state.file_session},{"media",tracked_media},
-                {"episode",verify_movie ? "" : media.episode},
-                {"safe_episode",safe_episode},{"watch_episode",watch_episode},{"total",media.total},{"pos",media.position},{"seek",last_seek},
+                {"episode",tracked_episode},
+                {"watch_episode",watch_episode},{"total",media.total},{"pos",media.position},{"seek",last_seek},
                 {"scope_path",state.scope_path},{"path",allowed ? state.scope_path : ""},{"speed",media.speed},{"active",advancing},
                 {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
                 {"match_title",verify_movie ? "" : media.anime_title}};
@@ -1891,7 +1878,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             last_sample_speed = media.speed;
             last_sample_id = tracked_media;
             last_sample_active = advancing;
-            last_safe_episode = safe_episode;
+            last_sample_episode = tracked_episode;
             last_watch_episode = watch_episode;
             observed_session = state.file_session;
             last_allowed = allowed;
@@ -1957,7 +1944,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
                 {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-")},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
-                {"account",std::move(account)},{"safe_episode",safe_episode},{"watch_episode",watch_episode},
+                {"account",std::move(account)},{"watch_episode",watch_episode},
                 {"episode_watch",std::move(episode_watch)},
                 {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?

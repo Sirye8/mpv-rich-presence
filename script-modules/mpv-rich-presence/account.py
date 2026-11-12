@@ -25,6 +25,12 @@ class SessionExpired(AccountError):
     pass
 
 
+class EntryChanged(AccountError):
+    def __init__(self, entry):
+        super().__init__("AniList progress changed. Refresh and review the edit.")
+        self.entry = entry
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args):
         return None
@@ -86,7 +92,9 @@ def read_entry(token, viewer, media, call=graphql):
     return dict(entry, viewer=viewer, media=media)
 
 
-def save_progress(token, base, target, total, valid, call=graphql, status=None):
+def save_progress(
+    token, base, target, total, valid, call=graphql, status=None, repeat_count=None
+):
     if type(target) is not int or target < 0 or (total and target > total):
         raise AccountError("Progress is out of range.")
     if status is not None and status not in (
@@ -98,11 +106,23 @@ def save_progress(token, base, target, total, valid, call=graphql, status=None):
         "PLANNING",
     ):
         raise AccountError("Unknown list status.")
+    if repeat_count is not None and (
+        type(repeat_count) is not int or not 0 <= repeat_count <= 1000
+    ):
+        raise AccountError("Rewatch count is out of range.")
+
+    def confirmed(row):
+        return (
+            row["progress"] == target
+            and (status is None or row["status"] == status)
+            and (repeat_count is None or row["repeat"] == repeat_count)
+        )
+
     fresh = read_entry(token, base["viewer"], base["media"], call)
     if any(fresh[k] != base.get(k) for k in fresh):
-        raise AccountError("AniList progress changed. Refresh and review the edit.")
+        raise EntryChanged(fresh)
     valid()
-    if base["id"] and fresh["progress"] == target and status in (None, fresh["status"]):
+    if base["id"] and confirmed(fresh):
         return fresh
     field, value = ("id", base["id"]) if base["id"] else ("mediaId", base["media"])
     variables = {"id": value, "progress": target}
@@ -112,6 +132,10 @@ def save_progress(token, base, target, total, valid, call=graphql, status=None):
         variables["status"] = status
         arguments += ",status:$status"
         declarations += ",$status:MediaListStatus!"
+    if repeat_count is not None:
+        variables["repeat"] = repeat_count
+        arguments += ",repeat:$repeat"
+        declarations += ",$repeat:Int!"
     query = (
         "mutation("
         + declarations
@@ -126,13 +150,15 @@ def save_progress(token, base, target, total, valid, call=graphql, status=None):
     except AccountError:
         # Never repeat a mutation whose acknowledgement was lost.
         row = read_entry(token, base["viewer"], base["media"], call)
-        if row["progress"] != target or (status and status != row["status"]):
+        if not confirmed(row):
             raise AccountError(
                 "Update unconfirmed. Refresh before trying again."
             ) from None
         return row
     if row.pop("userId") != base["viewer"] or row.pop("mediaId") != base["media"]:
         raise AccountError("Unexpected mutation result. Refresh the entry.")
+    if not confirmed(row):
+        raise AccountError("Update unconfirmed. Refresh before trying again.")
     return dict(row, viewer=base["viewer"], media=base["media"])
 
 

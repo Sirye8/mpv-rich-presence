@@ -93,11 +93,17 @@ local help = {
     ["Resume unfinished time"]="Keep the watch counter when you come back to an unfinished episode.",
     ["Keep offline proposals"]="Keep pending proposals locally while the connection is unavailable.",
     ["Pending updates"]="Review episodes that reached the watch threshold. Before applying, open the matching episode so the plugin can verify the episode and refresh AniList progress. Skipping suppresses automatic updates in this viewing cycle.",
-    ["Rewatch tracking"]="Enable separate watch counters for episodes you watch again.",
-    ["Start new viewing cycle"]="Start a separate local watch counter for this episode.",
+    ["Rewatch tracking"]="Offer to start a new AniList rewatch after you reach the threshold on episode 1 of a completed anime.",
+    ["Start new viewing cycle"]="Start fresh local watch counters for this anime. This does not edit your AniList entry.",
     ["Threshold"]="Edit the minimum watch time per episode for Ask and Auto. Enter a whole number from 1 to 1440 minutes.",
     ["Later"]="Keep the proposal pending and return to the previous page.",
     ["Skip this episode"]="Dismiss the proposal and suppress automatic credit for the episode.",
+    ["Update and switch to Watching"]="Review the episode progress and change the entry to Watching.",
+    ["Add to Watching and update"]="Review adding this anime to Watching with the proposed progress.",
+    ["Update progress only"]="Review the new progress. Automatic mode keeps this list status for later updates until the status changes.",
+    ["Resume rewatch and update"]="Review returning this entry to Rewatching with the proposed progress.",
+    ["Finish rewatch"]="Review completing the rewatch and recording it in your rewatch count.",
+    ["Record completed rewatch"]="Review recording another complete viewing of this one-episode anime.",
     ["Filter records"]="Enter part of a record category or scope to narrow the list.",
     ["Reset everything"]="Review a local reset of settings, cache, watch history, and account connection.",
     ["Fingerprint this file"]="Analyze up to the first two minutes of the local audio and look up the resulting fingerprint on AcoustID. Review the results before saving a match. The package supplies fpcalc and the application key.",
@@ -230,6 +236,7 @@ return function(label, page, action, values, current, key)
     if key:match("^Clear ") then return "Review which local records in this category will be removed." end
     if page=="Saved data" and not help[key] then return "Open this local record or review removing it at the displayed scope." end
     if key:match("^Search ") then return "Enter a title to find matches from this provider." end
+    if key:match("^Start rewatch and record episode ") then return "Review resetting progress to episode 1 and switching the entry to Rewatching." end
     if key:match("^Update episode ") or key:match("^Apply ") then return "Review the proposed change before sending it to AniList." end
     if key:match("^Skip ") then return "Dismiss the proposal and suppress automatic updates for this episode." end
     return help[key] or "Select to continue."

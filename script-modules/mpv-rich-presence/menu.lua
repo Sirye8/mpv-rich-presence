@@ -27,6 +27,8 @@ return function(make_sheet, send, options, help)
         if n<3600 then return string.format("%02d:%02d",math.floor(n/60),n%60) end
         return string.format("%d:%02d:%02d",math.floor(n/3600),math.floor(n/60)%60,n%60)
     end
+    local list_status_labels={CURRENT="Watching",PLANNING="Planning",PAUSED="Paused",DROPPED="Dropped",
+        COMPLETED="Completed",REPEATING="Rewatching"}
     local function copy(t) local r={}; for k,v in pairs(t or {}) do r[k]=v end; return r end
     local function request(action,fields)
         local r=fields or {}; r.action=action; r.session=snap.session; send(r)
@@ -112,6 +114,36 @@ return function(make_sheet, send, options, help)
         local valid_entry=entry and entry.media==snap.match and entry.viewer==account.id and entry.session==snap.session
         local card=snap.card or {}
         local tracking=snap.tracking or {}
+        local function review_update(prop)
+            local base=prop.base or {}
+            local episode=tostring(prop.episode)
+            local progress=tostring(prop.before).." → "..episode
+            local action="Update episode "..episode
+            if prop.repeat_count then action=prop.start_rewatch and "Record completed rewatch" or "Finish rewatch"
+            elseif prop.start_rewatch then action="Start rewatch and record episode "..episode
+            elseif prop.status=="REPEATING" then action="Resume rewatch and update"
+            elseif prop.status=="CURRENT" then action=base.id and "Update and switch to Watching" or "Add to Watching and update" end
+            local function submit(keep)
+                local message=(account.name or "AniList").." · "..((prop.title and prop.title~="") and prop.title or snap.title or "Anime")
+                    .." · "..progress
+                if prop.status and not keep then
+                    message=message.." · "..(list_status_labels[base.status] or "Not on your list")
+                        .." → "..list_status_labels[prop.status]
+                elseif keep then
+                    message=message.." · Keep "..(list_status_labels[base.status] or base.status).." for later updates"
+                end
+                if prop.repeat_count then
+                    message=message.." · Rewatches "..(base["repeat"] or 0).." → "..prop.repeat_count
+                end
+                if prop.start_rewatch and prop.episode<prop.before then message=message.." · Reset progress for a new rewatch"
+                elseif prop.episode>prop.before+1 then message=message.." · Episode gap" end
+                confirm(message,function() service("accept",{proposal=prop.key,keep_status=keep}) end)
+            end
+            row(action.."   "..progress,function() submit(false) end,true)
+            if prop.status=="CURRENT" and base.id then
+                row("Update progress only   "..progress,function() submit(true) end)
+            end
+        end
         if page=="Menu" then
             for _,title in ipairs(sections) do local dest=title; row(dest,function() pick(dest) end) end
         elseif page=="Confirm" then
@@ -350,7 +382,7 @@ return function(make_sheet, send, options, help)
             if answer.read_state=="offline" and not valid_entry then row("List status   Offline · no confirmed progress") end
             if valid_entry then
                 row(entry.id and ("List entry   "..entry.progress.." / "..(snap.total>0 and snap.total or "?")..
-                    " · "..entry.status..(answer.offline and " · Offline" or "")) or "List status   Not on your list")
+                    " · "..(list_status_labels[entry.status] or entry.status or "?")..(answer.offline and " · Offline" or "")) or "List status   Not on your list")
                 local function bump(n) if not edit_base then edit_base=copy(entry) end; edit=math.max(0,(edit or entry.progress)+n); if snap.total>0 then edit=math.min(edit,snap.total) end end
                 row("−  One episode",function() bump(-1) end)
                 row("Draft   "..tostring(edit or entry.progress))
@@ -388,9 +420,10 @@ return function(make_sheet, send, options, help)
                     else notice("Enter a whole number from 1 to 1440 minutes.") end
                 end)
             end)
-            if answer.proposal then
+            if answer.proposal and snap.allowed and snap.watch_episode and answer.proposal.media==snap.match
+                and answer.proposal.episode==tonumber(snap.episode) then
                 local p=answer.proposal
-                row("Update episode "..p.episode,function() confirm("Apply "..p.before.." → "..p.episode,function() service("accept",{proposal=p.key}) end) end)
+                review_update(p)
                 row("Later",ui.back); row("Skip this episode",function() service("skip",{proposal=p.key}) end)
             end
         elseif page=="Disconnect account" then
@@ -412,10 +445,8 @@ return function(make_sheet, send, options, help)
                 local label=(prop.title~="" and prop.title or ("AniList "..prop.media)).." · Episode "..prop.episode
                 row(label,nil,false,nil,"Proposal "..prop.key)
                 if prop.offline then row("Waiting to refresh remote progress")
-                elseif snap.allowed and prop.media==snap.match and prop.episode==tonumber(snap.episode) then
-                    row("Apply "..prop.before.." → "..prop.episode,function() confirm(label.." · "..prop.before.." → "..prop.episode,function()
-                        service("accept",{proposal=prop.key})
-                    end) end)
+                elseif snap.allowed and snap.watch_episode and prop.media==snap.match and prop.episode==tonumber(snap.episode) then
+                    review_update(prop)
                 else row("Play this episode to apply its update") end
                 row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
             end

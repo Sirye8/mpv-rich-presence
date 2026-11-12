@@ -16,7 +16,9 @@ import time
 import zipfile
 
 
-def player_samples(config, media, mpv, environment, check, timeout, *, paused=True):
+def player_samples(
+    config, media, mpv, environment, check, timeout, *, paused=True, tracking=None
+):
     database = config / "scripts/mpv-rich-presence/data.sqlite3"
     with closing(sqlite3.connect(database)) as db, db:
         db.execute(
@@ -25,7 +27,7 @@ def player_samples(config, media, mpv, environment, check, timeout, *, paused=Tr
         )
         db.execute(
             "INSERT OR REPLACE INTO records VALUES ('tracking','global',?)",
-            (json.dumps({"mode": "manual", "without_sharing": True}),),
+            (json.dumps(tracking or {"mode": "manual", "without_sharing": True}),),
         )
     stop = config / "test-done"
     stop.unlink(missing_ok=True)
@@ -151,6 +153,28 @@ def verify(package, mpv, ffmpeg):
             config, episode_range, mpv, os.environ, range_requires_review, 25
         )
         print("An episode range stays ineligible for watch time")
+
+        correction = root / "[SubsPlease] Match Fixture - 06 (1080p).mkv"
+        shutil.copyfile(anime, correction)
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute(
+                "INSERT INTO records VALUES ('match','global',?)",
+                (json.dumps({"id": 195604, "offset": -2}),),
+            )
+
+        def corrected_episode(sample):
+            if not sample.get("media"):
+                return False
+            assert sample["media"] == 195604 and sample["episode"] == "4", sample
+            assert sample["watch_episode"], sample
+            return True
+
+        player_samples(config, correction, mpv, os.environ, corrected_episode, 25)
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("DELETE FROM records WHERE category='match' AND scope='global'")
+        print(
+            "A manual AniList match and episode offset also supply the tracked episode"
+        )
 
         requests = []
 

@@ -20,7 +20,7 @@ def contend(path, window, now):
         media=2,
         episode="7",
         total=12,
-        safe_episode=True,
+        watch_episode=True,
         active=True,
         allowed=True,
         watch=True,

@@ -17,6 +17,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from account import (
     AccountError,
+    EntryChanged,
     SessionExpired,
     Vault,
     authorize,
@@ -73,6 +74,7 @@ class Worker:
         self.settings = settings
         self.vault = Vault()
         self.previous = None
+        self.tracking_probe = None
         self.resolved = None
         self.music_retry = 0
         self.music_attempts = 0
@@ -159,10 +161,93 @@ class Worker:
             self.get("cycle", series).get("number", 0),
         )
 
+    def clear_proposals(self, scope):
+        self.db.execute(
+            "DELETE FROM records WHERE category='pending' AND scope LIKE ?",
+            (scope + "/%",),
+        )
+
+    def remember_entry(
+        self, account, player, entry, *, prepare_rewatch=False, keep_status=False
+    ):
+        scope = f"{account['id']}/{player['media']}"
+        previous = self.get("entry", scope)
+        if (
+            entry.get("id") is not None
+            and entry.get("id") == previous.get("id")
+            and (entry.get("updatedAt") or 0) < (previous.get("updatedAt") or 0)
+        ):
+            raise AccountError("AniList progress changed. Refresh and review the edit.")
+        cycle = self.get("cycle", scope)
+        marker = [entry["id"], entry["repeat"]]
+        phase = cycle.get("phase")
+        same_rewatch = cycle.get("rewatch") == marker
+        repeating = entry["status"] == "REPEATING"
+        preparing = (
+            prepare_rewatch
+            and entry["status"] == "COMPLETED"
+            and player["episode"] == "1"
+            and player["tracking"].get("rewatch")
+        )
+        if repeating or preparing:
+            if not same_rewatch or (preparing and phase == "active"):
+                cycle["number"] = cycle.get("number", 0) + 1
+                self.clear_proposals(scope)
+            phase = "active" if repeating else "ready"
+            self.put("cycle", scope, dict(cycle, rewatch=marker, phase=phase))
+        elif (
+            not (
+                same_rewatch
+                and (
+                    (phase == "ready" and entry["status"] == "COMPLETED")
+                    or (phase == "active" and entry["status"] in ("PAUSED", "DROPPED"))
+                )
+            )
+            and phase
+        ):
+            self.put("cycle", scope, {"number": cycle.get("number", 0)})
+
+        if previous and any(
+            previous.get(field) != entry.get(field)
+            for field in ("id", "progress", "status", "repeat", "updatedAt")
+        ):
+            self.clear_proposals(scope)
+        cached = dict(entry, checked=time.time())
+        if keep_status or (
+            entry["id"] == previous.get("id")
+            and entry["status"] is not None
+            and entry["status"] == previous.get("keep_tracking_status")
+        ):
+            cached["keep_tracking_status"] = entry["status"]
+        self.put("entry", scope, cached)
+        return cached
+
+    def tracked_context(self, job, episode, key=None):
+        account, player = self.context(job, True)
+        if (
+            not player.get("watch_episode")
+            or player.get("episode") != str(episode)
+            or episode < 1
+            or (player["total"] and episode > player["total"])
+            or (key is not None and self.cycle(account, player) != key)
+        ):
+            raise AccountError("Return to the matched episode and review the update.")
+        return account, player
+
+    @staticmethod
+    def active_tracking(player, modes):
+        return (
+            player.get("watch_episode")
+            and player.get("watch")
+            and player.get("allowed")
+            and player.get("active")
+            and player["tracking"].get("mode") in modes
+            and abs(time.time() * 1000 - player.get("wall", 0)) <= 3000
+        )
+
     def write(self, job):
         with serialized(self.directory):
             account, p = self.context(job, True)
-            token = self.credential(account)
             base = job["base"]
             if (
                 base.get("viewer") != account["id"]
@@ -170,37 +255,78 @@ class Worker:
                 or base.get("media") != p["media"]
             ):
                 raise AccountError("The draft no longer belongs to this entry.")
-            if job.get("automatic") and (
-                not p.get("watch")
-                or p["tracking"].get("mode") != "auto"
-                or not p.get("safe_episode")
+            proposal = job.get("tracked_proposal")
+            automatic = job.get("automatic")
+            if (automatic and not proposal) or (
+                proposal
+                and (
+                    proposal["account"] != account["generation"]
+                    or proposal["episode"] != job["target"]
+                )
             ):
-                raise AccountError("Automatic tracking is off for this file.")
+                raise AccountError("This proposal has expired.")
 
             def validate():
-                current, player = self.context(job, True)
-                if job.get("automatic") and (
-                    player["tracking"].get("mode") != "auto"
-                    or not player["active"]
-                    or not self.get("pending", self.cycle(current, player))
-                ):
-                    raise AccountError("Automatic proposal expired.")
+                with self.transaction():
+                    if not proposal:
+                        self.context(job, True)
+                        return
+                    key = proposal["key"]
+                    _, player = self.tracked_context(job, proposal["episode"], key)
+                    if (
+                        self.get("pending", key) != proposal
+                        or self.get("skipped", key)
+                        or self.get("history", key)
+                        or (
+                            proposal.get("start_rewatch")
+                            and not player["tracking"].get("rewatch")
+                        )
+                        or (
+                            proposal.get("repeat_count") is not None
+                            and player["total"] != proposal["episode"]
+                        )
+                    ):
+                        raise AccountError("This proposal has expired.")
+                    if automatic and (
+                        not self.active_tracking(player, ("auto",))
+                        or self.get("watch", key).get("elapsed", 0)
+                        < 60 * player["tracking"].get("threshold", 15)
+                    ):
+                        raise AccountError("Automatic tracking is no longer eligible.")
 
-            result = save_progress(
-                token,
-                base,
-                job["target"],
-                p["total"],
-                validate,
-                status=job.get("status"),
-            )
+            validate()
+            token = self.credential(account)
+            options = {"status": job.get("status")}
+            if job.get("repeat_count") is not None:
+                options["repeat_count"] = job["repeat_count"]
+            try:
+                result = save_progress(
+                    token,
+                    base,
+                    job["target"],
+                    p["total"],
+                    validate,
+                    **options,
+                )
+            except EntryChanged as exc:
+                with self.transaction():
+                    self.context(job, True)
+                    self.remember_entry(account, p, exc.entry)
+                self.reply(entry=dict(exc.entry, session=p["session"]), proposal=None)
+                raise
             self.context(job, True)
-            key = self.cycle(account, p)
             with self.transaction():
-                self.put(
-                    "entry",
-                    f"{account['id']}/{p['media']}",
-                    dict(result, checked=time.time()),
+                self.context(job, True)
+                key = proposal["key"] if proposal else self.cycle(account, p)
+                self.remember_entry(
+                    account,
+                    p,
+                    result,
+                    keep_status=bool(
+                        proposal
+                        and job.get("keep_status")
+                        and result["status"] == base["status"]
+                    ),
                 )
                 self.put(
                     "history",
@@ -213,11 +339,7 @@ class Worker:
                     },
                 )
                 # A list edit also invalidates older proposals for this entry.
-                prefix = f"{account['id']}/{p['media']}/%"
-                self.db.execute(
-                    "DELETE FROM records WHERE category='pending' AND scope LIKE ?",
-                    (prefix,),
-                )
+                self.clear_proposals(f"{account['id']}/{p['media']}")
             self.reply(
                 entry=dict(result, session=p["session"]),
                 proposal=None,
@@ -376,7 +498,7 @@ class Worker:
                 raise
             with self.transaction():
                 self.context(job, True)
-                self.put("entry", scope, dict(entry, checked=time.time()))
+                self.remember_entry(account, p, entry)
             notice = {} if job.get("quiet") else {"message": "Progress refreshed."}
             self.reply(
                 entry=dict(entry, session=p["session"]),
@@ -393,13 +515,13 @@ class Worker:
             ):
                 raise AccountError("Enable rewatch tracking for a matched entry first.")
             with self.transaction():
+                self.context(job, True)
                 scope = str(account["id"]) + "/" + str(p["media"])
-                self.put(
-                    "cycle",
-                    scope,
-                    {"number": self.get("cycle", scope).get("number", 0) + 1},
-                )
+                cycle = self.get("cycle", scope)
+                self.put("cycle", scope, dict(cycle, number=cycle.get("number", 0) + 1))
+                self.clear_proposals(scope)
             self.previous = None
+            self.tracking_probe = None
             self.reply(proposal=None, message="New viewing cycle started.")
         elif op == "write":
             self.write(job)
@@ -414,16 +536,27 @@ class Worker:
             ):
                 raise AccountError("This proposal has expired.")
             if op == "accept":
-                if (
-                    self.cycle(account, p) != key
-                    or prop.get("offline")
-                    or not p.get("safe_episode")
-                ):
+                if prop.get("offline") or "status" not in prop:
                     raise AccountError(
                         "Return to the matched episode and refresh its progress to apply."
                     )
+                self.tracked_context(job, prop["episode"], key)
                 base = dict(prop["base"], session=p["session"])
-                self.write(dict(job, base=base, target=prop["episode"]))
+                keep_status = job.get("keep_status", False)
+                if keep_status and (not base["id"] or prop["status"] != "CURRENT"):
+                    raise AccountError(
+                        "Choose the proposed status to apply this update."
+                    )
+                self.write(
+                    dict(
+                        job,
+                        base=base,
+                        target=prop["episode"],
+                        tracked_proposal=prop,
+                        status=None if keep_status else prop["status"],
+                        repeat_count=prop.get("repeat_count"),
+                    )
+                )
             else:
                 with self.transaction():
                     self.put("skipped", key, {"skip": True})
@@ -983,18 +1116,18 @@ class Worker:
         a = self.get("account", "current")
         self.expected = (a.get("generation"), p.get("session"))
         prev = self.previous
-        self.previous = (p, a.get("generation"))
-        if (
-            not prev
-            or not a.get("id")
-            or not p.get("active")
-            or not p.get("watch_episode", p.get("safe_episode"))
-        ):
+        key = (
+            self.cycle(a, p)
+            if a.get("id") and p.get("watch_episode") and p.get("active")
+            else None
+        )
+        self.previous = (p, a.get("generation"), key)
+        if not prev or not a.get("id") or not p.get("active") or key is None:
             return
-        before, generation = prev
+        before, generation, previous_key = prev
         if (
             not before.get("active")
-            or not before.get("watch_episode", before.get("safe_episode"))
+            or previous_key != key
             or generation != a["generation"]
             or any(
                 before.get(k) != p.get(k)
@@ -1019,10 +1152,10 @@ class Worker:
                 self.get("generation", "data") != epoch
                 or self.get("account", "current").get("generation") != a["generation"]
                 or self.get("player", self.window) != p
+                or self.cycle(a, p) != key
             ):
                 self.previous = None
                 return
-            key = self.cycle(a, p)
             watch = self.get("watch", key)
             if (
                 watch.get("owner") not in (None, self.window)
@@ -1062,54 +1195,66 @@ class Worker:
                     session=p["session"],
                 ),
             )
-        if not credit:
-            return
-        if not credit_only:
-            self.propose(a, p, elapsed)
+        if credit and not credit_only:
+            self.propose(a, p)
 
-    def propose(self, a, p, elapsed):
+    def propose(self, a, p):
         if (
             not a.get("id")
-            or not p.get("active")
-            or not p.get("safe_episode")
-            or abs(time.time() * 1000 - p.get("wall", 0)) > 3000
+            or a.get("expired")
+            or not self.active_tracking(p, ("ask", "auto"))
         ):
             return
-        self.expected = (a.get("generation"), p.get("session"))
+        self.expected = (a["generation"], p["session"])
+        episode = int(p["episode"])
         key = self.cycle(a, p)
-        if self.get("history", key) or self.get("skipped", key):
-            return
+        probe = (
+            *self.expected,
+            p["media"],
+            episode,
+            bool(p["tracking"].get("rewatch")),
+        )
+        now = time.time()
+        needs_probe = not self.tracking_probe or (
+            self.tracking_probe[0] != probe or self.tracking_probe[1] <= now
+        )
         watch = self.get("watch", key)
-        mode = p["tracking"].get("mode", "off")
-        if mode not in ("ask", "auto") or elapsed < 60 * p["tracking"].get(
-            "threshold", 15
-        ):
-            return
+        enough_time = watch.get("elapsed", 0) >= 60 * p["tracking"].get("threshold", 15)
+        done = self.get("history", key) or self.get("skipped", key)
+        job = dict(account=a["generation"], session=p["session"], media=p["media"])
+        epoch = self.get("generation", "data")
         prop = self.get("pending", key)
-        if prop and not prop.get("offline"):
-            if (
-                prop["account"] == a["generation"]
-                and prop["base"].get("session") == p["session"]
-            ):
+        review = (
+            prop
+            and not prop.get("offline")
+            and "status" in prop
+            and prop.get("account") == a["generation"]
+        )
+        ready = enough_time and not done and not review and watch.get("retry", 0) <= now
+        if ready:
+            with self.transaction():
+                self.tracked_context(job, episode, key)
+                watch = self.get("watch", key)
+                if watch.get("retry", 0) > now:
+                    ready = False
+                else:
+                    self.put("watch", key, dict(watch, retry=now + 60))
+        if not needs_probe and not ready:
+            if review and not done:
                 self.reply(proposal=prop)
             return
-        if watch.get("retry", 0) > time.time():
-            return
-        job = dict(account=a["generation"], session=p["session"], media=p["media"])
-        # Throttle reads after an offline failure or an unacknowledged write.
-        with self.transaction():
-            watch = self.get("watch", key)
-            watch["retry"] = time.time() + 60
-            self.put("watch", key, watch)
-        epoch = self.get("generation", "data")
+
+        # Observe remote rewatch cycles when an episode starts, even if an
+        # older viewing already has time or progress recorded for that episode.
+        self.tracking_probe = (probe, now + 60)
         try:
             entry = read_entry(self.credential(a), a["id"], p["media"])
         except SessionExpired:
             raise
         except AccountError:
-            if p["tracking"].get("keep_pending"):
+            if ready and p["tracking"].get("keep_pending"):
                 with self.transaction():
-                    self.context(job, True)
+                    self.tracked_context(job, episode, key)
                     if epoch == self.get("generation", "data"):
                         self.put(
                             "pending",
@@ -1119,50 +1264,117 @@ class Worker:
                                 window=self.window,
                                 media=p["media"],
                                 title=p.get("match_title", ""),
-                                episode=int(p["episode"]),
+                                episode=episode,
                                 offline=True,
                                 account=a["generation"],
                                 base={"session": p["session"]},
                             ),
                         )
-            raise
-        self.context(job, True)
-        episode = int(p["episode"])
-        if entry["progress"] >= episode:
-            self.put("history", key, {"progress": entry["progress"]})
-            self.delete("pending", key)
+            if ready:
+                raise
             return
-        entry["session"] = p["session"]
-        prop = dict(
-            title=p.get("match_title", ""),
-            media=p["media"],
-            window=self.window,
-            key=key,
-            episode=episode,
-            before=entry["progress"],
-            base=entry,
-            account=a["generation"],
-        )
+
         with self.transaction():
-            self.context(job, True)
+            _, current = self.tracked_context(job, episode, key)
+            if epoch != self.get("generation", "data"):
+                return
+            cached_entry = self.remember_entry(a, current, entry, prepare_rewatch=True)
+            self.tracking_probe = (probe, float("inf"))
+            if self.cycle(a, current) != key or not ready:
+                return
+            if not self.active_tracking(current, ("ask", "auto")) or self.get(
+                "watch", key
+            ).get("elapsed", 0) < 60 * current["tracking"].get("threshold", 15):
+                return
+            mode = current["tracking"]["mode"]
             existing = self.get("pending", key)
             if (
-                (existing and not existing.get("offline"))
+                (
+                    existing
+                    and not existing.get("offline")
+                    and "status" in existing
+                    and existing.get("account") == a["generation"]
+                )
                 or self.get("history", key)
                 or self.get("skipped", key)
-                or epoch != self.get("generation", "data")
             ):
                 return
+
+            remote_status = entry["status"]
+            cycle = self.get("cycle", f"{a['id']}/{p['media']}")
+            start_rewatch = (
+                remote_status == "COMPLETED"
+                and episode == 1
+                and current["tracking"].get("rewatch")
+                and cycle.get("phase") == "ready"
+            )
+            if entry["progress"] >= episode and not start_rewatch:
+                self.put("history", key, {"progress": entry["progress"]})
+                self.delete("pending", key)
+                return
+
+            status_accepted = (
+                entry["id"]
+                and remote_status is not None
+                and remote_status == cached_entry.get("keep_tracking_status")
+            )
+            active_status = remote_status in ("CURRENT", "REPEATING") or status_accepted
+            resume_rewatch = (
+                remote_status in ("PAUSED", "DROPPED")
+                and cycle.get("phase") == "active"
+            )
+            rewatching = start_rewatch or resume_rewatch or remote_status == "REPEATING"
+            finish_rewatch = rewatching and episode == current["total"]
+            status = None
+            if finish_rewatch:
+                status = "COMPLETED"
+            elif start_rewatch or resume_rewatch:
+                status = "REPEATING"
+            elif not active_status:
+                status = "CURRENT"
+            repeat_count = min(entry["repeat"] + 1, 1000) if finish_rewatch else None
+            base = dict(entry, session=p["session"])
+            prop = dict(
+                title=p.get("match_title", ""),
+                media=p["media"],
+                window=self.window,
+                key=key,
+                episode=episode,
+                before=entry["progress"],
+                base=base,
+                account=a["generation"],
+                status=status,
+                repeat_count=repeat_count,
+                start_rewatch=start_rewatch,
+            )
             self.put("pending", key, prop)
+
         if (
             mode == "auto"
             and entry["id"]
+            and active_status
+            and not start_rewatch
+            and not resume_rewatch
             and entry["progress"] + 1 == episode
-            and entry["status"] == "CURRENT"
         ):
-            self.write(dict(job, base=entry, target=episode, automatic=True))
+            self.write(
+                dict(
+                    job,
+                    base=base,
+                    target=episode,
+                    automatic=True,
+                    tracked_proposal=prop,
+                    status=status,
+                    repeat_count=repeat_count,
+                )
+            )
         else:
-            self.reply(proposal=prop, message="Episode ready to review.")
+            message = (
+                "Switch to Watching? Review the update in the AniList panel."
+                if status == "CURRENT"
+                else "Episode ready to review in the AniList panel."
+            )
+            self.reply(proposal=prop, message=message)
 
     def credit_loop(self, stop):
         # A separate SQLite connection keeps the monotonic sampler independent
@@ -1205,6 +1417,7 @@ class Worker:
                 epoch = self.get("generation", "data")
                 if self.data_generation != epoch:
                     self.previous = None
+                    self.tracking_probe = None
                     self.data_generation = epoch
                 cancellation = self.get("cancel", self.window)
                 if cancellation:
@@ -1237,9 +1450,7 @@ class Worker:
                     p = self.get("player", self.window)
                     self.recognize(p)
                     a = self.get("account", "current")
-                    if a.get("id") and p.get("safe_episode"):
-                        watch = self.get("watch", self.cycle(a, p))
-                        self.propose(a, p, watch.get("elapsed", 0))
+                    self.propose(a, p)
             except AccountError as exc:
                 if isinstance(exc, SessionExpired) and self.expected:
                     with self.transaction():

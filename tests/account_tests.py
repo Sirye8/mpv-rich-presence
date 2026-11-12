@@ -17,7 +17,13 @@ import urllib.request
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "script-modules/mpv-rich-presence")
 )
-from account import AccountError, ClientSecretRequired, callback_server, save_progress
+from account import (
+    AccountError,
+    ClientSecretRequired,
+    callback_server,
+    read_entry,
+    save_progress,
+)
 from backend import Worker
 from providers import fingerprint_match, music_art, music_art_sources, musicbrainz_match
 
@@ -611,7 +617,10 @@ class AccountTests(unittest.TestCase):
                 worker.notice_page = "AniList"
                 with (
                     patch.object(worker, "credential", return_value="test"),
-                    patch("backend.read_entry", return_value={"progress": 3}),
+                    patch(
+                        "backend.read_entry",
+                        return_value=dict(id=3, progress=3, status="CURRENT", repeat=0),
+                    ),
                 ):
                     worker.handle(dict(job, quiet=True))
                     response = worker.get("response", "window")
@@ -749,41 +758,6 @@ class AccountTests(unittest.TestCase):
             finally:
                 worker.db.close()
 
-    def test_watch_confirmation_credits_time_without_authorizing_a_list_update(self):
-        with tempfile.TemporaryDirectory() as directory:
-            worker = Worker(Path(directory) / "db", "window", {})
-            try:
-                worker.db.execute(
-                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
-                )
-                worker.put("account", "current", {"id": 1, "generation": "test"})
-                sample = dict(
-                    session=1,
-                    media=195604,
-                    episode="4",
-                    safe_episode=False,
-                    active=True,
-                    speed=1,
-                    seek=0,
-                    tracking={"mode": "auto", "threshold": 0},
-                    wall=time.time() * 1000,
-                )
-                with patch.object(worker, "credential") as credential:
-                    for second, confirmed in enumerate((False, True, True), 100):
-                        worker.put(
-                            "player",
-                            "window",
-                            dict(
-                                sample, time=second, pos=second, watch_episode=confirmed
-                            ),
-                        )
-                        worker.sample()
-                    credential.assert_not_called()
-                self.assertEqual(worker.get("watch", "1/195604/4/0")["elapsed"], 1)
-                self.assertEqual(worker.get("pending", "1/195604/4/0"), {})
-            finally:
-                worker.db.close()
-
     def test_disconnect_during_sample_does_not_restore_watch_data(self):
         with tempfile.TemporaryDirectory() as directory:
             worker = Worker(Path(directory) / "db", "window", {})
@@ -796,7 +770,7 @@ class AccountTests(unittest.TestCase):
                     session=1,
                     media=2,
                     episode="7",
-                    safe_episode=True,
+                    watch_episode=True,
                     active=True,
                     speed=1,
                     seek=0,
@@ -899,7 +873,7 @@ class AccountTests(unittest.TestCase):
                                 session=1,
                                 media=2,
                                 episode="7",
-                                safe_episode=True,
+                                watch_episode=True,
                                 active=active,
                                 time=now + t,
                                 wall=(now + t) * 1000,
@@ -933,7 +907,7 @@ class AccountTests(unittest.TestCase):
                 session=1,
                 media=2,
                 episode="7",
-                safe_episode=True,
+                watch_episode=True,
                 active=True,
                 speed=2,
                 seek=0,
@@ -984,6 +958,244 @@ class AccountTests(unittest.TestCase):
                 stop.set()
                 thread.join(3)
                 control.db.close()
+
+
+class TrackingTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.worker = Worker(Path(directory.name) / "db", "window", {})
+        self.addCleanup(self.worker.db.close)
+        self.worker.db.execute(
+            "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+        )
+        self.account = dict(id=1, generation="fixture")
+        self.worker.put("account", "current", self.account)
+        self.player = dict(
+            session=1,
+            media=195604,
+            episode="4",
+            total=12,
+            watch_episode=True,
+            watch=True,
+            allowed=True,
+            active=True,
+            tracking={"mode": "auto", "threshold": 15},
+        )
+        self.row = dict(
+            id=9,
+            userId=1,
+            mediaId=195604,
+            progress=3,
+            status="CURRENT",
+            repeat=0,
+            updatedAt=1,
+        )
+        self.mutations = []
+        self.before_final_read = None
+        self.lose_response = False
+        patches = (
+            patch.object(self.worker, "credential", return_value="fixture"),
+            patch("backend.read_entry", side_effect=self.read),
+            patch("backend.save_progress", side_effect=self.save),
+        )
+        for mock in patches:
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def transport(self, query, args, _token):
+        if query.startswith("mutation"):
+            self.mutations.append(args)
+            if self.row["id"] is None:
+                self.row["id"] = 10
+            self.row = dict(
+                self.row,
+                **{
+                    k: v
+                    for k, v in args.items()
+                    if k in ("progress", "status", "repeat")
+                },
+            )
+            self.row["updatedAt"] += 1
+            if self.lose_response:
+                raise AccountError("timeout")
+            return {"SaveMediaListEntry": self.row}
+        return {"Page": {"mediaList": [self.row] if self.row["id"] else []}}
+
+    def read(self, token, viewer, media):
+        return read_entry(token, viewer, media, self.transport)
+
+    def save(self, token, base, target, total, valid, **options):
+        if self.before_final_read:
+            self.before_final_read()
+        return save_progress(
+            token, base, target, total, valid, self.transport, **options
+        )
+
+    def publish(self):
+        self.player["wall"] = time.time() * 1000
+        self.worker.put("player", "window", self.player)
+
+    def propose(self, elapsed=900):
+        self.publish()
+        key = self.worker.cycle(self.account, self.player)
+        self.worker.put("watch", key, dict(elapsed=elapsed))
+        self.worker.propose(self.account, self.player)
+        return self.worker.get("pending", self.worker.cycle(self.account, self.player))
+
+    def accept(self, proposal, keep_status=False):
+        self.worker.handle(
+            dict(
+                op="accept",
+                account=self.account["generation"],
+                session=self.player["session"],
+                media=self.player["media"],
+                proposal=proposal["key"],
+                keep_status=keep_status,
+            )
+        )
+
+    def test_auto_uses_resolved_episode_and_rejects_saved_time_for_unclear_numbering(
+        self,
+    ):
+        self.player["watch_episode"] = False
+        self.assertFalse(self.propose())
+        self.assertEqual(self.mutations, [])
+        self.player["watch_episode"] = True
+        self.assertFalse(self.propose(899))
+        self.assertEqual(self.mutations, [])
+        self.assertFalse(self.propose())
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+        self.assertFalse(self.propose())
+        self.assertEqual(len(self.mutations), 1)
+
+    def test_auto_rechecks_resolution_after_remote_read(self):
+        def invalidate():
+            self.player["watch_episode"] = False
+            self.publish()
+
+        self.before_final_read = invalidate
+        with self.assertRaisesRegex(AccountError, "matched episode"):
+            self.propose()
+        self.assertEqual(self.mutations, [])
+
+    def test_auto_rejects_an_episode_offset_change_within_the_same_file(self):
+        def change_episode():
+            self.player["episode"] = "5"
+            self.publish()
+
+        self.before_final_read = change_episode
+        with self.assertRaisesRegex(AccountError, "matched episode"):
+            self.propose()
+        self.assertEqual(self.mutations, [])
+
+    def test_ask_mode_reviews_a_consecutive_episode(self):
+        self.player["tracking"]["mode"] = "ask"
+        proposal = self.propose()
+        self.assertEqual(proposal["episode"], 4)
+        self.assertIsNone(proposal["status"])
+        self.assertEqual(self.mutations, [])
+        self.player["active"] = False
+        self.publish()
+        self.accept(proposal)
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+
+    def test_other_statuses_offer_watching_and_allow_keeping_the_status(self):
+        for status in ("PLANNING", "PAUSED", "DROPPED", "COMPLETED", None):
+            with self.subTest(status=status):
+                self.worker.db.execute(
+                    "DELETE FROM records WHERE category NOT IN ('account','player')"
+                )
+                self.worker.tracking_probe = None
+                self.mutations.clear()
+                self.row.update(id=9 if status else None, progress=3, status=status)
+                proposal = self.propose()
+                self.assertEqual(proposal["status"], "CURRENT")
+                self.assertEqual(self.mutations, [])
+                keep = status == "DROPPED"
+                self.accept(proposal, keep_status=keep)
+                expected = {"id": 9 if status else 195604, "progress": 4}
+                if not keep:
+                    expected["status"] = "CURRENT"
+                self.assertEqual(self.mutations, [expected])
+
+    def test_progress_gap_and_remote_change_both_require_review(self):
+        self.row["progress"] = 1
+        proposal = self.propose()
+        self.assertEqual(proposal["before"], 1)
+        self.assertEqual(self.mutations, [])
+        self.row.update(progress=2, updatedAt=2)
+        with self.assertRaisesRegex(AccountError, "progress changed"):
+            self.accept(proposal)
+        self.assertEqual(self.mutations, [])
+        self.assertFalse(self.worker.get("pending", proposal["key"]))
+
+    def test_keeping_a_status_allows_later_auto_updates_until_status_changes(self):
+        self.row["status"] = "PAUSED"
+        self.accept(self.propose(), keep_status=True)
+        self.player.update(session=2, episode="5")
+        self.assertFalse(self.propose())
+        self.assertEqual(
+            self.mutations, [{"id": 9, "progress": 4}, {"id": 9, "progress": 5}]
+        )
+        self.assertEqual(self.row["status"], "PAUSED")
+        self.row.update(status="DROPPED", updatedAt=8)
+        self.player.update(session=3, episode="6")
+        self.assertEqual(self.propose()["status"], "CURRENT")
+        self.assertEqual(len(self.mutations), 2)
+
+    def test_completed_entry_starts_rewatch_with_fresh_time_and_explicit_approval(self):
+        self.row.update(status="COMPLETED", progress=12, repeat=2)
+        self.player["episode"] = "1"
+        self.player["tracking"]["rewatch"] = True
+        self.worker.put("history", "1/195604/1/0", {"progress": 1})
+        self.assertFalse(self.propose())
+        self.assertEqual(self.worker.cycle(self.account, self.player), "1/195604/1/1")
+        self.assertFalse(self.propose(899))
+        proposal = self.propose()
+        self.assertTrue(proposal["start_rewatch"])
+        self.assertEqual(proposal["status"], "REPEATING")
+        self.assertEqual(self.mutations, [])
+        self.accept(proposal)
+        self.assertEqual(
+            self.mutations, [{"id": 9, "progress": 1, "status": "REPEATING"}]
+        )
+        self.assertEqual(self.row["repeat"], 2)
+        self.assertEqual(self.worker.cycle(self.account, self.player), "1/195604/1/1")
+
+    def test_remote_rewatch_advances_and_finishes_once_after_a_lost_response(self):
+        self.row.update(status="REPEATING", progress=3, repeat=2)
+        self.worker.put("history", "1/195604/4/0", {"progress": 4})
+        self.assertFalse(self.propose())
+        self.assertEqual(self.worker.cycle(self.account, self.player), "1/195604/4/1")
+        self.assertFalse(self.propose())
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+        self.assertEqual(self.row["status"], "REPEATING")
+        self.row.update(progress=11, updatedAt=5)
+        self.player.update(session=2, episode="12")
+        self.lose_response = True
+        self.assertFalse(self.propose())
+        self.assertEqual(
+            self.mutations[-1],
+            {"id": 9, "progress": 12, "status": "COMPLETED", "repeat": 3},
+        )
+        self.assertFalse(self.propose())
+        self.assertEqual(len(self.mutations), 2)
+
+    def test_paused_rewatch_resumes_without_completing_an_unknown_total(self):
+        self.row.update(status="REPEATING", progress=3, repeat=2)
+        self.player["total"] = 0
+        self.assertFalse(self.propose())
+        self.row.update(status="PAUSED", updatedAt=2)
+        self.player["session"] = 2
+        proposal = self.propose()
+        self.assertEqual(proposal["status"], "REPEATING")
+        self.assertIsNone(proposal["repeat_count"])
+        self.accept(proposal)
+        self.assertEqual(
+            self.mutations, [{"id": 9, "progress": 4, "status": "REPEATING"}]
+        )
+        self.assertEqual(self.row["repeat"], 2)
 
 
 if __name__ == "__main__":

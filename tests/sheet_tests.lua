@@ -184,6 +184,7 @@ local function verify()
         model=value
         local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
         panel.push=function(page) panel.page=page end
+        panel.back=function() panel.page="AniList" end
         return panel
     end,function(req) job=req.job or job end,{tmdb_key="",acoustid_key="",
         open_url=function(url) opened=url end},help)
@@ -216,6 +217,32 @@ local function verify()
     local parts={}
     for _,row in ipairs(model.rows("Confirm")) do if row.plain then parts[#parts+1]=row.label end end
     assert(table.concat(parts," "):find("forget local history?",1,true),"Confirmation split a word")
+
+    menu.page="AniList"
+    local proposal={key="5/42/2/0",title="Fixture anime",media=42,episode=2,before=1,
+        status="CURRENT",base={id=9,status="PAUSED"}}
+    local snapshot={session=8,allowed=true,match=42,title="Fixture anime",episode="2",watch_episode=true,
+        account={id=5,name="Viewer",generation="test"},service={proposal=proposal},pending={proposal}}
+    menu.update(snapshot)
+    find("AniList","Update and switch to Watching").run()
+    local function confirmation()
+        local text={}
+        for _,row in ipairs(model.rows("Confirm")) do if row.plain then text[#text+1]=row.label end end
+        return table.concat(text," ")
+    end
+    assert(confirmation():find("Paused → Watching",1,true))
+    find("Confirm","Confirm").run()
+    assert(job.op=="accept" and not job.keep_status and job.proposal==proposal.key)
+    find("Pending updates","Update progress only").run()
+    assert(confirmation():find("Keep Paused for later updates",1,true))
+    find("Confirm","Confirm").run()
+    assert(job.op=="accept" and job.keep_status)
+    proposal.status="COMPLETED"
+    proposal.repeat_count=3
+    proposal.base={id=9,status="REPEATING",["repeat"]=2}
+    menu.update(snapshot)
+    find("AniList","Finish rewatch").run()
+    assert(confirmation():find("Rewatching → Completed",1,true) and confirmation():find("Rewatches 2 → 3",1,true))
 end
 local ok,err=pcall(verify)
 mp=original

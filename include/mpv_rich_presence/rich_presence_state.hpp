@@ -78,7 +78,6 @@ namespace mpvrp
         std::atomic<int> file_load_id = 0;
         std::atomic<int> completed_anime_lookup = -1;
 
-        std::atomic<bool> safe_episode{false};
         bool watch_episode = false;
         int conflicting_anime_minutes = 0;
         bool is_anime = false;
