@@ -204,12 +204,9 @@ if (mpv-rich-presence_INSTALL AND NOT CMAKE_SKIP_INSTALL_RULES)
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/docs"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
 
-    install(FILES
-            screenshots/panel-now-playing.jpg
-            screenshots/panel-anilist.jpg
-            screenshots/panel-ask.jpg
-            screenshots/panel-timeout.jpg
-        DESTINATION "${mpv-rich-presence_INSTALL_DIR}/screenshots")
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/screenshots"
+        DESTINATION "${mpv-rich-presence_INSTALL_DIR}"
+        FILES_MATCHING PATTERN "*.png" PATTERN "*.jpg")
 
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
         DESTINATION "${mpv-rich-presence_INSTALL_DIR}")
