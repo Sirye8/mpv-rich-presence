@@ -16,7 +16,7 @@ Press **Alt+p** to open the translucent panel. Hover over a setting to see what 
 | Saved data | Filter local records and confirm what to remove. Clearing local progress leaves your AniList list alone. |
 | Diagnostics | Check the active provider, ownership, permission and most recent SDK or account result. |
 
-Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Click or scroll to navigate with a mouse. Search and ID entry use mpv's text input when available. You can also open a page from the mpv console, for example `script-message-to mpv_rich_presence menu Appearance`.
+Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Hover to scroll long row text and read the full value in its tooltip. If the tooltip is taller than the window, use the mouse wheel while hovering the row. Click a row marked ↗ or press Enter to open its link in your default browser. Search and ID entry use mpv's text input when available. You can also open a page from the mpv console, for example `script-message-to mpv_rich_presence menu Appearance`.
 
 ### Sharing and privacy
 
@@ -46,7 +46,9 @@ The minus and plus controls edit a draft. Apply shows the account and proposed c
 
 ### Recognition and templates
 
-**Automatic** checks AniList first for video. It tries movie or TV recognition only after AniList finishes without a match. If AniList cannot complete the lookup, the card uses the local title. Movie and TV matching prefers TMDB, with Wikidata and TVmaze as fallbacks. Audio-only files use MusicBrainz for tagged tracks and Cover Art Archive for available artwork.
+**Automatic** checks AniList first for video. A completed miss allows movie or TV lookup. If a feature-length file with an explicit year loosely matches a much shorter anime from a different year, TMDB can confirm the movie by exact title and year. When AniList is unavailable the card uses the local title. Movie and TV matching prefers TMDB, with Wikidata and TVmaze as fallbacks.
+
+For local audio, MusicBrainz uses the track, artist, album, and duration tags. It handles featured artists and common remaster suffixes. Cover Art Archive supplies available release artwork. If the tags cannot identify the track or album, Automatic can try AcoustID. Fingerprinting sends the fingerprint and audio duration to AcoustID and uses the included application key.
 
 To classify a folder, open a file inside it and press `Alt+p`. Go to **Recognition & folders**, set **Save for** to **folder**, and choose **Media recognition**. The rule applies to that folder and its subfolders.
 
@@ -61,7 +63,7 @@ To classify a folder, open a file inside it and press `Alt+p`. Go to **Recogniti
 
 Automatic, Anime, and Original share the v1.0.10 anime resolver, including its season and sequel rules. Saved manual match corrections still apply. Choose **Inherit recognition source** to remove an override. The effective order is file, nearest matching folder, global panel setting, then `recognition_source` in the conf file. The panel shows the active choice and where it came from.
 
-You can supply your own TMDB read token in `tmdb_key`. AcoustID fingerprinting requires a client key and `fpcalc` on PATH and runs only when selected. See the [shared TMDB setup](docs/tmdb-metadata.md).
+You can override the default services with `tmdb_key` or `acoustid_key`. The Windows and Linux ZIPs include `fpcalc`. Source installs can use `fpcalc` on PATH. To look up local audio manually, choose **Recognition & folders → Fingerprint this file**. See the [shared TMDB setup](docs/tmdb-metadata.md).
 
 Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `scripts/mpv-rich-presence/data.sqlite3` under the mpv config directory.
 
@@ -187,7 +189,7 @@ Available script messages:
    ctest --test-dir build -C Release --output-on-failure
    ```
 
-To create a local Windows archive, run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. This builds Release, runs CTest, and includes the verified embeddable Python distribution with its license.
+Run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip` on Windows, or choose a Linux ZIP filename on Linux. The script builds Release, runs CTest, and adds the verified Chromaprint executable and its source and license files. The Windows x64 ZIP also includes embeddable Python. The Linux x86-64 and ARM64 ZIPs use system Python 3.
 
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 

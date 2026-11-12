@@ -8,19 +8,37 @@ local theme = {black="0B0908", rail="080605", row="201C19", hover="40352B", focu
 local row_step, row_height = 32, 29
 local mouse_section = "rich-presence-panel"
 
-local function short(text, limit)
-    local out, width = {}, 0
-    for ch in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-        width = width + (#ch > 2 and 2 or 1)
-        if width > limit then return table.concat(out) .. "…" end
-        out[#out+1] = ch
-    end
-    return text
-end
-
-local function fit(text, size, space)
-    text = short(tostring(text or ""):gsub("[%c]", " "), math.max(3, math.floor(space/(size*.58))))
+local utf8_char = "[%z\1-\127\194-\244][\128-\191]*"
+local function escape(text)
     return (text:gsub("\\", "\\\239\187\191"):gsub("{", "\\{"):gsub("}", "\\}"))
+end
+local function advance(ch)
+    if #ch>=3 then return .88 end
+    if ch:match("[ ilI1%.,:;'!|]") then return .23 end
+    if ch:match("[MWmw@%%&]") then return .64 end
+    if ch:match("%u") then return .49 end
+    return .42
+end
+local function measure(text,size)
+    local width=0
+    for ch in text:gmatch(utf8_char) do width=width+advance(ch) end
+    return math.ceil(width*size)
+end
+local function display(text,size,space)
+    text=tostring(text or ""):gsub("[%c]", " ")
+    local overflow=measure(text,size)-space
+    return {full=escape(text),overflow=overflow>0 and overflow+3 or 0}
+end
+local function fit(text,size,space)
+    text=tostring(text or ""):gsub("[%c]", " ")
+    if measure(text,size)<=space then return escape(text) end
+    local chars, remaining={}, math.max(0,space-size)
+    for ch in text:gmatch(utf8_char) do
+        remaining=remaining-advance(ch)*size
+        if remaining<0 then break end
+        chars[#chars+1]=ch
+    end
+    return escape(table.concat(chars)).."…"
 end
 
 local function alpha(opacity)
@@ -34,10 +52,10 @@ local function box(ass, x,y,r,b, color, opacity, radius, rim)
     ass:draw_start(); ass:round_rect_cw(x,y,r,b,radius or 8); ass:draw_stop()
 end
 
-local function label(ass, x,y, text, size, color, opacity, align, bold)
+local function label(ass, x,y, text, size, color, opacity, align, bold, clip)
     ass:new_event(); ass:an(align or 7); ass:pos(x,y)
     ass:append("{\\fnSegoe UI\\fs"..size.."\\b"..(bold and 1 or 0).."\\bord0\\shad0\\q2\\1c&H"..color..
-        "&\\alpha&H"..alpha(opacity).."&}"..text)
+        "&\\alpha&H"..alpha(opacity).."&"..(clip or "").."}"..text)
 end
 
 return function(model)
@@ -46,7 +64,7 @@ return function(model)
     local last_frame, last_terminal
     local keys, editing, pressed, hovered, tooltip = {}
     local scale = 1
-    local motion = {shell=0, page=1, focus=1, hover=0, hint=0}
+    local motion = {shell=0, page=1, focus=1, hover=0, hint=0, scroll=0}
     local tweens = {}
 
     local function dimensions()
@@ -79,7 +97,7 @@ return function(model)
         local w,h = dimensions()
         if not w then return 72 end
         local _,right,pane = columns(w,h)
-        return math.max(3,math.floor((right-pane-32)/((size or 15)*.58)))
+        return math.max(3,math.floor((right-pane-32)/((size or 15)*.44)))
     end
 
     local function remove_overlay()
@@ -94,6 +112,15 @@ return function(model)
         overlay.res_x,overlay.res_y,overlay.data = w,h,ass.text
         overlay:update()
         last_frame=frame
+    end
+
+    local function draw_cell(ass,item,cell,x,y,r,size,color,opacity,right,bold)
+        -- The clip follows the actual cell. A font-width estimate only decides
+        -- alignment and travel, so text that fits is never shortened here.
+        local align_right=right and cell.overflow==0
+        local shift=hovered==item.key and math.min(cell.overflow,math.floor(motion.scroll)) or 0
+        local clip=string.format("\\clip(%d,%d,%d,%d)",math.ceil(x),math.floor(y),math.floor(r),math.ceil(y+size+8))
+        label(ass,align_right and r or x-shift,y,cell.full,size,color,opacity,align_right and 9 or nil,bold,clip)
     end
 
     local function render()
@@ -118,7 +145,7 @@ return function(model)
                 if active then
                     box(ass,item.x+4,item.y+7,item.x+7,item.b-7,theme.accent,.92*shell,1.5)
                 end
-                label(ass,item.x+13,item.y+5,item.display,15,active and theme.text or theme.muted,shell)
+                draw_cell(ass,item,item.display,item.x+13,item.y+5,item.r-8,15,active and theme.text or theme.muted,shell)
             end
         end
         label(ass,pane+14+offset,top+10+rise,layout.title,20,theme.text,content,nil,true)
@@ -130,7 +157,7 @@ return function(model)
             local inset = is_pressed and 1 or 0
             local x,y,r,b = item.x+inset,item.y+inset,item.r-inset,item.b-inset
             if item.plain then
-                label(ass,x+5+offset,y+5+rise,item.display,15,theme.text,content)
+                draw_cell(ass,item,item.display,x+5+offset,y+5+rise,item.r-9,15,theme.text,content)
             elseif item.primary or is_pressed then
                 box(ass,x,y,r,b,theme.accent,(is_pressed and .81 or .96)*content)
             else
@@ -142,13 +169,15 @@ return function(model)
                 box(ass,x+4,y+7,x+7,b-7,theme.accent,focus*content,1.5)
             end
             local color = (item.primary or is_pressed) and theme.ink or (item.disabled and theme.muted or theme.text)
-            if not item.plain then label(ass,x+13+offset,y+5+rise,item.display,15,color,content,nil,item.primary) end
+            if not item.plain then
+                draw_cell(ass,item,item.display,x+13+offset,y+5+rise,item.label_right,15,color,content,false,item.primary)
+            end
             if item.value then
                 local color = item.primary and theme.ink or (item.disabled and theme.muted or theme.accent)
-                label(ass,r-(item.adjust and 26 or 11),y+6+rise,item.value,14,color,content,9)
+                draw_cell(ass,item,item.value,item.label_right+12,y+6+rise,item.value_right,14,color,content,true)
             end
-            if item.fn and item.toggle==nil and (item.adjust or not item.value) and not item.primary then
-                label(ass,r-10,y+4+rise,"›",16,theme.accent,.8*content,9)
+            if item.fn and item.toggle==nil and (item.adjust or not item.value or item.link) and not item.primary then
+                label(ass,r-10,y+4+rise,item.link and "↗" or "›",16,theme.accent,.8*content,9)
             end
             if item.toggle~=nil then
                 local sx = r-46
@@ -174,9 +203,14 @@ return function(model)
             local opacity = shell*motion.hint
             local y = tip.y + math.floor(4*(1-motion.hint)+.5)
             box(ass,tip.x,y,tip.x+tip.width,y+tip.height,theme.hint,.97*opacity,12,.45*opacity)
-            label(ass,tip.x+12,y+8,tip.title,15,theme.accent,opacity,nil,true)
             for _,line in ipairs(tip.lines) do
-                label(ass,tip.x+line.x,y+line.y,line.text,line.size,line.color,opacity,nil,line.bold)
+                local line_y=line.y-tip.scroll
+                if line_y>=8 and line_y+line.size+3<=tip.height-(tip.max_scroll>0 and 25 or 4) then
+                    label(ass,tip.x+line.x,y+line_y,line.text,line.size,line.color,opacity,nil,line.bold)
+                end
+            end
+            if tip.max_scroll>0 then
+                label(ass,tip.x+12,y+tip.height-21,"Scroll to read the full tooltip",12,theme.accent,opacity)
             end
         end
         paint(ass,layout.w,layout.h)
@@ -190,7 +224,8 @@ return function(model)
         local now = mp.get_time()
         for key,tween in pairs(tweens) do
             local progress = math.min(1,(now-tween.start)/tween.duration)
-            motion[key] = tween.from+(tween.to-tween.from)*(1-(1-progress)^3)
+            local eased=tween.linear and progress or 1-(1-progress)^3
+            motion[key] = tween.from+(tween.to-tween.from)*eased
             if progress==1 then
                 motion[key]=tween.to
                 tweens[key]=nil
@@ -206,13 +241,13 @@ return function(model)
         if not next(tweens) then stop_animation() end
     end
 
-    local function animate(key, from, to, duration)
+    local function animate(key, from, to, duration, linear)
         if model.animate==false or from==to then
             motion[key],tweens[key] = to,nil
             return
         end
         motion[key] = from
-        tweens[key] = {from=from,to=to,start=mp.get_time(),duration=duration}
+        tweens[key] = {from=from,to=to,start=mp.get_time(),duration=duration,linear=linear}
         if not animation_timer then animation_timer=mp.add_periodic_timer(1/60,tick) end
     end
 
@@ -220,6 +255,7 @@ return function(model)
         if hover_timer then hover_timer:kill(); hover_timer=nil end
         hovered=nil
         motion.hover,tweens.hover=0,nil
+        motion.scroll,tweens.scroll=0,nil
         if immediate or motion.hint==0 or model.animate==false then
             motion.hint,tweens.hint,tooltip=0,nil,nil
         else
@@ -228,11 +264,26 @@ return function(model)
     end
 
     local function wrap(text, width, size)
-        local lines,line = {}, ""
-        local limit = math.floor(width/(size*.58))
+        local lines,line,used = {},"",0
         for word in text:gmatch("%S+") do
-            if #line>0 and #line+#word+1>limit then lines[#lines+1]=line; line="" end
-            line=line=="" and word or line.." "..word
+            local length=measure(word,size)
+            if line~="" and used+length+size*.23>width then
+                lines[#lines+1]=line
+                line,used="",0
+            end
+            if length>width then
+                for ch in word:gmatch(utf8_char) do
+                    local pixels=advance(ch)*size
+                    if used+pixels>width and line~="" then
+                        lines[#lines+1]=line
+                        line,used="",0
+                    end
+                    line,used=line..ch,used+pixels
+                end
+            else
+                if line~="" then line,used=line.." ",used+size*.23 end
+                line,used=line..word,used+length
+            end
         end
         if line~="" then lines[#lines+1]=line end
         return lines
@@ -241,12 +292,23 @@ return function(model)
     local function make_tip(target)
         local options = type(target.tip)=="table" and target.tip.options
         local width = math.min(options and 378 or 318,layout.w-24)
-        local lines, height = {}, 30
-        local function line(text,x,y,size,color,bold,space)
-            lines[#lines+1]={text=fit(text,size,space),x=x,y=y,size=size,color=color,bold=bold}
+        local lines, height = {}, 8
+        local function line(text,x,y,size,color,bold)
+            lines[#lines+1]={text=escape(text),x=x,y=y,size=size,color=color,bold=bold}
+        end
+        for _,value in ipairs(wrap(target.caption or target.title,width-28,15)) do
+            line(value,12,height,15,theme.accent,true)
+            height=height+19
+        end
+        if target.value_text then
+            for _,value in ipairs(wrap(target.value_text,width-28,14)) do
+                line(value,12,height,14,theme.text)
+                height=height+18
+            end
+            height=height+4
         end
         if options then
-            line("Options",12,height,12,theme.muted,true,width-24)
+            line("Options",12,height,12,theme.muted,true)
             height=height+19
             local column = math.min(122,math.floor(width*.39))
             local description_width = width-column-12
@@ -254,20 +316,29 @@ return function(model)
                 local color = option.selected and theme.accent or theme.text
                 local name = option.label:sub(1,1):upper()..option.label:sub(2):gsub("-", " ")
                 local marker = option.selected and "• " or ""
-                line(marker..name,12,height,13,color,true,column-16)
+                local option_label=wrap(marker..name,column-16,13)
+                for i,value in ipairs(option_label) do
+                    line(value,12,height+(i-1)*16,13,color,true)
+                end
                 local detail = wrap(option.detail,description_width,13)
                 for i,value in ipairs(detail) do
-                    line(value,column,height+(i-1)*16,13,theme.text,false,description_width)
+                    line(value,column,height+(i-1)*16,13,theme.text)
                 end
-                height=height+math.max(20,16*#detail+3)
+                height=height+math.max(20,16*math.max(#detail,#option_label)+3)
             end
         else
             for _,value in ipairs(wrap(target.tip,width-24,14)) do
-                line(value,12,height,14,theme.text,false,width-24)
+                line(value,12,height,14,theme.text)
                 height=height+18
             end
         end
         height=height+8
+        local max_scroll=0
+        local max_height=math.max(80,layout.max_bottom-layout.min_top-4)
+        if height>max_height then
+            max_scroll=height-max_height+25
+            height=max_height
+        end
         local space_right = layout.w-layout.right>=width+20
         local space_left = layout.left>=width+20
         local beside = space_right or space_left
@@ -281,7 +352,7 @@ return function(model)
             else y=target.y-height-8 end
         end
         return {x=x,y=math.max(layout.min_top,math.min(y,ceiling)),width=width,height=height,
-            key=target.key,title=fit(target.title,15,width-24),lines=lines}
+            key=target.key,lines=lines,max_scroll=max_scroll,scroll=0}
     end
 
     local function unbind()
@@ -403,7 +474,7 @@ return function(model)
                     ui.stack={"Menu"}
                     show_page(page,1)
                 end,page,model.help and model.help(page))
-                item.display=fit(page,15,pane-left-28)
+                item.display=display(page,15,item.r-item.x-21)
             end
         end
         mem.top=math.max(1,math.min(mem.top,mem.focus,math.max(1,#rows-available+1)))
@@ -415,20 +486,22 @@ return function(model)
             local item=hit(layout.rows,pane+8,y,right-8,y+row_height,i,key,not row.disabled and row.run or nil,row.label,row.tip)
             item.focused,item.disabled,item.primary,item.toggle,item.adjust,item.plain = mem.focus==i,row.disabled,row.primary,row.toggle,row.adjust,row.plain
             local title,value=row.label:match("^(.-)   (.+)$")
-            local space=right-pane-48
-            if row.plain then
-                space=right-pane-30
-            elseif row.toggle~=nil then
-                space=space-43
+            item.caption,item.value_text,item.link=title or row.label,value,row.link
+            local label_left=item.x+(row.plain and 5 or 13)
+            local inset=(row.adjust or row.link or (item.fn and not value)) and 26 or 11
+            item.label_right=item.r-inset
+            if row.toggle~=nil then
+                item.label_right=item.r-49
             elseif value then
-                if row.adjust then space=space-15 end
-                local value_space=math.floor(math.max(space*.38,math.min(space*.72,space-#title*8.7-16)))
-                item.value=fit(value,14,value_space)
-                space=space-value_space-8
-            elseif item.fn then
-                space=space-17
+                item.value_right=item.label_right
+                local space=item.value_right-label_left-12
+                local title_width=measure(title,15)+6
+                local value_width=measure(value,14)+4
+                local value_space=math.min(value_width,space-math.min(title_width,math.floor(space*.48)))
+                item.label_right=item.value_right-value_space-12
+                item.value=display(value,14,value_space)
             end
-            item.display=fit(title or row.label,15,space)
+            item.display=display(item.caption,15,item.label_right-label_left-6)
         end
         if ui.page=="Appearance" then
             local mid=(pane+right)/2
@@ -456,6 +529,7 @@ return function(model)
             for _,target in ipairs(ui.hits) do
                 if target.key==tooltip.key and target.tip then updated=make_tip(target); break end
             end
+            if updated then updated.scroll=math.min(tooltip.scroll,updated.max_scroll) end
             tooltip=updated
         end
         render()
@@ -495,9 +569,15 @@ return function(model)
                 hover_timer=mp.add_timeout(.33,function()
                     hover_timer=nil
                     for _,item in ipairs(ui.hits) do
-                        if item.key==hovered and item.tip then
-                            tooltip=make_tip(item)
-                            animate("hint",.18,1,.13)
+                        if item.key==hovered then
+                            if item.tip then
+                                tooltip=make_tip(item)
+                                animate("hint",.18,1,.13)
+                            end
+                            local distance=math.max(item.display and item.display.overflow or 0,item.value and item.value.overflow or 0)
+                            if distance>0 and model.animate~=false then
+                                animate("scroll",0,distance,math.max(.25,math.min(14,distance/74)),true)
+                            end
                             render()
                             break
                         end
@@ -529,9 +609,15 @@ return function(model)
         if position and position.hover==false then clear_hover(false); render()
         else pointer("hover") end
     end
+    local function scroll(delta)
+        if tooltip and tooltip.key==hovered and tooltip.max_scroll>0 then
+            tooltip.scroll=math.max(0,math.min(tooltip.max_scroll,tooltip.scroll+delta*72))
+            render()
+        else focus(delta) end
+    end
     mp.set_key_bindings({
-        {"wheel_up",function() focus(-1) end},
-        {"wheel_down",function() focus(1) end},
+        {"wheel_up",function() scroll(-1) end},
+        {"wheel_down",function() scroll(1) end},
         {"mbtn_left",nil,function() pointer("down") end,function() pointer("up") end},
         {"mbtn_left_dbl","ignore"},
     },mouse_section,"force")

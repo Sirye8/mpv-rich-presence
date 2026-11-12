@@ -74,6 +74,11 @@ return function(make_sheet, send, options, help)
                 id=id or label:match("^(.-)   ") or label,tip=help(label,page,fn~=nil,nil,nil,id)}
             return list[#list]
         end
+        local function link(label,url,description,detail,id)
+            local item=row(label.."   "..(detail or url),function() options.open_url(url) end,false,nil,id)
+            item.link=true
+            item.tip=description.." Click or press Enter to open "..(detail and url.." " or "").."in your default browser."
+        end
         local function choice(label,values,current,fn,display)
             local function step(dir)
                 local idx=1
@@ -154,10 +159,15 @@ return function(make_sheet, send, options, help)
             for _,field in ipairs({{"Details","details"},{"State","state"},{"Artwork","large_image"},{"Artwork tooltip","large_text"},
                 {"Badge","small_image"},{"Badge tooltip","small_text"},{"Compact status","compact"},
                 {"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
-                if card[field[2]] then row(field[1].."   "..card[field[2]]) end
+                local value=card[field[2]]
+                if value then
+                    if type(value)=="string" and value:match("^https?://") then
+                        link(field[1],value,"This URL is part of the outgoing Discord card.")
+                    else row(field[1].."   "..value) end
+                end
             end
             for i,button in ipairs(card.buttons or {}) do
-                row(button.label.."   "..button.url,nil,false,nil,"Public button "..i)
+                link(button.label,button.url,"This button label and URL appear on the Discord card.",nil,"Public button "..i)
             end
         elseif page=="Appearance" then
             local opts=copy(replace and {} or snap.appearance); for k,v in pairs(opts[layout.."_layout"] or {}) do opts[k]=v end; for k,v in pairs(draft) do opts[k]=v end
@@ -260,16 +270,16 @@ return function(make_sheet, send, options, help)
                 end)
             end
         elseif page=="Providers" then
-            row("AniList   Anime titles, covers and sequels")
-            row("TMDB   "..(options.tmdb_key~="" and "Personal token configured" or "Uses the shared service when available"))
-            row("This product uses the TMDB API")
-            row("but is not endorsed or certified by TMDB.")
-            row("TVmaze   Aired episode order and artwork · CC BY-SA")
-            row("Wikidata   Public film titles and release dates")
-            row("MusicBrainz   Recording and release IDs · 1 request per second")
-            row("Cover Art Archive   Release artwork")
-            row("AcoustID   "..(options.acoustid_key~="" and "Key configured" or "Set acoustid_key in rich-presence.conf"))
-            row("Fingerprinting requires fpcalc and a local file")
+            link("AniList","https://anilist.co/","Supplies public anime titles, artwork and sequel links. Sign-in is only needed for list features.","Anime metadata")
+            link("TMDB","https://www.themoviedb.org/","Supplies movie and TV titles, episode metadata and posters. The packaged default uses the shared service.",
+                options.tmdb_key~="" and "Personal token" or "Shared service")
+            row("This product uses the TMDB API but is not endorsed or certified by TMDB.",nil,false,nil,"TMDB attribution")
+            link("TVmaze","https://www.tvmaze.com/","Supplies aired episode order and artwork as a TV fallback. Its data is licensed under CC BY-SA.","TV metadata · CC BY-SA")
+            link("Wikidata","https://www.wikidata.org/","Supplies film titles and release years if TMDB cannot resolve a movie.","Movie fallback")
+            link("MusicBrainz","https://musicbrainz.org/","Matches recording and album tags. The plugin checks artist credits and runtime before selecting a recording.","Music metadata")
+            link("Cover Art Archive","https://coverartarchive.org/","Supplies artwork for identified MusicBrainz releases and release groups.","Album artwork")
+            link("AcoustID","https://acoustid.org/","Identifies local audio using a fingerprint. Only the fingerprint and duration are sent. The package includes an application key.",
+                options.bundled_fpcalc and "Fingerprinting included" or "Uses fpcalc on PATH")
         elseif page=="Search results" then
             if answer.provider~=search then row("Searching…") else
                 for _,r in ipairs(answer.results or {}) do

@@ -48,6 +48,7 @@ local modules = utils.join_path(directory, "modules")
 local config = utils.join_path(base, "script-opts/rich-presence.conf")
 local windows = package.config:sub(1,1) == "\\"
 local bundled = windows and utils.join_path(directory, "runtime/python.exe")
+options.bundled_fpcalc = utils.file_info(utils.join_path(directory, windows and "runtime/fpcalc.exe" or "runtime/fpcalc")) ~= nil
 local interpreter = options.python
 if interpreter=="" then
     interpreter = bundled and utils.file_info(bundled) and bundled or (windows and "python" or "python3")
@@ -99,7 +100,19 @@ mp.register_script_message("start-service", function(instance)
 end)
 mp.register_event("shutdown",function() if worker then mp.abort_async_command(worker) end end)
 
-local ok, menu = pcall(function()
+local menu
+options.open_url = function(url)
+    local host = type(url)=="string" and url:match("^https?://([^/?#]+)")
+    if not host or host:find("@",1,true) or url:find('[%s%c\\"]') then return end
+    local args = windows and {interpreter,"-I","-c","import os, sys; os.startfile(sys.argv[1])",url}
+        or {"xdg-open",url}
+    mp.command_native_async({name="subprocess",args=args,playback_only=false,
+        capture_stdout=true,capture_stderr=true},function(_,result)
+        if not result or result.status~=0 then menu.toast("Could not open the default browser.") end
+    end)
+end
+local ok
+ok, menu = pcall(function()
     local sheet = dofile(utils.join_path(modules,"sheet.lua"))
     local help = dofile(utils.join_path(modules,"menu_help.lua"))
     return dofile(utils.join_path(modules,"menu.lua"))(sheet,panel,options,help)

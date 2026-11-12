@@ -152,16 +152,45 @@ local function verify()
     animation().fn()
     assert(not animation() and next(observed)==nil,"Closing left an animation or observer active")
 
-    local model,job
+    local full_value = "[SubsPlease] Youjo Senki S2 - 07 (1080p).mkv"
+    local long_url = "https://example.com/"..string.rep("longsegment",300).."/end-of-link"
+    local text_panel=sheet({sections={},animate=true,rows=function() return {
+        {id="details",label="Details   "..full_value,tip="Read-only value."},
+        {id="link",label="Link   "..long_url,tip="Open in your default browser. TooltipEndMarker.",run=function() end,link=true},
+    } end,refresh=function() end,closed=function() end})
+    text_panel.show("Text")
+    clock=clock+.21
+    animation().fn()
+    assert(paint:find(full_value,1,true),"Text was shortened despite having room")
+    hit=text_panel.hits[2]
+    x,y=(hit.x+4)*height/paint_height,(hit.y+4)*height/paint_height
+    text_panel.mouse_moved(nil,{hover=true})
+    wait=timers[#timers]
+    wait.killed=true
+    wait.fn()
+    clock=clock+.4
+    animation().fn()
+    assert(paint:find("\\clip(",1,true) and paint:find(long_url,1,true),"Long row did not scroll with its full text")
+    assert(paint:find("Scroll to read the full tooltip",1,true),"Long tooltip did not offer scrolling")
+    assert(not paint:find("TooltipEndMarker.",1,true))
+    for _=1,25 do mouse_bindings[2][2]() end
+    assert(paint:find("TooltipEndMarker.",1,true),"The end of the tooltip could not be reached")
+    text_panel.close()
+    clock=clock+.2
+    animation().fn()
+
+    local model,job,opened
     local menu=dofile(modules.."/menu.lua")(function(value)
         model=value
         local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
         panel.push=function(page) panel.page=page end
         return panel
-    end,function(req) job=req.job or job end,{tmdb_key="",acoustid_key=""},help)
+    end,function(req) job=req.job or job end,{tmdb_key="",acoustid_key="",
+        open_url=function(url) opened=url end},help)
     menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",safe_episode=true,
         account={id=5,name="Viewer",generation="test"},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
-        card={details="Fixture details",state="Fixture state",start=1,["end"]=2},
+        card={details="Fixture details",state="Fixture state",start=1,["end"]=2,
+            buttons={{label="View on AniList",url="https://anilist.co/anime/42"}}},
         service={message="Progress refreshed.",elapsed=999}})
     assert(job and job.op=="read" and job.quiet,"Automatic list read sent a normal notification")
     local function find(page,id)
@@ -172,6 +201,9 @@ local function verify()
     assert(not find("Card preview","start") and not find("Card preview","end"),"Discord timestamps leaked into the preview")
     assert(find("Card preview","Details").tip:match("^Read only%.") and type(find("Appearance","Details").tip)=="table",
         "Preview and editable help were mixed")
+    find("Card preview","Public button 1").run()
+    assert(opened=="https://anilist.co/anime/42","Preview link did not open its URL")
+    assert(find("Providers","TMDB attribution").label=="This product uses the TMDB API but is not endorsed or certified by TMDB.")
     assert(not find("AniList","Message"),"A saved worker message was repeated")
     model.notice("Disconnected.","AniList")
     assert(find("AniList","Message").label=="Disconnected.")
