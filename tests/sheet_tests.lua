@@ -187,7 +187,7 @@ local function verify()
         return panel
     end,function(req) job=req.job or job end,{tmdb_key="",acoustid_key="",
         open_url=function(url) opened=url end},help)
-    menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",safe_episode=true,
+    menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",watch_episode=true,
         account={id=5,name="Viewer",generation="test"},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
         card={details="Fixture details",state="Fixture state",start=1,["end"]=2,
             buttons={{label="View on AniList",url="https://anilist.co/anime/42"}}},

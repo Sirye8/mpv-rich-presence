@@ -336,8 +336,11 @@ return function(make_sheet, send, options, help)
             row("Playing episode   "..(snap.episode and snap.episode~="" and snap.episode or "Unknown"))
             local watch=snap.episode_watch or {}
             if not account.id then row("Episode watch time   Connect AniList")
-            elseif not snap.safe_episode then row("Episode watch time   No confirmed episode")
             elseif not snap.allowed then row("Episode watch time   Lookup blocked")
+            elseif (snap.match or 0)==0 then row("Episode watch time   No anime match")
+            elseif not snap.episode or snap.episode=="" then row("Episode watch time   No episode number")
+            elseif not snap.watch_episode then row("Episode watch time   Episode needs review")
+            elseif (tracking.mode or "off")=="off" and not watch.elapsed then row("Episode watch time   Tracking is off")
             else
                 row("Episode watch time   "..duration(watch.elapsed or 0))
                 row("Watch started   "..clock_time(watch.first_watched))

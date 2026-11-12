@@ -42,7 +42,7 @@ Tracking starts off. Manual mode lets you edit an entry without waiting. Ask and
 
 The AniList panel shows the elapsed watch time and the local clock times of the first and latest credited playback in the current viewing cycle. Existing records retain their elapsed time. They show **Not recorded** for clock times the plugin did not save.
 
-The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Automatic changes require a suitable episode, a current list entry and the next consecutive progress value. Gaps and missing entries require review. A manual correction or skip suppresses a later automatic credit for that episode. Sampling runs independently of account and metadata requests, so a slow network response does not stop the eligible watch counter.
+The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Automatic changes require a suitable episode, a current list entry and the next consecutive progress value. Gaps and missing entries require review. A manual correction or skip suppresses a later automatic credit for that episode. The local watch counter uses the resolved AniList entry and episode shown in the panel. It records single episodes with clear numbering. Recording time alone does not authorize a list update. Sampling runs independently of account and metadata requests, so a slow network response does not stop the eligible watch counter.
 
 ### Recognition and templates
 

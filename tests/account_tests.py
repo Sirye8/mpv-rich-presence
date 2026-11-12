@@ -749,6 +749,41 @@ class AccountTests(unittest.TestCase):
             finally:
                 worker.db.close()
 
+    def test_watch_confirmation_credits_time_without_authorizing_a_list_update(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                worker.put("account", "current", {"id": 1, "generation": "test"})
+                sample = dict(
+                    session=1,
+                    media=195604,
+                    episode="4",
+                    safe_episode=False,
+                    active=True,
+                    speed=1,
+                    seek=0,
+                    tracking={"mode": "auto", "threshold": 0},
+                    wall=time.time() * 1000,
+                )
+                with patch.object(worker, "credential") as credential:
+                    for second, confirmed in enumerate((False, True, True), 100):
+                        worker.put(
+                            "player",
+                            "window",
+                            dict(
+                                sample, time=second, pos=second, watch_episode=confirmed
+                            ),
+                        )
+                        worker.sample()
+                    credential.assert_not_called()
+                self.assertEqual(worker.get("watch", "1/195604/4/0")["elapsed"], 1)
+                self.assertEqual(worker.get("pending", "1/195604/4/0"), {})
+            finally:
+                worker.db.close()
+
     def test_disconnect_during_sample_does_not_restore_watch_data(self):
         with tempfile.TemporaryDirectory() as directory:
             worker = Worker(Path(directory) / "db", "window", {})

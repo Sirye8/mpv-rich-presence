@@ -229,6 +229,7 @@ static void test_anilist_page_parsing()
         TEST_CHECK_EQ(results[0].title, "Shingeki no Kyojin");
         TEST_CHECK_EQ(results[0].episodes, 25);
         TEST_CHECK_EQ(results[0].sequel_id, 20958);
+        TEST_CHECK(results[0].unambiguous_sequel);
         TEST_CHECK_EQ(results[0].cover_url, "https://example.com/cover.jpg");
     }
 
@@ -248,6 +249,18 @@ static void test_anilist_page_parsing()
     bool bad_parse_ok = parse_anilist_page_response(j_invalid, bad_results);
     TEST_CHECK(bad_parse_ok == false);
     TEST_CHECK(bad_results.empty());
+}
+
+static void test_anilist_sequel_ambiguity()
+{
+    const auto branching = parse_anilist_media(nlohmann::json::parse(R"({
+        "id": 1,
+        "relations": {"edges": [
+            {"relationType": "SEQUEL", "node": {"id": 2, "type": "ANIME", "format": "TV"}},
+            {"relationType": "SEQUEL", "node": {"id": 3, "type": "ANIME", "format": "TV"}}
+        ]}
+    })"));
+    TEST_CHECK(branching && branching->sequel_id == 2 && !branching->unambiguous_sequel);
 }
 
 static void test_lease_operations()
@@ -719,6 +732,7 @@ int main(int argc, char* argv[])
     run_test("test_safe_to_lower", test_safe_to_lower);
     run_test("test_folder_filtering", test_folder_filtering);
     run_test("test_anilist_page_parsing", test_anilist_page_parsing);
+    run_test("test_anilist_sequel_ambiguity", test_anilist_sequel_ambiguity);
     run_test("test_lease_operations", test_lease_operations);
     run_test("test_multi_thread_lease_contention", test_multi_thread_lease_contention);
     run_test("test_multi_process_lease_contention", [&]() { test_multi_process_lease_contention(exe_path); });

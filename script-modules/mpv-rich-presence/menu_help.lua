@@ -173,7 +173,7 @@ local read_only = {
         Details="First text line on the current Discord card.",State="Second text line on the current Discord card."},
     ["AniList"]={Account="Account connected in mpv.",Anime="Title of the matched anime.",
         ["Playing episode"]="Season-relative episode number used for AniList.",
-        ["Episode watch time"]="Actual time spent in eligible playback in this viewing cycle. Pauses, buffering and seeks add no time. At 2×, a real minute still adds one minute.",
+        ["Episode watch time"]="Actual playback time for a confirmed single episode in this viewing cycle. Use Correct match if the title or episode is uncertain. Pauses, buffering and seeks add no time. At 2×, a real minute still adds one minute.",
         ["Watch started"]="Local clock time of the first credited playback interval in this viewing cycle. Older records may only have elapsed time.",
         ["Last watched"]="Local clock time of the latest credited playback interval in this viewing cycle.",
         Draft="Proposed episode count. Use the plus and minus controls to change it.",

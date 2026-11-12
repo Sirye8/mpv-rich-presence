@@ -16,7 +16,7 @@ import time
 import zipfile
 
 
-def player_samples(config, media, mpv, environment, check, timeout):
+def player_samples(config, media, mpv, environment, check, timeout, *, paused=True):
     database = config / "scripts/mpv-rich-presence/data.sqlite3"
     with closing(sqlite3.connect(database)) as db, db:
         db.execute(
@@ -44,7 +44,7 @@ def player_samples(config, media, mpv, environment, check, timeout):
             "--script=" + str(script),
             "--script-opts=rich-presence-on=no",
             "--no-terminal",
-            "--pause",
+            "--pause=yes" if paused else "--pause=no",
             "--vo=null",
             "--ao=null",
             str(media),
@@ -92,7 +92,7 @@ def verify(package, mpv, ffmpeg):
                 "-i",
                 "color=black:s=160x90:r=4",
                 "-t",
-                "1",
+                "35",
                 "-c:v",
                 "ffv1",
                 str(anime),
@@ -105,10 +105,52 @@ def verify(package, mpv, ffmpeg):
                 return False
             assert sample["match_title"] == "Youjo Senki II", sample["match_title"]
             assert sample["episode"] == "8", sample["episode"]
+            assert sample["watch_episode"], sample
             return True
 
         player_samples(config, anime, mpv, os.environ, season_two, 25)
-        print("Youjo Senki II, episode 8")
+        print("Youjo Senki II, episode 8 is eligible for watch time")
+
+        black_clover = root / "[SubsPlease] Black Clover - 174 (1080p) [720FB31C].mkv"
+        shutil.copyfile(anime, black_clover)
+        database = config / "scripts/mpv-rich-presence/data.sqlite3"
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute(
+                "INSERT INTO records VALUES ('account','current',?)",
+                (json.dumps({"id": 1, "generation": "watch-test"}),),
+            )
+
+        def watch_time(sample):
+            if not sample.get("media"):
+                return False
+            assert sample["match_title"] == "Black Clover 2nd Season", sample
+            assert sample["episode"] == "4" and sample["watch_episode"], sample
+            with closing(sqlite3.connect(database)) as db:
+                row = db.execute(
+                    "SELECT value FROM records WHERE category='watch' AND scope='1/195604/4/0'"
+                ).fetchone()
+            return row is not None and json.loads(row[0])["elapsed"] >= 2
+
+        player_samples(
+            config, black_clover, mpv, os.environ, watch_time, 25, paused=False
+        )
+        print(
+            "Black Clover absolute episode 174 records watch time under Season 2, episode 4"
+        )
+
+        episode_range = root / "[SubsPlease] Black Clover - 174-175 (1080p).mkv"
+        shutil.copyfile(anime, episode_range)
+
+        def range_requires_review(sample):
+            if not sample.get("media"):
+                return False
+            assert not sample["watch_episode"], sample
+            return True
+
+        player_samples(
+            config, episode_range, mpv, os.environ, range_requires_review, 25
+        )
+        print("An episode range stays ineligible for watch time")
 
         requests = []
 

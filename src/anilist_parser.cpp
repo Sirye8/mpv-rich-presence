@@ -17,6 +17,8 @@
 
 #include "mpv_rich_presence/anilist_parser.hpp"
 
+#include <unordered_set>
+
 const std::string ANILIST_PAGE_FIELDS = R"(
     id
     title { romaji english native }
@@ -125,6 +127,7 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
     {
         int any_sequel = -1;
         int tv_sequel = -1;
+        std::unordered_set<int> episodic_sequels;
         for (auto& edge : media["relations"]["edges"])
         {
             if (edge.is_null() || !edge.contains("relationType") || edge["relationType"].is_null()
@@ -143,8 +146,11 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
 
             if (tv_sequel <= 0 && (node_format == "TV" || node_format == "TV_SHORT"))
                 tv_sequel = node_id;
+            if (node_id > 0 && (node_format == "TV" || node_format == "TV_SHORT" || node_format == "ONA"))
+                episodic_sequels.insert(node_id);
         }
         result.sequel_id = (tv_sequel > 0) ? tv_sequel : any_sequel;
+        result.unambiguous_sequel = episodic_sequels.size() == 1 && episodic_sequels.contains(result.sequel_id);
     }
 
     return result;

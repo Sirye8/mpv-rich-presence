@@ -35,6 +35,7 @@ struct anilist_media
     std::string cover_url;
     std::string format;
     int sequel_id = -1;
+    bool unambiguous_sequel = false;
 };
 
 extern const std::string ANILIST_PAGE_FIELDS;

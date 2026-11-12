@@ -988,12 +988,13 @@ class Worker:
             not prev
             or not a.get("id")
             or not p.get("active")
-            or not p.get("safe_episode")
+            or not p.get("watch_episode", p.get("safe_episode"))
         ):
             return
         before, generation = prev
         if (
             not before.get("active")
+            or not before.get("watch_episode", before.get("safe_episode"))
             or generation != a["generation"]
             or any(
                 before.get(k) != p.get(k)
