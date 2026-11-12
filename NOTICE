@@ -74,10 +74,15 @@ The Windows ZIP includes the Python Software Foundation's x64 embeddable
 distribution. Its license and third-party notices are in
 scripts/mpv-rich-presence/runtime/LICENSE.txt.
 
+Windows and Linux packages include the Chromaprint 1.6.1 fpcalc executable
+built by the Chromaprint project with FFmpeg 8.0. The corresponding source
+archives, build scripts and license texts are in licenses/fpcalc/.
+FFmpeg is used under LGPL 2.1 or later.
+
 Optional metadata services:
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
 - TVmaze data is provided by TVmaze under CC BY-SA. https://www.tvmaze.com/api
 - Film titles and release dates from Wikidata are available under CC0. https://www.wikidata.org/
 - MusicBrainz metadata is provided by the MetaBrainz Foundation and its contributors.
 - Cover images are supplied by their respective providers and rights holders.
-- AcoustID supplies optional fingerprint matches. Chromaprint is installed separately.
+- AcoustID supplies audio fingerprint matches linked to MusicBrainz recordings.
