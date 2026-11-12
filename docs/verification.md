@@ -1,6 +1,6 @@
 # Implementation and verification
 
-The implementation follows the in-player interface and tracking guide based on [`v1.0.10`](https://github.com/Sirye8/mpv-rich-presence/tree/v1.0.10). This page separates automated checks from checks that need an external account or desktop.
+The in-player interface and tracking build on [`v1.0.10`](https://github.com/Sirye8/mpv-rich-presence/tree/v1.0.10). Use these checks when testing a build or preparing a release.
 
 ## Implemented areas
 
@@ -17,7 +17,7 @@ The implementation follows the in-player interface and tracking guide based on [
 
 - `ctest --test-dir build -C Release --output-on-failure`: native regressions, account/tracking tests and Original SDK-call fixtures. Account tests cover two-process credit/write deduplication, stale responses, scoped deletion, disconnect races and sampling during a blocked account operation.
 - `node --test tests/cloudflare.test.mjs`: encrypted ticket handoff, verifier checks, expiry, the registered public callback, and credential isolation and route restrictions for the TMDB relay.
-- `python -B tests/package_tests.py <installed-package> <mpv-executable>`: installed Lua modules, link actions, long row scrolling, full tooltip text, stable focus, animation cleanup, text handoff, panel positions, OSC margins, Cancel, Apply and restart.
+- `python -B tests/package_tests.py <extracted-package> <mpv-executable>` checks the installed Lua modules, including panel navigation, tooltips, animations, OSC margins and settings persistence. Check that the binary ZIP includes the shipped config and license files. The documentation and screenshots live in the repository.
 - `tests/panel_smoke.lua`: captures the seven panels from an isolated mpv install. Allow each page to reach the video output before taking its screenshot.
 - `python -B tests/live_signin.py <installed-package> <mpv-executable>`: interactive, read-only public sign-in. It verifies Viewer, checks session-only storage, closes mpv and deletes the disposable config. It never edits the list.
 - `python -B tests/live_anime_match.py <package-or-install> <mpv-executable> <ffmpeg-executable>`: verify that the season-two filename resolves to Youjo Senki II episode 8 and an AniList outage keeps movie and TV fallback disabled. The test generates its own footage and disables Discord sharing.
@@ -32,5 +32,3 @@ On 11 November 2026, the extracted Windows ZIP matched Interstellar and Severanc
 - Check the visible Discord card from a second account on both Windows and Linux. Exact SDK-call parity is tested; Discord's current rendering, hover text and compact status still require that external check.
 - Complete the manual visual matrix for dark footage, high DPI, fullscreen transitions, long multilingual titles and every nested control. Existing captures and layout tests cover part of this matrix.
 - Check album selection for untagged recordings with multiple AcoustID matches on Linux and Windows.
-
-No release or tag has been created for this work. Passing the automated checks does not mark these manual release checks complete.

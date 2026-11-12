@@ -1,6 +1,6 @@
 # mpv-rich-presence
 
-Share what you watch or listen to in mpv on Discord. The plugin recognizes anime, movies, TV and music on Windows and Linux. The included config supplies the Discord application ID.
+Share what you watch or listen to in mpv on Discord. The plugin recognizes anime, movies, TV and music on Windows and Linux. It can also track your anime progress on AniList.
 
 [User guide](docs/user-guide.md) · [Installation](#installation) · [Screenshots](#screenshots) · [Build from source](#building-from-source)
 
@@ -76,7 +76,14 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 
 | Listening Activity | Discord Status Indicator |
 | :---: | :---: |
-| ![Music Playing](screenshots/music%201.png) | ![Discord Sidebar Music](screenshots/music%202.png) |
+| ![Discord card for Bring Me to Life by Evanescence](screenshots/music%201.png) | ![Bring Me to Life in the Discord sidebar](screenshots/music%202.png) |
+
+### Movies & TV
+
+| Movie · Interstellar | TV · Loki, season 2 episode 4 |
+| :---: | :---: |
+| ![Interstellar Discord card with artwork and release year](screenshots/movie-card.png) | ![Loki Discord card with artwork and episode number](screenshots/tv-card.png) |
+| ![Interstellar in the Discord sidebar](screenshots/movie-status.png) | ![Loki in the Discord sidebar](screenshots/tv-status.png) |
 
 ### General Video Playback
 
@@ -96,25 +103,14 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 
 ## Installation
 
-1. [Build a package](#building-from-source) for this revision and close mpv.
+1. Download a compatible package from [Releases](https://github.com/Sirye8/mpv-rich-presence/releases), or [build from source](#building-from-source) for the features shown here. Close mpv before copying files.
 2. Copy the package's `scripts` folder into your mpv config directory. The usual paths are `%APPDATA%/mpv` on Windows and `~/.config/mpv` on Linux.
 3. On a new install, copy `script-opts` as well. On upgrade, keep your existing `rich-presence.conf` and `data.sqlite3`. If present, remove the old `scripts/rich-presence-conf.lua` before restarting.
-4. Open a file and press **Alt+p**. See [install or upgrade](docs/user-guide.md#install-or-upgrade) for portable installs, Python requirements and database migration.
+4. Open a file with the Discord desktop app running. Press **Alt+p** to open the panel in builds that include it. See [install or upgrade](docs/user-guide.md#install-or-upgrade) for portable installs, Python requirements and database migration.
 
 ## Configuration
 
-Use the panel for file and folder overrides. Edit [rich-presence.conf](script-opts/rich-presence.conf) for startup defaults, then restart mpv.
-
-```ini
-application_id=1462038267183628308
-on=yes
-folder_filter_mode=disabled
-folder_list=
-recognition_source=auto
-pause_timeout=1800
-```
-
-The [settings reference](docs/user-guide.md#configure-startup-defaults) lists the available values.
+The bundled config is ready to use. Use the panel for file and folder overrides. For startup defaults, edit `script-opts/rich-presence.conf` in your mpv config directory and restart mpv. See the [full settings reference](docs/user-guide.md#configure-startup-defaults) for every option and its default.
 
 ### Keybindings & Commands
 
@@ -130,21 +126,21 @@ The `rich_presence` script also accepts `on`, `off`, `application_id`, `folder_f
 
 ### Prerequisites
 
-- CMake 3.21 or newer
+- CMake 3.21 or newer with the CMake CLI on PATH
 - A C++20 compiler with `std::format` support
-- vcpkg and the [Discord Social SDK](https://discord.com/developers/social-sdk)
+- vcpkg, Python 3.9 or newer for packaging and account tests, and the [Discord Social SDK](https://discord.com/developers/social-sdk)
 
 ### Build Instructions
 
 Clone recursively, extract the SDK, and bootstrap vcpkg as shown in the [build guide](docs/build.md).
 
 ```sh
-cmake --preset default
+cmake --preset default -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-For the Windows x64 ZIP, configure with `-DVCPKG_TARGET_TRIPLET=x64-windows-static-md`, then run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. See [verification](docs/verification.md) for additional tests.
+For the Windows x64 ZIP, configure with `-DVCPKG_TARGET_TRIPLET=x64-windows-static-md`, then run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. The [build guide](docs/build.md) covers Linux packages. See [verification](docs/verification.md) for additional tests.
 
 ## License
 
@@ -156,3 +152,4 @@ Licensed under the GNU Affero General Public License v3.0. See [LICENSE](LICENSE
 - [cpr](licenses/LICENSE-cpr), [nlohmann-json](licenses/LICENSE-nlohmann-json) and [zlib](licenses/LICENSE-zlib) include their own license notices.
 - [curl](licenses/LICENSE-curl), the [mpv client API header](licenses/LICENSE-mpv), [SQLite](licenses/LICENSE-SQLite), [Boost](licenses/LICENSE-Boost) and [CMakeRC](licenses/LICENSE-CMakeRC) have separate notices.
 - Discord's proprietary SDK is governed by the [Discord Developer Terms of Service](https://discord.com/developers/docs/legal).
+- See [provider credits](docs/tmdb-metadata.md#credits) for TMDB attribution and [NOTICE](NOTICE) for the packaged Python and Chromaprint components.

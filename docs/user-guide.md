@@ -11,7 +11,16 @@
 
 ## Install or upgrade
 
-Copy the contents of the package into your mpv configuration directory. On Windows this is usually `%APPDATA%\mpv`. On Linux it is usually `~/.config/mpv`. A portable Windows install can use a `portable_config` folder next to mpv. If you start mpv with `--config-dir`, use that directory.
+Close mpv and copy the package's `scripts` folder into your mpv configuration directory. On a new install, copy `script-opts` too.
+
+| Setup | Configuration directory |
+| --- | --- |
+| Windows | `%APPDATA%\mpv` |
+| Portable Windows | `portable_config` next to `mpv.exe` |
+| Linux | `~/.config/mpv`, or `$XDG_CONFIG_HOME/mpv` when set |
+| Custom | The directory selected with `--config-dir` or `MPV_HOME` |
+
+See [mpv's file locations](https://mpv.io/manual/master/#files) for more details.
 
 ```text
 mpv/
@@ -22,9 +31,9 @@ mpv/
     rich-presence.conf
 ```
 
-Close all mpv windows before replacing these files. Keep your existing `rich-presence.conf` and `scripts/mpv-rich-presence/data.sqlite3` to keep your preferences and history. If upgrading from a version with `scripts/rich-presence-conf.lua`, remove that old script so only the bundled bridge loads. The plugin can migrate the old `rich-presence/data.sqlite3` the first time it opens the new database.
+On upgrade, keep your existing `rich-presence.conf` and `scripts/mpv-rich-presence/data.sqlite3` to preserve preferences and history. If you still have `scripts/rich-presence-conf.lua`, remove that old script so only the bundled bridge loads. The plugin can migrate saved settings and history from `rich-presence/data.sqlite3` when it first creates the new database.
 
-The Windows x64 ZIP includes portable Python and Chromaprint. The Linux ZIP includes Chromaprint and uses Python 3.9 or newer from your system. A source install can use `fpcalc` on PATH. The packaged Discord application ID, metadata services and public AniList sign-in are ready to use.
+The Windows x64 ZIP includes Python and Chromaprint. The Linux ZIP includes Chromaprint and uses Python 3.9 or newer from your system. Source installs can use `fpcalc` on PATH. Run the Discord desktop app and allow activity sharing to publish a card. The bundled config and public services are ready to use.
 
 ## Use the panel
 
@@ -84,7 +93,10 @@ To use a personal app, register a separate client in [AniList developer settings
 | Ask | Count time and open a review when a ready update reaches the configured timing. |
 | Automatic | Advance consecutive episodes at the threshold. Episode gaps, new entries and required status changes go to review. |
 
-The default threshold is 15 minutes of real playback. Pauses, buffering, seeks and long observation gaps add no time. A minute at 2× counts as one minute. The panel shows time spent in the current viewing cycle and the local times playback started and was last credited. Two windows share the same account and episode record. **Resume unfinished time** continues from a saved counter when you reopen the episode. **Keep offline proposals** remembers eligible updates locally so you can review them after reconnecting.
+- **Threshold** accepts whole minutes from 1 to 1440 and defaults to 15. A minute at 2× counts as one minute. Pauses, buffering, seeks and long observation gaps add no time.
+- **Episode watch time** shows real playback time for the current viewing cycle. **Watch started** and **Last watched** show the first and latest credited playback times on the local clock, when recorded.
+- **Resume unfinished time** is on by default and continues from a saved counter when you reopen an episode. Windows playing the same episode for the same account share that record.
+- **Keep offline proposals** is off by default. Turn it on to save eligible updates locally while AniList is unreachable and review them after refreshing the list entry.
 
 Use the minus and plus buttons around **Draft**, or Left and Right on that row, to adjust the proposed episode count. **Apply progress** opens a confirmation with the account, title and proposed change. The worker rechecks the entry before saving. Ordinary progress edits preserve status, score, notes and repeat count. **Status on Apply** lets you choose a status for a manual edit.
 
@@ -125,21 +137,41 @@ Close all mpv instances before removing the plugin folder. The current account h
 
 ## Configure startup defaults
 
-Use `script-opts/rich-presence.conf` for startup defaults and restart mpv after editing. Save file, folder and global overrides in the panel.
+Edit `script-opts/rich-presence.conf` in your mpv config directory and restart mpv. The tables show the settings in the [shipped config](../script-opts/rich-presence.conf). Saved panel overrides can take precedence for appearance, recognition and panel position.
 
-| Option | Default and values |
-| --- | --- |
-| `application_id` | `1462038267183628308`. Override with your Discord application ID if needed. |
-| `on` | `yes`. Set to `no` to start with Discord sharing off. |
-| `folder_filter_mode` | `disabled`, `whitelist` or `blacklist`. |
-| `folder_list` | Absolute paths separated by semicolons. Used with the allow or block list. |
-| `recognition_source` | `auto`, `anime`, `movie-tv`, `movie`, `tv` or `original`. |
-| `pause_timeout` | `1800` seconds. Use `0` to keep the card visible on pause. |
-| `appearance_preset` | `original`, `clean`, `detailed` or `private`. |
-| `menu_key` | `Alt+p`. Use an mpv key name. |
-| `menu_scale` and `menu_animations` | `1` and `yes`. |
-| `panel_position` | `top-left`. Choose `top` or `bottom` with `left`, `center` or `right`. |
-| `python` | Empty uses the bundled Windows runtime or system Python. Set an executable path to override it. |
+### Discord, folders and recognition
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `application_id` | Bundled Discord application | Use the bundled value or enter the numeric ID of your own Discord application. A blank or invalid ID disables Discord publishing. |
+| `on` | `yes` | Starts Discord sharing. Set `no` to start with sharing off. **Track while hidden** can separately permit lookups for eligible AniList tracking. |
+| `folder_filter_mode` | `disabled` | Use `whitelist` to allow only listed folders or `blacklist` to exclude listed folders. The filter covers subfolders, Discord sharing and lookups. An empty whitelist allows no files. An empty blacklist excludes none. |
+| `folder_list` | Empty | Absolute folder paths separated by semicolons. Quotes are optional. For example, `D:\Anime;E:\Videos\Movies`. |
+| `recognition_source` | `auto` | Pick the default recognition mode. Library choices are `auto`, `anime`, `movie-tv`, `movie`, `tv` and `original`. Provider-specific values are `tmdb-movie`, `tmdb-tv`, `tvmaze`, `wikidata`, `musicbrainz`, `acoustid` and `stream`. See [Recognize media](#recognize-media) for the library choices. |
+| `pause_timeout` | `1800` | Seconds of paused playback before Discord hides the card. Use `0` to disable the timeout. |
+
+### Appearance and panel
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `appearance_preset` | `original` | Choose `original` for the standard card, `clean` for fewer details, `detailed` for more metadata, or `private` for a generic card. Preview these in **Appearance**. |
+| `menu_key` | `Alt+p` | Shortcut that opens the panel. Use an mpv key name. |
+| `menu_scale` | `1` | Positive size multiplier for the panel and Ask popup. For example, `0.9` is smaller and `1.2` is larger, subject to available window space. |
+| `menu_animations` | `yes` | Enables panel transitions and horizontal scrolling on hover. Set `no` for instant transitions. The tooltip still shows the full value. |
+| `panel_position` | `top-left` | Choose `top-left`, `top-center`, `top-right`, `bottom-left`, `bottom-center` or `bottom-right`. The panel's **Config** option uses this setting. Set the Ask popup position separately in **AniList**. |
+
+### Account helper and provider access
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `python` | Auto | Uses bundled Python on Windows when present. Otherwise it runs `python` on Windows or `python3` on Linux. Set the executable path to use a different Python 3.9+ interpreter. |
+| `anilist_client_id` | Bundled AniList client | Set a different public numeric client ID only when using your own application. |
+| `anilist_personal_client` | `no` | Set `yes` and leave `anilist_exchange_url` empty to use a personal client with the localhost callback. Enter the client's secret on the local sign-in page. |
+| `anilist_exchange_url` | Empty | Uses the bundled exchange with the bundled client. For a self-hosted exchange, enter its HTTPS origin without a path or trailing slash, and set the matching `anilist_client_id`. |
+| `tmdb_key` | Empty | Uses the shared TMDB service. To make direct requests, enter your TMDB **API Read Access Token**. |
+| `acoustid_key` | Empty | Uses the bundled AcoustID application key. Set your own application key to override it. |
+
+Keep provider overrides in your local config. Use the browser sign-in flow for AniList secrets and tokens.
 
 Appearance templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. A piece is skipped when its fields are missing.
 
