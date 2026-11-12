@@ -391,9 +391,9 @@ return function(make_sheet, send, options, help)
                 row(entry.id and ("List entry   "..entry.progress.." / "..(snap.total>0 and snap.total or "?")..
                     " · "..(list_status_labels[entry.status] or entry.status or "?")..(answer.offline and " · Offline" or "")) or "List status   Not on your list")
                 local function bump(n) if not edit_base then edit_base=copy(entry) end; edit=math.max(0,(edit or entry.progress)+n); if snap.total>0 then edit=math.min(edit,snap.total) end end
-                row("−  One episode",function() bump(-1) end)
-                row("Draft   "..tostring(edit or entry.progress))
-                row("+  One episode",function() bump(1) end)
+                local draft_row=row("Draft   "..tostring(edit or entry.progress),nil,false,bump)
+                draft_row.stepper,draft_row.disabled=true,false
+                draft_row.tip=help(draft_row.label,page,true)
                 local function submit(target)
                     local message=account.name.." · "..snap.title.." · "..entry.progress.." → "..target
                     if list_status then message=message.." · set status to "..list_status end
@@ -418,13 +418,8 @@ return function(make_sheet, send, options, help)
                 choice("Ask prompt position",{"top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"},
                     tracking.ask_position or "top-right",function(v) apply("tracking",{ask_position=v}) end)
                 local seconds=tracking.ask_timeout or 30
-                row("Ask prompt timeout   "..seconds.." seconds",function()
-                    ui.text("Dismiss prompt after seconds",tostring(seconds),function(s)
-                        local value=tonumber(s)
-                        if value and value==math.floor(value) and value>=5 and value<=300 then
-                            apply("tracking",{ask_timeout=value})
-                        else notice("Enter a whole number from 5 to 300 seconds.") end
-                    end)
+                row("Ask prompt timeout   "..(seconds==0 and "Never" or seconds.." seconds"),function()
+                    ui.push("Ask prompt timeout")
                 end)
             end
             switch("Resume unfinished time",tracking.resume~=false,function()
@@ -480,6 +475,25 @@ return function(make_sheet, send, options, help)
                 row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
             end
             if #(snap.pending or {})==0 then row("No pending updates") end
+        elseif page=="Ask prompt timeout" then
+            local function set_timeout(value)
+                apply("tracking",{ask_timeout=value})
+                ui.back()
+            end
+            local seconds=tracking.ask_timeout or 30
+            for _,value in ipairs({0,15,30,60}) do
+                local label=value==0 and "Never" or value.." seconds"
+                local item=row(label..(seconds==value and "   Current" or ""),function() set_timeout(value) end)
+                item.tip=value==0 and "Leave the prompt open until you choose an action, Later, or the close button."
+                    or "Dismiss the prompt after "..value.." seconds and keep its update in Pending updates."
+            end
+            row("Custom timeout",function()
+                ui.text("Dismiss after 5 to 300 seconds",tostring(seconds>0 and seconds or 30),function(s)
+                    local value=tonumber(s)
+                    if value and value==math.floor(value) and value>=5 and value<=300 then set_timeout(value)
+                    else notice("Enter a whole number from 5 to 300 seconds.") end
+                end)
+            end)
         elseif page=="Saved data" then
             row("Filter records   "..filter,function() ui.text("Filter by category or scope",filter,function(v) filter=v end) end)
             local counts={}
@@ -498,10 +512,10 @@ return function(make_sheet, send, options, help)
             for _,cat in ipairs({"cache","watch","pending","skipped","history","entry"}) do
                 local category=cat
                 local count=counts[category] or 0
-                local effect=category=="watch" and " Restart unfinished timers." or category=="pending" and " Dismiss these proposals." or ""
+                local effect=category=="watch" and " Restart the timers and clear their pending and skipped updates." or category=="pending" and " Dismiss these proposals." or ""
                 row("Clear "..cat.." ("..count..")",function() confirm("Remove "..count.." local "..cat.." records."..effect,function() service("clear",{category=category}) end) end)
             end
-            row("Reset everything",function() confirm("Clear all local profiles, matches, caches and watch history; disconnect and turn sharing off",function() service("reset") end) end)
+            row("Reset everything",function() confirm("Clear local profiles, matches, caches and watch history, disconnect AniList, and restore the defaults from rich-presence.conf.",function() service("reset") end) end)
         elseif page=="Saved match" and record then
             row("Scope   "..record.scope)
             for _,field in ipairs({{"id","Pinned AniList ID"},{"not_anime","Non-anime flag"},{"offset","Episode offset"}}) do

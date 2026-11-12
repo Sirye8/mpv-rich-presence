@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Check the packaged Ask popup and mpv unload hook with a saved local proposal."""
+"""Check packaged Ask reviews and playlist transitions with a saved local proposal."""
 
 import argparse
 from contextlib import closing
@@ -19,17 +19,19 @@ local action=os.getenv("MPVRP_ASK_ACTION")
 local auto_dismiss=os.getenv("MPVRP_ASK_DISMISS")=="yes"
 local signal=os.getenv("MPVRP_ASK_SIGNAL")
 local trace=os.getenv("MPVRP_ASK_TRACE")
+local capture=os.getenv("MPVRP_ASK_CAPTURE")
+local never=os.getenv("MPVRP_ASK_NEVER")=="yes"
 local function log(event)
     local f=assert(io.open(trace,"a"))
     f:write(event," ",mp.get_time(),"\n")
     f:close()
 end
 local prompt_seen=false
-mp.observe_property("term-status-msg","string",function(_,text)
-    if prompt_seen or not text or not text:find("AniList update",1,true) then return end
+local function review_seen()
+    if prompt_seen then return end
     prompt_seen=true
     log("prompt")
-    if auto_dismiss then mp.add_timeout(.3,function()
+    if auto_dismiss then mp.add_timeout(never and 5.5 or .3,function()
         log("dismiss")
         if action=="next" then
             mp.commandv("keypress","END")
@@ -37,6 +39,9 @@ mp.observe_property("term-status-msg","string",function(_,text)
         else mp.commandv("keypress","ESC") end
         if action=="wait" then mp.add_timeout(.2,function() mp.commandv("quit") end) end
     end) end
+end
+mp.observe_property("term-status-msg","string",function(_,text)
+    if text and text:find("AniList update",1,true) then review_seen() end
 end)
 mp.register_event("end-file",function() log("end") end)
 local loaded=0
@@ -51,21 +56,49 @@ timer=mp.add_periodic_timer(.05,function()
     timer:kill()
     log("action")
     if action=="eof" then mp.set_property_bool("pause",false)
-    elseif action=="next" then mp.commandv("playlist-next")
+    elseif action=="next" then mp.commandv("keypress",">")
     else mp.commandv("keypress",action) end
+    if capture then
+        mp.add_timeout(1.4,function()
+            mp.commandv("keypress","]")
+            mp.commandv("script-message-to","mpv_rich_presence","menu","Now playing")
+        end)
+        mp.add_timeout(2,function()
+            if mp.get_property_number("speed",1)>1 then log("player-input") end
+            mp.commandv("screenshot-to-file",capture,"window")
+            log("captured")
+            local w,h=mp.get_osd_size()
+            local scale=math.min(math.max(.76,math.min(h/740,2.4)),w/300,h/380)
+            mp.commandv("mouse",math.floor(w-34*scale),math.floor(68*scale))
+            mp.commandv("keydown","MBTN_LEFT")
+            mp.add_timeout(.1,function()
+                mp.commandv("keyup","MBTN_LEFT")
+                log("dismiss")
+            end)
+        end)
+        mp.add_timeout(8,function()
+            log("fallback")
+            mp.commandv("quit")
+        end)
+    end
 end)
 """
 
 
-def verify(package, mpv, ffmpeg):
+def verify(package, mpv, ffmpeg, capture=None):
     cases = (
-        ("threshold", "wait", True, False, True),
-        ("end", "eof", True, True, True),
-        ("end", "q", False, False, False),
-        ("leave", "q", True, False, True),
-        ("leave", "CLOSE_WIN", True, False, True),
-        ("leave", "next", True, True, True),
-        ("leave", "eof", False, True, True),
+        (
+            ("threshold", "wait", True, False, True, False),
+            ("end", "eof", True, True, True, False),
+            ("end", "q", False, False, False, False),
+            ("leave", "q", True, False, True, False),
+            ("leave", "CLOSE_WIN", True, False, True, False),
+            ("leave", "next", True, True, True, False),
+            ("leave", "eof", False, True, True, False),
+            ("leave", "eof", True, True, True, True),
+        )
+        if not capture
+        else (("leave", "eof", True, True, True, True),)
     )
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -80,7 +113,9 @@ def verify(package, mpv, ffmpeg):
                 "-f",
                 "lavfi",
                 "-i",
-                "color=s=160x90:r=4",
+                "gradients=s=1280x720:r=24:c0=0x102133:c1=0x3b6574:c2=0x101820:n=3:speed=0.005"
+                if capture
+                else "color=s=160x90:r=4",
                 "-t",
                 "1",
                 "-c:v",
@@ -91,7 +126,9 @@ def verify(package, mpv, ffmpeg):
         )
         next_clip = root / "Next clip.mkv"
         shutil.copyfile(clip, next_clip)
-        for index, (timing, action, dismiss, playlist, expected) in enumerate(cases):
+        for index, (timing, action, dismiss, playlist, expected, never) in enumerate(
+            cases
+        ):
             config = root / f"mpv-{index}"
             with zipfile.ZipFile(package) as z:
                 z.extractall(config)
@@ -106,7 +143,7 @@ def verify(package, mpv, ffmpeg):
                     {
                         "mode": "ask",
                         "ask_timing": timing,
-                        "ask_timeout": 5,
+                        "ask_timeout": 0 if never else 5,
                         "without_sharing": True,
                     },
                 ),
@@ -140,9 +177,8 @@ def verify(package, mpv, ffmpeg):
                 mpv,
                 f"--config-dir={config}",
                 "--script-opts=rich-presence-on=no",
-                "--no-terminal",
                 "--pause",
-                "--vo=null",
+                "--vo=gpu-next" if capture else "--vo=null",
                 "--ao=null",
                 f"--script={driver}",
                 str(clip),
@@ -155,7 +191,10 @@ def verify(package, mpv, ffmpeg):
                 MPVRP_ASK_DISMISS="yes" if dismiss else "no",
                 MPVRP_ASK_SIGNAL=str(signal),
                 MPVRP_ASK_TRACE=str(trace),
+                MPVRP_ASK_NEVER="yes" if never else "no",
             )
+            if capture:
+                env["MPVRP_ASK_CAPTURE"] = str(capture.resolve())
             process = subprocess.Popen(args, env=env)
             try:
                 deadline = time.monotonic() + 20
@@ -175,6 +214,8 @@ def verify(package, mpv, ffmpeg):
                     assert not trace.exists(), (
                         f"{timing}/{action}: popup appeared early"
                     )
+                    # Let the Lua bridge receive and arm the ready proposal.
+                    time.sleep(0.5)
                     signal.touch()
                 assert process.wait(15) == 0
                 events = [
@@ -185,11 +226,23 @@ def verify(package, mpv, ffmpeg):
                     )
                 ]
                 names = [name for name, _ in events]
-                assert ("prompt" in names) == expected, (timing, action, events)
-                if expected:
+                if capture:
+                    assert "fallback" not in names, events
+                    assert names.index("player-input") < names.index("captured"), events
+                    assert names.index("captured") < names.index("end"), events
+                    assert capture.is_file(), (
+                        "mpv failed to capture the graphical prompt"
+                    )
+                else:
+                    assert ("prompt" in names) == expected, (timing, action, events)
+                if expected and not capture:
                     assert names.index("prompt") < names.index("end"), events
                     if dismiss:
                         assert names.index("dismiss") < names.index("end"), events
+                        if never:
+                            assert (
+                                dict(events)["dismiss"] - dict(events)["prompt"] >= 5.2
+                            ), events
                     else:
                         prompt_time = next(
                             when for name, when in events if name == "prompt"
@@ -226,5 +279,6 @@ if __name__ == "__main__":
     parser.add_argument("package", type=Path)
     parser.add_argument("mpv")
     parser.add_argument("ffmpeg")
+    parser.add_argument("--capture", type=Path, help="capture the graphical EOF review")
     options = parser.parse_args()
-    verify(options.package, options.mpv, options.ffmpeg)
+    verify(options.package, options.mpv, options.ffmpeg, options.capture)

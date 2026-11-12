@@ -13,7 +13,10 @@ local input
 package.loaded["mp.input"]={get=function(value) input=value end}
 mp={
     add_forced_key_binding=function(key,id,fn) bindings[key]=fn end,
-    remove_key_binding=function(id) bindings[id:gsub("^rich_presence_sheet_","")]=nil end,
+    remove_key_binding=function(id)
+        local key=id:gsub("^rich_presence_sheet_",""):gsub("^rich_presence_ask_","")
+        bindings[key]=nil
+    end,
     observe_property=function(name,kind,fn) observed[fn]=true end,
     unobserve_property=function(fn) observed[fn]=nil end,
     get_osd_size=function() return width,height end,
@@ -44,7 +47,7 @@ local function verify()
     local before=updates
     ui.draw()
     assert(updates==before,"Unchanged frame was redrawn")
-    assert(bounds[1]<24 and bounds[2]<24 and bounds[4]<height*.65 and mouse_enabled)
+    assert(bounds[1]<24 and bounds[2]>=42 and bounds[2]<65 and bounds[4]<height*.65 and mouse_enabled)
     assert(mouse_bindings[3][1]=="mbtn_left","Pointer clicks must use the scoped mouse section")
     local first=ui.hits[1]
     x,y=(first.x+1)*height/paint_height,(first.y+1)*height/paint_height
@@ -76,6 +79,24 @@ local function verify()
     before=updates
     ui.draw()
     assert(updates==before,"Closed menu redrew")
+
+    width,height=1280,720
+    local count=3
+    local function adjust(delta) count=count+delta end
+    local stepper=sheet({sections={},animate=false,rows=function()
+        return {{id="draft",label="Draft   "..count,stepper=true,adjust=adjust}}
+    end,refresh=function() end,closed=function() end})
+    stepper.show("Draft test")
+    for i=1,2 do
+        local control=stepper.hits[i]
+        x,y=(control.x+4)*height/paint_height,(control.y+4)*height/paint_height
+        mouse_bindings[3][3]()
+        mouse_bindings[3][4]()
+        assert(count==(i==1 and 2 or 3),"Draft mouse control did not adjust progress")
+    end
+    bindings.RIGHT()
+    assert(count==4 and paint:find("Draft  4",1,true),"Draft did not adjust with Right")
+    stepper.close()
 
     width,height=1280,720
     local builds=0
@@ -125,7 +146,7 @@ local function verify()
         animated.draw()
         local left,top,right,bottom=bounds[1],bounds[2],bounds[3],bounds[4]
         assert(left>=0 and right<=width and bottom<height*.88,"Panel leaves the playback area")
-        if anchor:find("bottom",1,true) then assert(top>height*.4) else assert(top<24) end
+        if anchor:find("bottom",1,true) then assert(top>height*.4) else assert(top>=42 and top<65) end
         if anchor:find("center",1,true) then assert(math.abs(left+right-width)<3) end
         if anchor:find("right",1,true) then assert(right>width-24) end
     end
@@ -274,6 +295,21 @@ local function verify()
     find("AniList","Ask timing").run()
     assert(applied.values.ask_timing=="end")
     assert(find("AniList","Ask prompt position") and find("AniList","Ask prompt timeout"))
+    find("AniList","Ask prompt timeout").run()
+    assert(menu.page=="Ask prompt timeout")
+    find(menu.page,"Never").run()
+    assert(applied.values.ask_timeout==0)
+    snapshot.tracking.ask_timeout=0
+    snapshot.total=12
+    snapshot.service.entry={media=42,viewer=5,session=8,progress=3,id=9,status="CURRENT"}
+    menu.update(snapshot)
+    assert(find("AniList","Ask prompt timeout").label=="Ask prompt timeout   Never")
+    local draft=find("AniList","Draft")
+    assert(draft.stepper and draft.label=="Draft   3")
+    draft.adjust(1)
+    assert(find("AniList","Draft").label=="Draft   4")
+    draft.adjust(-1)
+    assert(find("AniList","Draft").label=="Draft   3")
 
     local popup_model,popup_request
     local ask=dofile(modules.."/ask.lua")(function(value)
@@ -287,7 +323,7 @@ local function verify()
     proposal.repeat_count=nil
     proposal.base={id=9,status="PAUSED"}
     proposal.account="test"
-    ask.show({id="first",session=8,position="bottom-left",seconds=10,proposal=proposal})
+    ask.offer({id="first",session=8,position="bottom-left",seconds=10,timing="threshold",proposal=proposal})
     assert(popup_model.compact and popup_model.position()=="bottom-left")
     assert(popup_model.footer()=="Later · 10 s")
     assert(popup_row("status").label=="Status   Paused → Watching")
@@ -298,6 +334,10 @@ local function verify()
     assert(popup_row("notice").label=="AniList is offline" and popup_row("update"))
     popup_model.closed()
     assert(popup_request.action=="ask_dismiss" and popup_request.id=="first")
+    local timer_count=#timers
+    ask.offer({id="second",session=8,position="top-right",seconds=0,timing="threshold",proposal=proposal})
+    assert(popup_model.footer()=="Later" and #timers==timer_count)
+    popup_model.closed()
 
     width,height=1280,720
     local closed_popup=false

@@ -87,7 +87,8 @@ mp.register_script_message("start-service", function(instance)
     -- mpv does not reliably feed subprocess stdin on Windows.
     local settings = utils.format_json({broker=options.anilist_exchange_url,
         personal=options.anilist_personal_client,client_id=options.anilist_client_id})
-    local args = {interpreter, "-I", utils.join_path(modules,"backend.py"), database, instance, settings, config}
+    local args = {interpreter, "-I", utils.join_path(modules,"backend.py"), database, instance, settings, config,
+        mp.get_property("pid")}
     worker = mp.command_native_async({name="subprocess",args=args,playback_only=false,
         capture_stderr=true}, function(_,result)
         worker=nil
@@ -126,9 +127,11 @@ if ok then
     end)
     mp.register_script_message("ask-review",function(raw)
         local data=utils.parse_json(raw)
-        if data then ask.show(data) end
+        if data then ask.offer(data) end
     end)
-    mp.register_script_message("ask-review-close",ask.close)
+    mp.register_script_message("review-before",ask.leave)
+    mp.observe_property("eof-reached","bool",ask.end_changed)
+    mp.register_event("end-file",ask.reset)
     mp.register_script_message("snapshot",function(raw)
         local data=utils.parse_json(raw)
         if data then menu.update(data) end

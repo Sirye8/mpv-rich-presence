@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import subprocess
+import sqlite3
 import io
 import sys
 import tempfile
@@ -602,6 +603,68 @@ class RecognitionTests(unittest.TestCase):
 
 
 class AccountTests(unittest.TestCase):
+    def test_helper_releases_database_when_owner_is_killed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "data.sqlite3"
+            with contextlib.closing(sqlite3.connect(db_path)) as db, db:
+                db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                db.executemany(
+                    "INSERT INTO records VALUES(?,?,?)",
+                    [
+                        ("player", "test", '{"session":1}'),
+                        (
+                            "job",
+                            "ready",
+                            '{"window":"test","session":1,"op":"clear","category":"cache"}',
+                        ),
+                    ],
+                )
+            backend = (
+                Path(__file__).resolve().parents[1]
+                / "script-modules/mpv-rich-presence/backend.py"
+            )
+            supervisor = (
+                "import os, subprocess, sys, time\n"
+                "subprocess.Popen([sys.executable, '-B', sys.argv[1], sys.argv[2], "
+                "'test', '{}', sys.argv[2]+'.conf', str(os.getpid())], "
+                "stdout=sys.stdout, stderr=sys.stdout)\n"
+                "time.sleep(60)\n"
+            )
+            owner = subprocess.Popen(
+                [sys.executable, "-c", supervisor, str(backend), str(db_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            try:
+                deadline = time.monotonic() + 8
+                with contextlib.closing(sqlite3.connect(db_path)) as db:
+                    while time.monotonic() < deadline:
+                        if db.execute(
+                            "SELECT 1 FROM records WHERE category='response'"
+                        ).fetchone():
+                            break
+                        time.sleep(0.05)
+                    else:
+                        self.fail("Account helper never opened the test database")
+            finally:
+                owner.kill()
+                # The worker also inherited the pipe. EOF proves that it exited.
+                owner.communicate(timeout=8)
+            deadline = time.monotonic() + 4
+            while True:
+                try:
+                    db_path.rename(db_path.with_name("closed.sqlite3"))
+                    break
+                except PermissionError as exc:
+                    if (
+                        getattr(exc, "winerror", None) != 32
+                        or time.monotonic() >= deadline
+                    ):
+                        raise
+                    time.sleep(0.05)
+
     def test_quiet_and_manual_list_refresh(self):
         with tempfile.TemporaryDirectory() as directory:
             worker = Worker(Path(directory) / "db", "window", {})
@@ -1054,6 +1117,49 @@ class TrackingTests(unittest.TestCase):
                 keep_status=keep_status,
             )
         )
+
+    def test_clear_watch_rearms_ask_for_same_episode_and_session(self):
+        self.player["tracking"]["mode"] = "ask"
+        first = self.propose()
+        key = first["key"]
+        self.worker.put("skipped", key, {"skip": True})
+        self.worker.put("watch", "2/195604/4/0", {"elapsed": 900})
+        self.worker.handle(
+            dict(op="clear", category="watch", scope=key, session=1, account="fixture")
+        )
+        for category in ("watch", "pending", "skipped"):
+            self.assertEqual(self.worker.get(category, key), {})
+        self.assertEqual(self.worker.get("watch", "2/195604/4/0")["elapsed"], 900)
+        self.assertFalse(self.propose(elapsed=899))
+        second = self.propose()
+        self.assertEqual(second["key"], first["key"])
+        self.assertNotEqual(second["revision"], first["revision"])
+        with self.assertRaisesRegex(AccountError, "expired"):
+            self.worker.handle(
+                dict(
+                    op="skip",
+                    account="fixture",
+                    session=1,
+                    proposal=key,
+                    revision=first["revision"],
+                )
+            )
+        self.assertEqual(self.worker.get("pending", key), second)
+
+    def test_reset_restores_defaults_and_leaves_player_active(self):
+        self.publish()
+        self.worker.put("privacy", "global", {"mode": "hidden", "block_lookup": True})
+        self.worker.put("sources", "global", {"source": "movie"})
+        self.worker.handle(dict(op="reset", session=1, account="fixture"))
+        for category, scope in (
+            ("account", "current"),
+            ("privacy", "global"),
+            ("sources", "global"),
+        ):
+            self.assertEqual(self.worker.get(category, scope), {})
+        self.assertEqual(self.worker.get("player", "window")["session"], 1)
+        self.assertTrue(self.worker.get("generation", "cache"))
+        self.assertTrue(self.worker.get("generation", "data"))
 
     def test_auto_uses_resolved_episode_and_rejects_saved_time_for_unclear_numbering(
         self,

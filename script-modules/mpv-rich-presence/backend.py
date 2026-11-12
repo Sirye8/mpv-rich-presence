@@ -80,6 +80,7 @@ class Worker:
         self.music_attempts = 0
         self.expected = None
         self.data_generation = None
+        self.cache_generation = None
 
     def get(self, category, scope, default=None):
         row = self.db.execute(
@@ -485,13 +486,13 @@ class Worker:
                             )
                     if op == "reset":
                         self.db.execute("DELETE FROM records WHERE category!='player'")
-                        self.put(
-                            "privacy",
-                            "global",
-                            {"mode": "hidden", "block_lookup": True},
-                        )
                         self.put("generation", "cache", {"id": secrets.token_hex(16)})
-            self.reply(message="Disconnected.")
+                        self.put("generation", "data", {"id": secrets.token_hex(12)})
+            self.reply(
+                message="Restored configuration defaults."
+                if op == "reset"
+                else "Disconnected."
+            )
         elif op == "read":
             if not account.get("id") or not p.get("media"):
                 raise AccountError(
@@ -543,6 +544,7 @@ class Worker:
                 or not account.get("id")
                 or not key.startswith(str(account["id"]) + "/")
                 or prop["account"] != account["generation"]
+                or ("revision" in job and job["revision"] != prop.get("revision", ""))
             ):
                 raise AccountError("This proposal has expired.")
             if op == "accept":
@@ -569,6 +571,9 @@ class Worker:
                 )
             else:
                 with self.transaction():
+                    self.context(job)
+                    if self.get("pending", key) != prop:
+                        raise AccountError("This proposal has expired.")
                     self.put("skipped", key, {"skip": True})
                     self.delete("pending", key)
                 self.reply(proposal=None, message="Skipped.")
@@ -631,15 +636,27 @@ class Worker:
                     "entry",
                 ) and account.get("id"):
                     prefix = str(account["id"]) + "/"
-                    if job.get("scope"):
-                        if not job["scope"].startswith(prefix):
-                            raise AccountError("Account scope changed.")
-                        self.delete(category, job["scope"])
-                    else:
+                    scope = job.get("scope")
+                    if scope and not scope.startswith(prefix):
+                        raise AccountError("Account scope changed.")
+                    where, target = (
+                        ("scope=?", scope) if scope else ("scope LIKE ?", prefix + "%")
+                    )
+                    categories = (
+                        ("watch", "pending", "skipped")
+                        if category == "watch"
+                        else (category,)
+                    )
+                    if category == "skipped":
                         self.db.execute(
-                            "DELETE FROM records WHERE category=? AND scope LIKE ?",
-                            (category, prefix + "%"),
+                            f"UPDATE records SET value=json_remove(value,'$.retry') WHERE category='watch' "
+                            f"AND scope IN (SELECT scope FROM records WHERE category='skipped' AND {where})",
+                            (target,),
                         )
+                    self.db.executemany(
+                        f"DELETE FROM records WHERE category=? AND {where}",
+                        ((name, target) for name in categories),
+                    )
                 elif category == "cache":
                     self.put("generation", "cache", {"id": secrets.token_hex(16)})
                     if job.get("scope"):
@@ -1342,6 +1359,7 @@ class Worker:
             repeat_count = min(entry["repeat"] + 1, 1000) if finish_rewatch else None
             base = dict(entry, session=p["session"])
             prop = dict(
+                revision=secrets.token_hex(8),
                 title=p.get("match_title", ""),
                 media=p["media"],
                 window=self.window,
@@ -1429,6 +1447,11 @@ class Worker:
                     self.previous = None
                     self.tracking_probe = None
                     self.data_generation = epoch
+                cache_epoch = self.get("generation", "cache")
+                if self.cache_generation != cache_epoch:
+                    self.resolved = None
+                    self.music_retry = 0
+                    self.cache_generation = cache_epoch
                 cancellation = self.get("cancel", self.window)
                 if cancellation:
                     with self.transaction():
@@ -1483,7 +1506,43 @@ class Worker:
             time.sleep(0.25)
 
 
+def watch_owner(pid):
+    # The worker may be blocked in a browser or network request when mpv is
+    # killed. The OS closes both SQLite connections when the watchdog exits.
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        kernel.WaitForSingleObject.restype = wintypes.DWORD
+        kernel.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # ERROR_INVALID_PARAMETER: the process already exited
+                sys.exit(0)
+            raise ctypes.WinError(error)
+
+        def wait():
+            kernel.WaitForSingleObject(handle, 0xFFFFFFFF)  # INFINITE
+            kernel.CloseHandle(handle)
+            os._exit(0)
+    else:
+
+        def wait():
+            while os.getppid() == pid:
+                time.sleep(0.25)
+            os._exit(0)
+
+    threading.Thread(target=wait, daemon=True).start()
+
+
 if __name__ == "__main__":
+    if len(sys.argv) > 5:
+        watch_owner(int(sys.argv[5]))
     settings = json.loads(sys.argv[3]) if len(sys.argv) > 3 else json.load(sys.stdin)
     config = (
         Path(sys.argv[4])

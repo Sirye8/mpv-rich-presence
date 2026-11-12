@@ -111,17 +111,23 @@ int main(int argc, char** argv)
         if (store.episode_watch(7,18,"2").value("last_watched",0.0) != 133000.0) return 1;
         if (store.episode_watch(8,18,"2").value("elapsed",0.0) != 12.0) return 1;
         store.put("player","old-window",{{"session",2}});
+        store.put("privacy","global",{{"mode","hidden"},{"block_lookup",true}});
+        store.put("privacy","file:/media/track.flac",{{"mode","hidden"},{"block_lookup",true}});
     }
     const auto relocated = directory / "scripts" / "mpv-rich-presence" / "data.sqlite3";
     {
         profile_store store(relocated, database);
         if (!store.blocked("/media/track.flac")) return 1;
         if (!store.get("account","current").empty() || !store.get("player","old-window").empty()) return 1;
+        if (!store.get("privacy","global").empty()) return 1;
+        if (!store.get("privacy","file:/media/track.flac").value("block_lookup",false)) return 1;
         store.clear("exclude","folder:/media");
+        store.put("privacy","global",{{"mode","hidden"}});
     }
     {
         profile_store store(relocated, database);
         if (store.blocked("/media/track.flac")) return 1;
+        if (store.get("privacy","global").value("mode",std::string{}) != "hidden") return 1;
     }
     std::filesystem::remove(relocated);
     std::filesystem::remove(relocated.parent_path());

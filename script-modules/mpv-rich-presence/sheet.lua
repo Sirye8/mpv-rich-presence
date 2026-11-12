@@ -77,10 +77,7 @@ return function(model)
     local function columns(w,h)
         local margins = mp.get_property_native("user-data/osc/margins",{})
         local min_left,max_right = 12+w*(margins.l or 0),w-12-w*(margins.r or 0)
-        local min_top = 12+h*(margins.t or 0)
-        if mp.get_property_native("border") == false and mp.get_property_native("osc") ~= false then
-            min_top=math.max(44,min_top)
-        end
+        local min_top = math.max(48,12+h*(margins.t or 0))
         local max_bottom = math.min(h*.86,h-12-h*(margins.b or 0))
         local span = max_right-min_left
         local wide = not model.compact and span>=716 and h>=560 and max_bottom-min_top>=88+row_step*#model.sections and ui.page~="Menu"
@@ -169,7 +166,15 @@ return function(model)
                 box(ass,x+4,y+7,x+7,b-7,theme.accent,focus*content,1.5)
             end
             local color = (item.primary or is_pressed) and theme.ink or (item.disabled and theme.muted or theme.text)
-            if not item.plain then
+            if item.stepper then
+                label(ass,(x+r)/2,y+5+rise,item.caption.."  "..item.value_text,15,theme.text,content,8,true)
+                for _,button in ipairs(item.stepper) do
+                    local active=hovered==button.key and motion.hover or 0
+                    box(ass,button.x+2,y+2,button.r-2,b-2,theme.hover,
+                        (pressed==button.key and .95 or .46+.42*active)*content,7)
+                    label(ass,(button.x+button.r)/2,y+2+rise,button.title,19,theme.accent,content,8,true)
+                end
+            elseif not item.plain then
                 draw_cell(ass,item,item.display,x+13+offset,y+5+rise,item.label_right,15,color,content,false,item.primary)
             end
             if item.value then
@@ -441,7 +446,7 @@ return function(model)
         end
         scale=factor
         local left,right,pane,wide,position,min_top,max_bottom = columns(w,h)
-        local available = math.max(1,math.floor((math.min(h*.57-min_top,max_bottom-min_top)-88)/row_step))
+        local available = math.max(1,math.floor((math.min(h*(model.compact and .76 or .57)-min_top,max_bottom-min_top)-88)/row_step))
         local shown = math.max(1,math.min(#rows,available))
         local height = 88+row_step*math.max(shown,wide and #model.sections or 0)
         local top = position:match("^bottom%-") and math.max(min_top,max_bottom-height) or min_top
@@ -484,10 +489,23 @@ return function(model)
             local row=rows[i]
             local y=top+44+(i-mem.top)*row_step
             local key="row:"..(row.id or i)
-            local item=hit(layout.rows,pane+8,y,right-8,y+row_height,i,key,not row.disabled and row.run or nil,row.label,row.tip)
+            local item
+            if row.stepper then
+                local buttons={}
+                for _,button in ipairs({{-1,"−","Decrease draft by one episode.",pane+19,pane+60},
+                    {1,"+","Increase draft by one episode.",right-55,right-11}}) do
+                    hit(buttons,button[4],y,button[5],y+row_height,i,key..button[2],
+                        function() row.adjust(button[1]) end,button[2],button[3].." Use Apply progress to review and save.")
+                end
+                item=hit(layout.rows,pane+8,y,right-8,y+row_height,i,key,nil,row.label,row.tip)
+                item.stepper=buttons
+            else
+                item=hit(layout.rows,pane+8,y,right-8,y+row_height,i,key,not row.disabled and row.run or nil,row.label,row.tip)
+            end
             item.focused,item.disabled,item.primary,item.toggle,item.adjust,item.plain = mem.focus==i,row.disabled,row.primary,row.toggle,row.adjust,row.plain
             local title,value=row.label:match("^(.-)   (.+)$")
             item.caption,item.value_text,item.link=title or row.label,value,row.link
+            if item.stepper then value=nil end
             local label_left=item.x+(row.plain and 5 or 13)
             local inset=(row.adjust or row.link or (item.fn and not value)) and 26 or 11
             item.label_right=item.r-inset
@@ -634,8 +652,9 @@ return function(model)
             bind("UP",function() focus(-1) end,{repeatable=true})
             bind("DOWN",function() focus(1) end,{repeatable=true})
             bind("LEFT",function() activate(-1) end); bind("RIGHT",function() activate(1) end)
-            bind("ENTER",function() activate() end); bind("ESC",model.compact and ui.close or ui.back)
+            bind("ENTER",function() activate() end)
         end
+        bind("ESC",model.compact and ui.close or ui.back)
         mp.enable_key_bindings(mouse_section,"allow-hide-cursor")
     end
 

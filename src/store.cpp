@@ -70,6 +70,10 @@ namespace mpvrp
                             "WHERE category NOT IN ('player','response','job','auto','cancel','refresh','flight','pin') "
                             "AND (category!='account' OR json_extract(value,'$.persistent')=1)", {});
             }
+            // Older resets inserted a global lookup block that cannot be set from the panel.
+            execute(db, "DELETE FROM main.records WHERE category='privacy' AND scope='global' "
+                        "AND json_extract(value,'$.mode')='hidden' "
+                        "AND json_type(value,'$.block_lookup')='true'", {});
             check(db, sqlite3_exec(db, "PRAGMA main.user_version=1; COMMIT;", nullptr, nullptr, nullptr));
             if (migrate) execute(db, "DETACH DATABASE legacy", {});
         }
