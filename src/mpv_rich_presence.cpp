@@ -822,6 +822,19 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
         return;
 
+    int conflicting_anime_minutes = 0;
+    if (!correction.contains("id") && pinfo.episode == 0 && pinfo.season == 0 && pinfo.part == 0 &&
+        current_resolved_media.format != "MOVIE" && current_resolved_media.duration_minutes > 0 &&
+        current_resolved_media.duration_minutes <= 30 && current_resolved_media.release_year > 0)
+    {
+        const auto year = ws2s(elements.get(anitomy::kElementAnimeYear));
+        const auto lower_title = to_lower(a_title);
+        if (year.size() == 4 && year != std::to_string(current_resolved_media.release_year) &&
+            std::none_of(current_resolved_media.matching_titles.begin(), current_resolved_media.matching_titles.end(),
+                [&](const auto& alias) { return to_lower(alias) == lower_title; }))
+            conflicting_anime_minutes = current_resolved_media.duration_minutes;
+    }
+
     // Commit results under lock
     std::lock_guard<std::mutex> lock(state.anime_mutex);
     if (state.file_load_id == current_load_id)
@@ -842,6 +855,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
             && (current_resolved_media.episodes <= 0 || current_resolved_ep <= current_resolved_media.episodes)
             && (current_resolved_media.format == "TV" || current_resolved_media.format == "ONA");
         state.is_anime = true;
+        state.conflicting_anime_minutes = conflicting_anime_minutes;
         state.anime_title = current_resolved_media.title;
         state.anime_english = current_resolved_media.english;
         state.anime_native = current_resolved_media.native;
@@ -1257,6 +1271,17 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
         mpv_show(state.mpv, std::format("Rich presence {}", *state.is_enabled ? "enabled" : "disabled"));
 }
 
+static std::string get_audio_artist(mpv_handle* mpv)
+{
+    for (const auto* key : {"metadata/by-key/artist", "metadata/by-key/Artist",
+        "metadata/by-key/album_artist", "metadata/by-key/albumartist"})
+    {
+        auto artist = get_mpv_osd_string(mpv,key);
+        if (!artist.empty()) return artist;
+    }
+    return {};
+}
+
 static void handle_file_loaded(rich_presence_state& state)
 {
     ++state.file_session;
@@ -1276,17 +1301,15 @@ static void handle_file_loaded(rich_presence_state& state)
         if (media_track_type == "video")
         {
             int is_image = 0;
+            int is_album_art = 0;
             mpv_get_property(state.mpv, std::format("track-list/{}/image", i).c_str(), MPV_FORMAT_FLAG, &is_image);
-            if (is_image == 0)
+            mpv_get_property(state.mpv, std::format("track-list/{}/albumart", i).c_str(), MPV_FORMAT_FLAG, &is_album_art);
+            if (is_image == 0 && is_album_art == 0)
                 state.media_has_video = true;
         }
     }
 
-    std::string media_artist = get_mpv_osd_string(state.mpv, "metadata/by-key/Artist");
-    if (media_artist.empty())
-        media_artist = get_mpv_osd_string(state.mpv, "metadata/by-key/artist");
-    if (media_artist.empty())
-        media_artist = get_mpv_osd_string(state.mpv, "metadata/by-key/album_artist");
+    std::string media_artist = get_audio_artist(state.mpv);
     std::string media_title = get_mpv_osd_string(state.mpv, "media-title");
 
     state.album = get_mpv_osd_string(state.mpv, "metadata/by-key/album");
@@ -1527,7 +1550,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     auto next_sample = chrono::steady_clock::time_point{};
     bool service_started = false;
     bool observed = false;
-    std::string observed_source, observed_title;
+    std::string observed_source, observed_title, observed_artist, observed_album;
     nlohmann::json automatic = nlohmann::json::object();
     uint64_t observed_session = UINT64_MAX;
     bool last_allowed = false;
@@ -1563,13 +1586,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (event->event_id == MPV_EVENT_PROPERTY_CHANGE && event->reply_userdata == 1 && !state.current_file_path.empty())
             {
                 auto title = get_mpv_osd_string(state.mpv, "media-title");
-                auto artist = get_mpv_osd_string(state.mpv, "metadata/by-key/artist");
-                if (artist.empty()) artist = get_mpv_osd_string(state.mpv,"metadata/by-key/Artist");
-                if (artist.empty()) artist = get_mpv_osd_string(state.mpv,"metadata/by-key/album_artist");
-                if (title != state.media_title || artist != state.media_artist)
+                auto artist = get_audio_artist(state.mpv);
+                auto album = get_mpv_osd_string(state.mpv,"metadata/by-key/album");
+                if (title != state.media_title || artist != state.media_artist || album != state.album)
                 {
                     state.media_title = title;
                     state.media_artist = artist;
+                    state.album = album;
                     state.force_update = true;
                 }
             }
@@ -1648,6 +1671,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         media.now = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
         media.session_start = state.session_start;
         int completed_anime_lookup;
+        int conflicting_anime_minutes = 0;
         bool safe_episode = false;
         {
             std::lock_guard lock(state.anime_mutex);
@@ -1656,6 +1680,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (media.anime)
             {
                 safe_episode = state.safe_episode;
+                conflicting_anime_minutes = state.conflicting_anime_minutes;
                 media.anime_title = state.anime_title;
                 media.english = state.anime_english;
                 media.romaji = state.anime_romaji;
@@ -1780,28 +1805,43 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         const bool anime_unconfirmed = state.media_has_video && use_anilist(state) &&
             state.pending_load_id == load_id && completed_anime_lookup != load_id;
         const bool pinned_anime = state.correction.contains("id") && !state.correction.value("not_anime", false);
-        if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
+        const double duration_estimate = media.position + media.remaining;
+        const bool verify_movie = state.store && source == "auto" && allowed && media.anime &&
+            !pinned_anime && completed_anime_lookup == load_id && conflicting_anime_minutes > 0 &&
+            duration_estimate >= (std::max)(60, 3 * conflicting_anime_minutes) * 60;
+        if (verify_movie) source = "verify-movie";
+        else if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
             source = "original";
         const bool extra = source != "original";
+        const int tracked_media = verify_movie ? 0 : media.anilist_id;
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
-            || observed_source != source || (extra && observed_title != media.title)
-            || last_allowed != allowed || observed != watch || last_sample_id != media.anilist_id
+            || observed_source != source || (extra && (observed_title != media.title ||
+                observed_artist != media.artist || observed_album != media.album))
+            || last_allowed != allowed || observed != watch || last_sample_id != tracked_media
             || (watch && (advancing != last_sample_active || sampled_seek != last_seek || last_sample_speed != media.speed))))
         {
             next_sample = now_steady + chrono::seconds(1);
             auto seconds = chrono::duration<double>(now_steady.time_since_epoch()).count();
-            nlohmann::json sample = {{"session",state.file_session},{"media",media.anilist_id},{"episode",media.episode},
-                {"safe_episode",safe_episode},{"total",media.total},{"pos",media.position},{"seek",last_seek},
+            nlohmann::json sample = {{"session",state.file_session},{"media",tracked_media},
+                {"episode",verify_movie ? "" : media.episode},
+                {"safe_episode",!verify_movie && safe_episode},{"total",media.total},{"pos",media.position},{"seek",last_seek},
                 {"scope_path",state.scope_path},{"path",allowed ? state.scope_path : ""},{"speed",media.speed},{"active",advancing},
                 {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
-                {"match_title",media.anime_title}};
+                {"match_title",verify_movie ? "" : media.anime_title}};
             sample["source"] = source;
             if (extra)
             {
                 sample["title"] = media.title;
                 sample["artist"] = media.artist;
                 sample["album"] = media.album;
+                if (!media.video)
+                {
+                    sample["track_title"] = get_mpv_string(state.mpv,"metadata/by-key/title");
+                    auto album_artist = get_mpv_string(state.mpv,"metadata/by-key/album_artist");
+                    if (album_artist.empty()) album_artist = get_mpv_string(state.mpv,"metadata/by-key/albumartist");
+                    sample["album_artist"] = std::move(album_artist);
+                }
                 sample["video"] = media.video;
                 sample["remote"] = state.scope_path.starts_with("stream-");
                 if (!sample["remote"].get<bool>()) sample["filename"] = get_mpv_string(state.mpv, "filename");
@@ -1822,9 +1862,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             state.store->put("player",state.instance_id,sample);
             observed_source = source;
             observed_title = media.title;
+            observed_artist = media.artist;
+            observed_album = media.album;
             sampled_seek = last_seek;
             last_sample_speed = media.speed;
-            last_sample_id = media.anilist_id;
+            last_sample_id = tracked_media;
             last_sample_active = advancing;
             observed_session = state.file_session;
             last_allowed = allowed;
@@ -1840,8 +1882,18 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         {
             const auto candidate = state.store->get("auto",state.instance_id);
             if (candidate != automatic) { state.force_update = true; automatic = candidate; }
-            if (candidate.value("session",uint64_t{}) == state.file_session && candidate.value("source",std::string{}) == source
-                && candidate.value("title",std::string{}) == media.title) media.provider = candidate.value("hit",nlohmann::json::object());
+            const bool resolved = candidate.value("session",uint64_t{}) == state.file_session &&
+                candidate.value("source",std::string{}) == source && candidate.value("title",std::string{}) == media.title &&
+                candidate.value("artist",std::string{}) == media.artist && candidate.value("album",std::string{}) == media.album;
+            if (resolved) media.provider = candidate.value("hit",nlohmann::json::object());
+            if (verify_movie && (!resolved || !media.provider.empty()))
+            {
+                media.anime = false;
+                media.anilist_id = 0;
+                media.episode.clear();
+                media.anime_title.clear();
+                safe_episode = false;
+            }
         }
         if (!state.provider.empty() && !media.anime)
         {

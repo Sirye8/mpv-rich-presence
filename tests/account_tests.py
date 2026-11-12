@@ -19,6 +19,7 @@ sys.path.insert(
 )
 from account import AccountError, ClientSecretRequired, callback_server, save_progress
 from backend import Worker
+from providers import fingerprint_match
 
 
 class CallbackTests(unittest.TestCase):
@@ -142,6 +143,134 @@ class PublicSignInTests(unittest.TestCase):
 
 
 class RecognitionTests(unittest.TestCase):
+    def test_fingerprint_fallback_keeps_tied_recordings_unresolved(self):
+        rows = [
+            dict(id="first", name="Track", artist="One", score=0.99, groups=[]),
+            dict(id="second", name="Track", artist="Two", score=0.99, groups=[]),
+        ]
+        self.assertIsNone(fingerprint_match(rows, "", "", ""))
+        self.assertEqual(fingerprint_match(rows, "Track", "Two", "")["id"], "second")
+        self.assertIsNone(
+            fingerprint_match([dict(rows[0], score=0.5)], "Track", "One", "")
+        )
+
+    def test_feature_verification_requires_title_year_and_live_action_genre(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                filename = "Interstellar (2014) (2160p x265 10bit HDR Tigole).mkv"
+                for session, genre in enumerate(
+                    ("Adventure, Science Fiction", "Animation", ""), 1
+                ):
+                    sample = dict(
+                        source="verify-movie",
+                        session=session,
+                        title=filename,
+                        filename=filename,
+                        video=True,
+                        allowed=True,
+                        duration=10140,
+                    )
+                    worker.put("player", "window", sample)
+                    worker.put("refresh", "window", {"id": session})
+                    candidate = dict(
+                        id=157336, kind="movie", name="Interstellar", year="2014"
+                    )
+                    with (
+                        patch("backend.candidates", return_value=[candidate]) as search,
+                        patch(
+                            "backend.details",
+                            return_value=dict(
+                                candidate, genre=genre, provider="tmdb-movie"
+                            ),
+                        ),
+                    ):
+                        worker.recognize(sample)
+                    self.assertEqual(
+                        search.call_args.args[:2], ("tmdb-movie", "Interstellar (2014)")
+                    )
+                    self.assertEqual(
+                        bool(worker.get("auto", "window")["hit"]), session == 1
+                    )
+            finally:
+                worker.db.close()
+
+    def test_music_matches_feature_credits_and_remaster_titles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                cases = (
+                    (
+                        "Blame (feat. John Newman)",
+                        "Calvin Harris;John Newman",
+                        "Motion",
+                        214,
+                        "Blame",
+                        "Calvin Harris feat. John Newman",
+                        ["Calvin Harris", "John Newman"],
+                        210253,
+                    ),
+                    (
+                        "Hotel California - 2013 Remaster",
+                        "Eagles",
+                        "Hotel California",
+                        391,
+                        "Hotel California",
+                        "Eagles",
+                        ["Eagles"],
+                        390000,
+                    ),
+                )
+                for session, (
+                    title,
+                    artist,
+                    album,
+                    duration,
+                    name,
+                    credit,
+                    artists,
+                    length,
+                ) in enumerate(cases, 1):
+                    sample = dict(
+                        source="auto",
+                        session=session,
+                        title=title,
+                        artist=artist,
+                        album=album,
+                        duration=duration,
+                        video=False,
+                        allowed=True,
+                    )
+                    worker.put("player", "window", sample)
+                    hit = dict(
+                        id=session,
+                        kind="recording",
+                        name=name,
+                        artist=credit,
+                        artist_names=artists,
+                        album=album,
+                        duration_ms=length,
+                        cover="cover",
+                    )
+                    with (
+                        patch("backend.candidates", return_value=[hit]) as search,
+                        patch("backend.fingerprint") as acoustid,
+                    ):
+                        worker.recognize(sample)
+                    self.assertEqual(search.call_args.args[:2], ("musicbrainz", name))
+                    acoustid.assert_not_called()
+                    self.assertEqual(
+                        worker.get("auto", "window")["hit"]["provider"], "musicbrainz"
+                    )
+            finally:
+                worker.db.close()
+
     def test_scoped_video_sources(self):
         cases = [
             ("movie", "Film.2024.mkv", True, ["tmdb-movie", "wikidata"], "wikidata"),

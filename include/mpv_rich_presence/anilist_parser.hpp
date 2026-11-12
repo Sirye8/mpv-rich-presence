@@ -30,6 +30,8 @@ struct anilist_media
     std::vector<std::string> matching_titles; // Romaji, English, Native, and Synonyms for alias matching
     std::string romaji, english, native;
     int episodes = 0;
+    int release_year = 0;
+    int duration_minutes = 0;
     std::string cover_url;
     std::string format;
     int sequel_id = -1;

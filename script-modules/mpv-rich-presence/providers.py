@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import os
+from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 import unicodedata
@@ -10,6 +12,8 @@ import urllib.request
 from account import AccountError, NoRedirect, graphql
 
 TMDB_RELAY = "https://mpv-anilist-login.si-based.workers.dev/metadata"
+# AcoustID identifies the application with this client key. Lookup does not use a user key.
+ACOUSTID_CLIENT = "wiBIFjWvX2"
 
 
 def match_name(value):
@@ -36,13 +40,13 @@ def video_query(label):
     year = ""
     if years and years[-1].start() > 0:
         match = years[-1]
-        tail = title[match.end() :].strip(" )]-")
+        tail = title[match.end() :].strip(" ()[]{}-")
         if not tail or re.match(
             r"(?i)(?:\d{3,4}p|4k|uhd|bluray|web|hdr|remux|dvdrip)\b", tail
         ):
             title, year = title[: match.start()].strip(" ([{-"), match[1]
     title = re.split(
-        r"(?i)\s+(?:\d{3,4}p|4k|uhd|bluray|web[- ]?dl|webrip|hdtv|remux)\b",
+        r"(?i)\s+[\[(]?(?:\d{3,4}p|4k|uhd|bluray|web[- ]?dl|webrip|hdtv|remux)\b",
         title,
         maxsplit=1,
     )[0]
@@ -122,7 +126,7 @@ def wikidata_movies(query, throttle):
     return result
 
 
-def fetch(base, params=None, headers=None):
+def fetch(base, params=None, headers=None, body=None):
     if params:
         base += "?" + url.urlencode(params)
     headers = dict(headers or {})
@@ -130,7 +134,7 @@ def fetch(base, params=None, headers=None):
         "mpv-rich-presence/1.0 (https://github.com/Sirye8/mpv-rich-presence)"
     )
     with urllib.request.build_opener(NoRedirect).open(
-        urllib.request.Request(base, headers=headers), timeout=8
+        urllib.request.Request(base, data=body, headers=headers), timeout=8
     ) as r:
         payload = r.read(2_000_001)
     if len(payload) > 2_000_000:
@@ -167,7 +171,12 @@ def musicbrainz_terms(**fields):
     terms = []
     for name, text in fields.items():
         if text:
-            text = public_query(text).replace('"', '\\"')
+            text = text.strip()
+            if len(text) > 180 or re.search(
+                r"[\x00-\x1f]|://|^(?:[/\\]|[A-Za-z]:[/\\])", text
+            ):
+                raise AccountError("Enter music tags without a file path or URL.")
+            text = text.replace("\\", "\\\\").replace('"', '\\"')
             terms.append(f'{name}:"{text}"')
     return " AND ".join(terms)
 
@@ -179,6 +188,53 @@ def musicbrainz_artist(item):
     )
 
 
+MUSIC_SUFFIX = re.compile(
+    r"\s*(?:[\[(]\s*|\s[-–]\s*|\s+)(?:(?:feat(?:uring)?|ft)\.?\s+.+|"
+    r"(?:\d{4}\s+)?(?:digital\s+)?remaster(?:ed)?(?:\s+(?:in\s+)?\d{4})?(?:\s+version)?)"
+    r"[\])]?\s*$",
+    re.I,
+)
+
+
+def music_title(title):
+    title = title.strip()
+    while match := MUSIC_SUFFIX.search(title):
+        title = title[: match.start()].rstrip()
+    return title
+
+
+def music_artists(credit):
+    return [
+        part.strip()
+        for part in re.split(
+            r"[;\x00]|\s+(?:feat(?:uring)?|ft)\.?\s+", credit, flags=re.I
+        )
+        if part.strip()
+    ]
+
+
+def same_music_credit(expected, item):
+    actual = item.get("artist", "")
+    if match_name(expected) == match_name(actual):
+        return True
+    names = {
+        match_name(part) for part in (item.get("artist_names") or music_artists(actual))
+    }
+    if {match_name(part) for part in music_artists(expected)} == names:
+        return bool(expected)
+    # These separators can also be part of a band's name. Only split when the
+    # recording actually credits multiple artists.
+    return (
+        len(names) > 1
+        and {
+            match_name(part)
+            for credit in music_artists(expected)
+            for part in re.split(r",\s*|\s+(?:&|x|and)\s+", credit, flags=re.I)
+        }
+        == names
+    )
+
+
 def musicbrainz_album(title, artist, album, throttle):
     """Resolve release artwork when multiple recordings share the same tags."""
     if not artist or not album:
@@ -187,7 +243,7 @@ def musicbrainz_album(title, artist, album, throttle):
     rows = fetch(
         "https://musicbrainz.org/ws/2/release-group/",
         {
-            "query": musicbrainz_terms(releasegroup=album, artist=artist),
+            "query": musicbrainz_terms(releasegroup=music_title(album), artist=artist),
             "fmt": "json",
             "limit": 8,
         },
@@ -195,9 +251,16 @@ def musicbrainz_album(title, artist, album, throttle):
     matches = [
         r
         for r in rows
-        if match_name(r["title"]) == match_name(album)
+        if match_name(music_title(r["title"])) == match_name(music_title(album))
         and match_name(musicbrainz_artist(r)) == match_name(artist)
     ]
+    albums = [
+        r
+        for r in matches
+        if r.get("primary-type") == "Album" and not r.get("secondary-types")
+    ]
+    if len(albums) == 1:
+        matches = albums
     if len(matches) != 1:
         return None
     group = matches[0]
@@ -214,7 +277,9 @@ def musicbrainz_album(title, artist, album, throttle):
 
 
 def candidates(provider, query, settings, throttle, *, artist="", album=""):
-    query = public_query(query)
+    query = query.strip() if provider == "musicbrainz" else public_query(query)
+    if not query:
+        return []
     throttle(provider)
     if provider == "wikidata":
         return wikidata_movies(query, throttle)
@@ -247,6 +312,7 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
                 id=m["id"],
                 kind=kind,
                 name=m.get("title") or m["name"],
+                year=(m.get("release_date") or m.get("first_air_date") or "")[:4],
                 title="%s (%s)"
                 % (
                     m.get("title") or m["name"],
@@ -276,33 +342,51 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
             for m in [r["show"] for r in rows[:10]]
         ]
     if provider == "musicbrainz":
+        credits = music_artists(artist)
         rows = fetch(
             "https://musicbrainz.org/ws/2/recording/",
             {
                 "query": musicbrainz_terms(
-                    recording=query, artist=artist, release=album
+                    recording=music_title(query),
+                    artist=credits[0] if credits else "",
+                    release=music_title(album),
                 ),
                 "fmt": "json",
-                "limit": 8,
+                "limit": 20,
             },
         )
         result = []
         for m in rows["recordings"]:
-            for release in m.get("releases", [])[:3]:
+            releases = m.get("releases") or []
+            if album:
+                releases = [
+                    r
+                    for r in releases
+                    if match_name(music_title(r["title"]))
+                    == match_name(music_title(album))
+                ]
+            for release in releases[: 8 if album else 3] or [{}]:
+                release_id = release.get("id")
+                release_title = release.get("title", "")
                 result.append(
                     dict(
                         id=m["id"],
                         kind="recording",
                         name=m["title"],
-                        title=m["title"] + " · " + release["title"],
-                        release=release["id"],
-                        album=release["title"],
+                        title=m["title"]
+                        + (" · " + release_title if release_title else ""),
+                        release=release_id,
+                        release_group=(release.get("release-group") or {}).get("id"),
+                        album=release_title,
                         artist=musicbrainz_artist(m),
+                        artist_names=[c["name"] for c in m.get("artist-credit", [])],
                         duration_ms=m.get("length"),
                         link="https://musicbrainz.org/recording/" + m["id"],
                         cover="https://coverartarchive.org/release/"
-                        + release["id"]
-                        + "/front-250",
+                        + release_id
+                        + "/front-250"
+                        if release_id
+                        else "",
                     )
                 )
         return result
@@ -310,13 +394,21 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
 
 
 def fingerprint(path, settings, throttle, valid=lambda: None):
-    if not settings.get("acoustid_key") or not os.path.isfile(path):
+    if not os.path.isfile(path):
+        raise AccountError("Fingerprinting needs a local audio file.")
+    bundled = (
+        Path(__file__).resolve().parents[1]
+        / "runtime"
+        / ("fpcalc.exe" if os.name == "nt" else "fpcalc")
+    )
+    executable = str(bundled) if bundled.is_file() else shutil.which("fpcalc")
+    if not executable:
         raise AccountError(
-            "Fingerprinting needs a local file, fpcalc, and acoustid_key."
+            "fpcalc is unavailable. Install the packaged build or add fpcalc to PATH."
         )
     valid()
     with subprocess.Popen(
-        ["fpcalc", "-json", "-length", "120", os.path.abspath(path)],
+        [executable, "-json", "-length", "120", os.path.abspath(path)],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -343,32 +435,92 @@ def fingerprint(path, settings, throttle, valid=lambda: None):
     valid()
     data = fetch(
         "https://api.acoustid.org/v2/lookup",
-        {
-            "client": settings["acoustid_key"],
-            "meta": "recordings releases",
-            "duration": int(fp["duration"]),
-            "fingerprint": fp["fingerprint"],
-        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body=url.urlencode(
+            {
+                "client": settings.get("acoustid_key") or ACOUSTID_CLIENT,
+                "meta": "recordings releasegroups",
+                "duration": int(fp["duration"]),
+                "fingerprint": fp["fingerprint"],
+            }
+        ).encode("ascii"),
     )
     if data.get("status") != "ok":
         raise AccountError(
             "AcoustID rejected the lookup. Check your key and try again."
         )
-    return [
-        dict(
-            id=r["id"],
-            kind="recording",
-            name=r["title"],
-            title=r["title"],
-            link="https://musicbrainz.org/recording/" + r["id"],
+    rows = []
+    for hit in data.get("results", []):
+        for recording in hit.get("recordings", []):
+            if not recording.get("title"):
+                continue
+            artists = [
+                entry["name"]
+                for entry in recording.get("artists", [])
+                if entry.get("name")
+            ]
+            groups = [
+                group
+                for group in recording.get("releasegroups", [])
+                if group.get("id") and group.get("title")
+            ]
+            rows.append(
+                dict(
+                    id=recording["id"],
+                    kind="recording",
+                    name=recording["title"],
+                    title=recording["title"]
+                    + (" · " + ", ".join(artists) if artists else ""),
+                    artist=", ".join(artists),
+                    artist_names=artists,
+                    groups=groups,
+                    score=hit.get("score", 0),
+                    link="https://musicbrainz.org/recording/" + recording["id"],
+                )
+            )
+    return rows[:30]
+
+
+def fingerprint_match(rows, title, artist, album):
+    confident = {row["id"]: row for row in rows if row["score"] >= 0.9}
+    tagged = [
+        row
+        for row in confident.values()
+        if (not title or match_name(music_title(row["name"])) == match_name(title))
+        and (not artist or same_music_credit(artist, row))
+    ]
+    # Tags can resolve tied database entries. A sole result can repair a bad tag.
+    if len(tagged) == 1:
+        hit = dict(tagged[0])
+    elif len(confident) == 1:
+        hit = dict(next(iter(confident.values())))
+    else:
+        return None
+    return fingerprint_details(hit, album)
+
+
+def fingerprint_details(hit, album=""):
+    hit = dict(hit, provider="acoustid")
+    groups = hit.pop("groups", [])
+    matched = [
+        g
+        for g in groups
+        if match_name(music_title(g["title"])) == match_name(music_title(album))
+    ]
+    groups = matched or [g for g in groups if g.get("type") == "Album"]
+    if len(groups) == 1:
+        hit["album"] = groups[0]["title"]
+        hit["cover"] = (
+            "https://coverartarchive.org/release-group/"
+            + groups[0]["id"]
+            + "/front-250"
         )
-        for hit in data.get("results", [])
-        for r in hit.get("recordings", [])
-        if r.get("title")
-    ][:10]
+    return hit
 
 
 def details(provider, hit, settings, throttle, episode, airdate=None):
+    if provider == "acoustid":
+        return fingerprint_details(hit)
     item = dict(hit, provider=provider)
     if provider.startswith("tmdb-"):
         throttle(provider)

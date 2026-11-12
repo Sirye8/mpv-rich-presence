@@ -23,6 +23,8 @@ const std::string ANILIST_PAGE_FIELDS = R"(
     synonyms
     episodes
     format
+    startDate { year }
+    duration
     coverImage { large }
     relations {
         edges {
@@ -105,6 +107,11 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
 
     if (media.contains("format") && !media["format"].is_null())
         result.format = media["format"].get<std::string>();
+    if (media.contains("duration") && media["duration"].is_number_integer())
+        result.duration_minutes = media["duration"].get<int>();
+    if (media.contains("startDate") && media["startDate"].is_object() &&
+        media["startDate"].contains("year") && media["startDate"]["year"].is_number_integer())
+        result.release_year = media["startDate"]["year"].get<int>();
 
     if (media.contains("coverImage") && !media["coverImage"].is_null())
     {

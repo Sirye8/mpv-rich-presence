@@ -28,8 +28,12 @@ from providers import (
     candidates,
     details,
     fingerprint,
+    fingerprint_match,
     match_name,
+    music_artists,
+    music_title,
     musicbrainz_album,
+    same_music_credit,
     video_query,
 )
 
@@ -517,7 +521,9 @@ class Worker:
                     return fingerprint(p["path"], self.settings, self.throttle, valid)
                 return candidates(provider, query, self.settings, self.throttle)
 
-            hits = self.cached_fetch(key, "results", fetch_results, valid)
+            hits = self.cached_fetch(
+                key, "results", lambda: fetch_results()[:24], valid
+            )
             self.reply(
                 results=hits,
                 provider=provider,
@@ -558,7 +564,21 @@ class Worker:
         if refresh != getattr(self, "last_refresh", None):
             self.resolved = None
             self.last_refresh = refresh
-        key = (p.get("session"), profile_source, p.get("title"), p.get("allowed"))
+
+        def context(sample):
+            return tuple(
+                sample.get(field)
+                for field in (
+                    "session",
+                    "source",
+                    "title",
+                    "artist",
+                    "album",
+                    "allowed",
+                )
+            )
+
+        key = context(p)
         if key == self.resolved:
             return
         self.resolved = key
@@ -566,6 +586,7 @@ class Worker:
             return
         raw = p.get("title", "")
         source = profile_source
+        verify_movie = source == "verify-movie"
         video_profile = source in ("movie-tv", "movie", "tv")
         if video_profile and (not p["video"] or p.get("remote")):
             return
@@ -573,9 +594,19 @@ class Worker:
         if p["video"] and not p.get("remote"):
             title, year, episode, airdate = video_query(raw)
             filename = video_query(p.get("filename", ""))
-            if filename[2] or filename[3] or not title or (filename[1] and not year):
+            if (
+                filename[2]
+                or filename[3]
+                or not title
+                or (filename[1] and (verify_movie or not year))
+            ):
                 title, year, episode, airdate = filename
-        mixed_title = source == "movie-tv" and not (episode or airdate)
+        mixed_title = (
+            source in ("auto", "movie-tv")
+            and p["video"]
+            and not p.get("remote")
+            and not (episode or airdate)
+        )
         if video_profile:
             tv_profile = source == "tv" or (source == "movie-tv" and not mixed_title)
             source = "tvmaze" if tv_profile else "wikidata"
@@ -590,6 +621,13 @@ class Worker:
                 source = "tvmaze"
             else:
                 source = "wikidata"
+        if verify_movie:
+            source = "tmdb-movie"
+        artist = p.get("artist", "")
+        album = p.get("album", "")
+        automatic_music = source == "musicbrainz" and profile_source == "auto"
+        if source == "musicbrainz":
+            title = music_title(p.get("track_title") or raw)
         generation = self.get("generation", "data")
         hit = None
         if source == "stream":
@@ -612,9 +650,9 @@ class Worker:
                 provider=source,
                 kind="recording",
                 id=p["recording"],
-                name=raw,
-                artist=p.get("artist", ""),
-                album=p.get("album", ""),
+                name=title,
+                artist=artist,
+                album=album,
                 link="https://musicbrainz.org/recording/" + p["recording"],
             )
             if re.fullmatch(r"[0-9a-fA-F-]{36}", p.get("release", "")):
@@ -625,16 +663,21 @@ class Worker:
             "video"
         ] and not p.get("remote"):
             # Search only a title. Never pass a path, URI or query string.
-            if not title or re.search(r"[/\\?&#\x00-\x1f]|://", title):
-                return
             if (
-                source == "musicbrainz"
-                and profile_source == "auto"
-                and not p.get("artist")
+                not verify_movie
+                and not automatic_music
+                and (
+                    not title
+                    or (
+                        source != "musicbrainz"
+                        and re.search(r"[/\\?&#\x00-\x1f]|://", title)
+                    )
+                )
             ):
                 return
             cache_key = (
-                profile_source
+                "v2:"
+                + profile_source
                 + ":"
                 + source
                 + "/"
@@ -642,14 +685,17 @@ class Worker:
                     json.dumps(
                         [
                             title,
-                            p.get("artist"),
-                            p.get("album"),
+                            artist,
+                            album,
+                            p.get("album_artist"),
                             p.get("tmdb"),
                             year,
                             episode,
                             airdate,
                             p.get("duration"),
-                            p["path"] if source == "acoustid" else "",
+                            p.get("path", "")
+                            if source == "acoustid" or automatic_music
+                            else "",
                             refresh,
                         ]
                     ).encode()
@@ -658,16 +704,23 @@ class Worker:
 
             def valid():
                 current = self.get("player", self.window)
-                if refresh != self.get("refresh", self.window) or key != (
-                    current.get("session"),
-                    current.get("source"),
-                    current.get("title"),
-                    current.get("allowed"),
+                if refresh != self.get("refresh", self.window) or key != context(
+                    current
                 ):
                     raise AccountError("Playback or privacy settings changed.")
 
             def fetch_hit():
-                if source.startswith("tmdb-") and p.get("tmdb", "").isdigit():
+                def identify_audio():
+                    rows = fingerprint(
+                        p.get("path", ""), self.settings, self.throttle, valid
+                    )
+                    return fingerprint_match(rows, title, artist, album)
+
+                if (
+                    not verify_movie
+                    and source.startswith("tmdb-")
+                    and p.get("tmdb", "").isdigit()
+                ):
                     chosen = dict(
                         id=int(p["tmdb"]),
                         kind=source.split("-")[1],
@@ -679,15 +732,13 @@ class Worker:
                     )
 
                 if source == "acoustid":
-                    rows = fingerprint(p["path"], self.settings, self.throttle, valid)
-                    exact = [
-                        r for r in rows if match_name(r["name"]) == match_name(title)
-                    ]
-                    return dict(exact[0], provider=source) if len(exact) == 1 else None
+                    return identify_audio()
 
                 def matching(provider):
                     valid()
-                    query = title.replace(":", " ")
+                    query = (
+                        title if provider == "musicbrainz" else title.replace(":", " ")
+                    )
                     if provider.startswith("tmdb-") and year:
                         query += f" ({year})"
                     rows = candidates(
@@ -695,42 +746,83 @@ class Worker:
                         query,
                         self.settings,
                         self.throttle,
-                        artist=p.get("artist", ""),
-                        album=p.get("album", ""),
+                        artist=artist,
+                        album=album,
                     )
                     exact = [
                         r
                         for r in rows
-                        if match_name(r.get("match", r["name"])) == match_name(title)
+                        if match_name(
+                            music_title(r["name"])
+                            if provider == "musicbrainz"
+                            else r.get("match", r["name"])
+                        )
+                        == match_name(title)
                     ]
-                    if year and provider in ("wikidata", "tvmaze"):
+                    if year and (
+                        provider in ("wikidata", "tvmaze", "tmdb-movie") or verify_movie
+                    ):
                         exact = [
                             r for r in exact if year in r.get("years", [r.get("year")])
                         ]
                     if provider == "musicbrainz":
-                        for tag in ("artist", "album"):
-                            if p.get(tag):
-                                exact = [
-                                    r
-                                    for r in exact
-                                    if match_name(r.get(tag, "")) == match_name(p[tag])
-                                ]
-                        if p.get("duration", 0) > 0:
+                        if artist:
+                            exact = [r for r in exact if same_music_credit(artist, r)]
+                        if album:
                             exact = [
                                 r
                                 for r in exact
-                                if not r.get("duration_ms")
-                                or abs(r["duration_ms"] / 1000 - p["duration"]) <= 3
+                                if match_name(music_title(r.get("album", "")))
+                                == match_name(music_title(album))
+                            ]
+                        if p.get("duration", 0) > 0:
+                            with_runtime = [
+                                r
+                                for r in exact
+                                if r.get("duration_ms")
+                                and abs(r["duration_ms"] / 1000 - p["duration"]) <= 5
+                            ]
+                            exact = with_runtime or [
+                                r for r in exact if not r.get("duration_ms")
                             ]
                         recordings = {r["id"] for r in exact}
                         if len(recordings) == 1 and len(exact) > 1:
-                            # Several editions can share a recording. Keep the
-                            # track identity and omit uncertain release art.
                             track = dict(exact[0])
-                            track.pop("cover", None)
-                            track["album"] = p.get("album", "")
+                            groups = {r.get("release_group") for r in exact}
+                            if len(groups) == 1 and None not in groups:
+                                track["cover"] = (
+                                    "https://coverartarchive.org/release-group/"
+                                    + groups.pop()
+                                    + "/front-250"
+                                )
+                            else:
+                                track.pop("cover", None)
+                            track["album"] = album
                             return [track]
                     return exact
+
+                if verify_movie:
+                    if not title or not year or episode or airdate:
+                        return None
+                    try:
+                        movies = matching("tmdb-movie")
+                        if len(movies) != 1:
+                            return None
+                        valid()
+                        movie = details(
+                            "tmdb-movie", movies[0], self.settings, self.throttle, None
+                        )
+                        genres = movie.get("genre", "").casefold().split(", ")
+                        if (
+                            movie.get("year") == year
+                            and match_name(movie["name"]) == match_name(title)
+                            and genres != [""]
+                            and "animation" not in genres
+                        ):
+                            return movie
+                    except AccountError:
+                        pass
+                    return None
 
                 def preferred_tmdb(fallback):
                     preferred = "tmdb-movie" if fallback == "wikidata" else "tmdb-tv"
@@ -773,10 +865,15 @@ class Worker:
                         return preferred
 
                 provider = source
+                if automatic_music and (not title or not artist):
+                    try:
+                        return identify_audio()
+                    except (AccountError, OSError, ValueError):
+                        return None
                 try:
                     exact = matching(provider)
                 except AccountError:
-                    if not mixed_title:
+                    if not mixed_title and not automatic_music:
                         raise
                     exact = []
                 except (OSError, ValueError):
@@ -785,9 +882,25 @@ class Worker:
                     exact = []
                 if provider == "musicbrainz" and len(exact) != 1:
                     valid()
-                    return musicbrainz_album(
-                        title, p.get("artist", ""), p.get("album", ""), self.throttle
-                    )
+                    credits = music_artists(artist)
+                    try:
+                        release = musicbrainz_album(
+                            title,
+                            p.get("album_artist") or (credits[0] if credits else ""),
+                            album,
+                            self.throttle,
+                        )
+                        if release:
+                            return release
+                    except (AccountError, OSError, ValueError):
+                        if not automatic_music:
+                            raise
+                    if automatic_music:
+                        try:
+                            return identify_audio()
+                        except (AccountError, OSError, ValueError):
+                            pass
+                    return None
                 if not exact and (
                     (profile_source == "auto" and provider == "wikidata") or mixed_title
                 ):
@@ -807,12 +920,7 @@ class Worker:
             hit = self.cached_fetch(cache_key, "hit", fetch_hit, valid)
         with self.transaction():
             current = self.get("player", self.window)
-            if key != (
-                current.get("session"),
-                current.get("source"),
-                current.get("title"),
-                current.get("allowed"),
-            ) or generation != self.get("generation", "data"):
+            if key != context(current) or generation != self.get("generation", "data"):
                 return
             self.put(
                 "auto",
@@ -821,6 +929,8 @@ class Worker:
                     session=p["session"],
                     source=profile_source,
                     title=raw,
+                    artist=artist,
+                    album=album,
                     hit=hit or {},
                 ),
             )
