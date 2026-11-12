@@ -1,215 +1,37 @@
 # mpv-rich-presence
 
-Share what you are watching or listening to in mpv with Discord. The plugin runs on Windows and Linux and automatically looks up anime, movies, TV episodes, and tagged music. The included config supplies the Discord application ID.
+Show what you watch or listen to in mpv on Discord. The plugin recognizes anime, movies, TV and music, and can track anime progress on AniList. It runs on Windows and Linux.
 
-Press **Alt+p** to open the translucent panel. Hover over a setting to see what it does and what each choice means. **Appearance → Panel position** moves the panel immediately. Choose **Config** to use the position in the conf file, which defaults to the upper left. Set `menu_animations=no` for instant transitions or adjust `menu_scale` to change the panel size. Discord card edits are private until you choose **Apply**.
+## Quick start
+
+1. Get the package for your system from the [release list](https://github.com/Sirye8/mpv-rich-presence/releases) or [build the current source](docs/build.md).
+2. Close mpv. Copy the package's `scripts` and `script-opts` folders into your [mpv config directory](docs/user-guide.md#install-or-upgrade). Keep your existing `rich-presence.conf` if you're upgrading.
+3. Open a file with Discord running. The package includes the default application ID and metadata services.
+4. Press **Alt+p** to open Rich Presence. Hover over any setting for its available choices.
 
 ## In the player
 
-| Section | What you can do |
+![Now playing panel showing the matched anime, card fields and sharing controls](screenshots/panel-now-playing.jpg)
+
+| To change | Open |
 | --- | --- |
-| Now playing | Check the outgoing card, see why sharing is hidden, correct a match or claim Discord for this window. |
-| AniList | See actual episode watch time, connect an account, adjust progress or review an episode that qualified for an update. |
-| Appearance | Preview Original, Clean, Detailed or Private. Change title language, numbering, artwork, buttons and timers. Choose a file, folder or global scope. |
-| Recognition & folders | Search for a match, pin an AniList ID, adjust episode numbering or select another provider for a folder. |
-| Privacy & windows | Hide a file, hide Discord for an hour, block a folder, pin a player or start a private session. |
-| Saved data | Filter local records and confirm what to remove. Clearing local progress leaves your AniList list alone. |
-| Diagnostics | Check the active provider, ownership, permission and most recent SDK or account result. |
+| The text, artwork or timer on the Discord card | **Appearance** |
+| How mpv recognizes files in a folder | **Recognition & folders** |
+| What gets shared or tracked | **Privacy & windows** |
+| A local cache, match or timer | **Saved data** |
 
-Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Hover to scroll long row text and read the full value in its tooltip. If the tooltip is taller than the window, use the mouse wheel while hovering the row. Click a row marked ↗ or press Enter to open its link in your default browser. Search and ID entry use mpv's text input when available. You can also open a page from the mpv console, for example `script-message-to mpv_rich_presence menu Appearance`.
+## AniList
 
-### Sharing and privacy
+Open **Alt+p → AniList → Connect account** and approve in your browser. Set **Tracking** to **Manual**, **Ask** or **Automatic** when you're ready to count watch time. You can edit progress with the draft controls and review each proposed change in mpv.
 
-The native plugin waits for the Lua configuration bridge before searching or publishing. A blank Discord application ID disables ordinary Discord sharing and its anime lookups. Explicitly enabling **Track while hidden** gives AniList separate permission. Folder exclusions and a private session take precedence. A new file or a resumed window can claim Discord unless a different player is pinned.
-
-Matched anime can show episode numbers, release group, cover art and an AniList link. Other matched videos can show their title, release year or episode number, and available artwork. Audio uses a Listening activity. Playback timestamps account for speed, and buffering suspends the display timer. Paused presence is hidden after 30 minutes by default.
-
-### Connecting AniList
-
-The Windows ZIP includes a portable Python runtime for recognition and account features. Linux and source installs can use Python 3.9 or newer from the system. Set `python` to choose a different interpreter.
-
-Open **Alt+p → AniList → Connect account** and approve access on AniList. The default client and sign-in service are included. You do not need to register an application, enter a client secret or create a hosting account. **Connect for this session** keeps the credential in memory until the account helper exits.
-
-The public service uses a Cloudflare relay and a Netlify function for the authorization-code exchange. The application secret stays on Netlify. Once connected, mpv talks directly to AniList for account and list requests. See [the deployment notes](docs/anilist-exchange.md) for the service design, limits and owner setup.
-
-If you want to use your own **personal application**, register a separate client in [AniList developer settings](https://anilist.co/settings/developer) with the redirect URL `http://127.0.0.1:47653/callback`. Set `anilist_personal_client=yes` and `anilist_client_id` to its public ID. Enter its secret only on the local callback page. Do not put a secret or access token in the config. Client `55822` uses the project's public callback and cannot also use a personal localhost callback.
-
-Windows uses Credential Manager. Linux can use the Python keyring package with Secret Service. If credential storage is unavailable, sign-in lasts for the worker session. Disconnect removes the local account credential. Use AniList's connected app settings to revoke remote access.
-
-### Watch time and list edits
-
-Tracking starts off. Manual mode records watch time and lets you apply progress yourself. Ask and Automatic use a fixed threshold, initially 15 minutes of real playback. Watching at 2× earns the same time per minute as watching at 1×. Pauses, seeks, buffering and long observation gaps earn no extra time. Two windows share one watch record for an account and episode.
-
-In **Ask** mode, **Ask timing** controls when a ready update appears. **At threshold** shows it during playback. **End of episode** waits for natural playback completion. **Before leaving** also catches normal close and next-file commands. The last two choices can hold mpv's file transition until you review the update. **Later**, **×**, or the timeout keeps the update in Pending updates and lets mpv continue. **Skip this episode** dismisses it for the current viewing cycle. Set **Ask prompt position** and **Ask prompt timeout** to move the popup or change how long it waits. The default is upper right for 30 seconds.
-
-The AniList panel shows the elapsed watch time and the local clock times of the first and latest credited playback in the current viewing cycle. Existing records retain their elapsed time. They show **Not recorded** for clock times the plugin did not save.
-
-The minus and plus controls edit a draft. Apply shows the account and proposed change. The worker re-reads the entry and sends an absolute progress value. Ordinary progress edits preserve score, notes, repeat count and status. Watch time and list updates use the AniList entry and episode shown in the panel. Both require a single episode with clear numbering. Automatic mode advances the next consecutive episode of an entry in Watching or Rewatching. Gaps go to review. The first progress update for an entry outside those statuses offers to switch it to Watching or keep its status. If you keep it, Automatic mode continues to advance consecutive episodes with that status until it changes. Adding an anime to your list also requires review.
-
-An entry already marked Rewatching gets a separate viewing cycle. Enable **Rewatch tracking** to get a prompt after watching episode 1 of a completed anime. Starting a rewatch from Completed requires approval because AniList resets its progress to the new viewing. Recording the known final episode completes the rewatch and adds one to the repeat count. Unknown totals can keep advancing in Rewatching. A manual correction or skip suppresses a later automatic credit for that episode. Sampling runs independently of account and metadata requests.
-
-### Recognition and templates
-
-**Automatic** checks AniList first for video. A completed miss allows movie or TV lookup. If a feature-length file with an explicit year loosely matches a much shorter anime from a different year, TMDB can confirm the movie by exact title and year. When AniList is unavailable the card uses the local title. Movie and TV matching prefers TMDB, with Wikidata and TVmaze as fallbacks.
-
-For local audio, the track, artist, and album tags appear as soon as playback starts. MusicBrainz checks the title, credits, runtime, and album edition in the background. This handles common remaster suffixes, featured artists, and tags with both native and romanized titles. The card adds artwork once Cover Art Archive returns an image for the matched album. Discord uses public image URLs, so embedded cover art stays in mpv. If the tags cannot identify the track or album, Automatic can try AcoustID. Fingerprinting sends the fingerprint and audio duration to AcoustID and uses the included application key.
-
-To classify a folder, open a file inside it and press `Alt+p`. Go to **Recognition & folders**, set **Save for** to **folder**, and choose **Media recognition**. The rule applies to that folder and its subfolders.
-
-| Choice | What gets checked |
+| Edit progress | Review before leaving |
 | --- | --- |
-| **Automatic** | AniList first for video, then movie or TV on a completed anime miss. Audio-only files use music recognition. |
-| **Anime** | AniList only, with a local title if there is no match. |
-| **Movies & TV** | TV for filenames with episode numbers or air dates. Otherwise, try movies first and try TV if no movie matches. |
-| **Movies** | TMDB movies, with Wikidata as a fallback. |
-| **TV** | TMDB TV, with TVmaze as a fallback. Air-date episodes use TVmaze. |
-| **Original** | AniList for anime and local titles and tags for other media. |
+| ![AniList progress draft with minus and plus controls](screenshots/panel-anilist.jpg) | ![AniList update prompt over the last frame before the playlist advances](screenshots/panel-ask.jpg) |
 
-Automatic, Anime, and Original share the v1.0.10 anime resolver, including its season and sequel rules. Saved manual match corrections still apply. Choose **Inherit recognition source** to remove an override. The effective order is file, nearest matching folder, global panel setting, then `recognition_source` in the conf file. The panel shows the active choice and where it came from.
+## More information
 
-You can override the default services with `tmdb_key` or `acoustid_key`. The Windows and Linux ZIPs include `fpcalc`. Source installs can use `fpcalc` on PATH. To look up local audio manually, choose **Recognition & folders → Fingerprint this file**. See the [shared TMDB setup](docs/tmdb-metadata.md).
+- [User guide](docs/user-guide.md) for installation, settings, recognition, privacy and AniList tracking
+- [Build and package](docs/build.md) for source installs and dependency licenses
+- [Verification](docs/verification.md) for test commands and release checks
 
-Templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. Pieces with missing fields are skipped. Appearance settings inherit from global to folder to file. User choices live in `scripts/mpv-rich-presence/data.sqlite3` under the mpv config directory.
-
-See [implementation and verification](docs/verification.md) for the test commands and remaining manual release checks.
-
-## Screenshots
-
-### Anime Detection & Cover Art (AniList)
-
-| Active Playback | Paused State |
-| :---: | :---: |
-| ![Anime Playing](screenshots/anime%203.png) | ![Anime Paused](screenshots/anime%201.png) |
-
-| Pause Tooltip | Relation Chain & Multi-Season |
-| :---: | :---: |
-| ![Anime Pause Tooltip](screenshots/anime%202.png) | ![Anime Series](screenshots/anime%204.png) |
-
-| Long Title & Airing Sequences | Discord Status Indicator |
-| :---: | :---: |
-| ![Bleach TYBW](screenshots/anime%206.png) | ![Discord Sidebar Anime](screenshots/anime%205.png) |
-
-### Music & Audio Playback
-
-| Listening Activity | Discord Status Indicator |
-| :---: | :---: |
-| ![Music Playing](screenshots/music%201.png) | ![Discord Sidebar Music](screenshots/music%202.png) |
-
-### General Video Playback
-
-| Active Playback | Paused State | Discord Status Indicator |
-| :---: | :---: | :---: |
-| ![Video Playing](screenshots/non-anime%20video%202.png) | ![Video Paused](screenshots/non-anime%20video%203.png) | ![Discord Sidebar Video](screenshots/non-anime%20video%201.png) |
-
-## Installation
-
-1. Use a package built from this revision. The build instructions below include the Windows ZIP command.
-2. Copy the files into your mpv configuration directory (`%APPDATA%/mpv` on Windows, or `~/.config/mpv` on Linux):
-   - Place `rich-presence.dll` (or `rich-presence.so` on Linux) into your mpv `scripts/` folder.
-   - Copy the entire `scripts/mpv-rich-presence/` folder into your mpv `scripts/` folder.
-   - On a new installation, place `rich-presence.conf` in `script-opts/`. On an upgrade, keep your existing config.
-3. Restart mpv. On an upgrade, close mpv first and remove the old `scripts/rich-presence-conf.lua` so only the new bridge loads. The plugin copies saved settings and history from `rich-presence/data.sqlite3` on first start. Keep that old database until you have checked the migrated settings.
-
-## Configuration
-
-Use the in-player panel for per-file and per-folder choices. Edit `script-opts/rich-presence.conf` for startup settings and defaults, then restart mpv. Existing configs without `recognition_source` default to `auto`.
-
-```ini
-# Discord Application ID (from https://discord.com/developers/applications)
-application_id=1462038267183628308
-
-# Enable rich presence by default (yes/no)
-on=yes
-
-# Folder filtering mode: "disabled", "whitelist", or "blacklist"
-folder_filter_mode=disabled
-
-# Semicolon-separated list of folder paths (quotes are optional)
-# Example: D:\Anime;E:\Videos\Movies
-folder_list=
-
-# Default recognition: auto, anime, movie-tv, movie, tv, or original
-recognition_source=auto
-
-# Pause timeout in seconds before presence is hidden (set to 0 to never hide)
-pause_timeout=1800
-```
-
-### Keybindings & Commands
-
-You can bind a key in your `input.conf` to toggle rich presence on and off on demand:
-
-```ini
-D script-message-to rich_presence toggle
-```
-
-Available script messages:
-- `script-message-to rich_presence toggle`: Toggle presence on or off.
-- `script-message-to rich_presence on`: Explicitly enable presence.
-- `script-message-to rich_presence off`: Explicitly disable presence.
-- `script-message-to rich_presence application_id <id>`: Set Discord application ID.
-- `script-message-to rich_presence folder_filter_mode <disabled|whitelist|blacklist>`: Switch filter mode.
-- `script-message-to rich_presence folder_list <path1;path2>`: Update filtered directories.
-- `script-message-to rich_presence pause_timeout <seconds>`: Change pause timeout duration.
-
-## Building from Source
-
-### Prerequisites
-
-- CMake 3.21 or newer for the configure preset
-- A C++20 compiler and standard library with `std::format` support
-- vcpkg
-- [Discord Social SDK](https://discord.com/developers/social-sdk)
-
-### Build Instructions
-
-1. Clone the repository recursively:
-   ```bash
-   git clone --recursive https://github.com/Sirye8/mpv-rich-presence.git
-   cd mpv-rich-presence
-   ```
-
-2. Extract the Discord Social SDK into `thirdparty/discord_social_sdk` such that `thirdparty/discord_social_sdk/bin` and `lib` exist.
-
-3. Bootstrap vcpkg dependencies:
-   ```batch
-   .\thirdparty\vcpkg\bootstrap-vcpkg.bat
-   ```
-   *(or `./thirdparty/vcpkg/bootstrap-vcpkg.sh` on Linux)*
-
-4. Configure with CMake:
-   ```bash
-   cmake --preset default
-   # Windows x64 package builds: add -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
-   ```
-
-5. Build the Release configuration:
-   ```bash
-   cmake --build build --config Release
-   ```
-
-6. Run the regression test suite:
-   ```bash
-   ctest --test-dir build -C Release --output-on-failure
-   ```
-
-Run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip` on Windows, or choose a Linux ZIP filename on Linux. The script builds Release, runs CTest, and adds the verified Chromaprint executable and its source and license files. The Windows x64 ZIP also includes embeddable Python. The Linux x86-64 and ARM64 ZIPs use system Python 3.
-
-Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
-
-## License
-
-This project is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) and [NOTICE](NOTICE) for full terms.
-
-Based on [mpv-rich-presence](https://github.com/goodtrailer/mpv-rich-presence) by Alden Wu.
-
-### Third-Party Notices
-- **Anitomy**: Licensed under Mozilla Public License 2.0 (MPL-2.0) by Eren Okka. See [licenses/LICENSE-Anitomy](licenses/LICENSE-Anitomy).
-- **Discord Social SDK**: The embedded runtime binary is proprietary software of Discord Inc. and governed by the [Discord Developer Terms of Service](https://discord.com/developers/docs/legal).
-- **cpr**: Licensed under the MIT License. See [licenses/LICENSE-cpr](licenses/LICENSE-cpr).
-- **curl**: Governed by the curl license (MIT/ISC-like). See [licenses/LICENSE-curl](licenses/LICENSE-curl).
-- **nlohmann-json**: Licensed under the MIT License. See [licenses/LICENSE-nlohmann-json](licenses/LICENSE-nlohmann-json).
-- **zlib**: Licensed under the zlib License. See [licenses/LICENSE-zlib](licenses/LICENSE-zlib).
-- **mpv client API header**: Licensed under the ISC License by the mpv developers. See [licenses/LICENSE-mpv](licenses/LICENSE-mpv).
-- **SQLite**: Public domain. See [its notice](licenses/LICENSE-SQLite).
-- **Boost** and **CMakeRC**: See individual licenses in the [licenses/](licenses/) directory.
+Licensed under [AGPL-3.0](LICENSE). Based on [Alden Wu's mpv-rich-presence](https://github.com/goodtrailer/mpv-rich-presence).
