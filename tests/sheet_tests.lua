@@ -179,16 +179,20 @@ local function verify()
     clock=clock+.2
     animation().fn()
 
-    local model,job,opened
+    local model,job,opened,applied
     local menu=dofile(modules.."/menu.lua")(function(value)
         model=value
         local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
         panel.push=function(page) panel.page=page end
         panel.back=function() panel.page="AniList" end
         return panel
-    end,function(req) job=req.job or job end,{tmdb_key="",acoustid_key="",
+    end,function(req)
+        job=req.job or job
+        if req.action=="apply" then applied=req end
+    end,{tmdb_key="",acoustid_key="",
         open_url=function(url) opened=url end},help)
     menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",watch_episode=true,
+        tracking={mode="manual"},
         account={id=5,name="Viewer",generation="test"},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
         card={details="Fixture details",state="Fixture state",start=1,["end"]=2,
             buttons={{label="View on AniList",url="https://anilist.co/anime/42"}}},
@@ -243,6 +247,74 @@ local function verify()
     menu.update(snapshot)
     find("AniList","Finish rewatch").run()
     assert(confirmation():find("Rewatching → Completed",1,true) and confirmation():find("Rewatches 2 → 3",1,true))
+
+    menu.page="AniList"
+    snapshot.tracking={mode="off"}
+    snapshot.episode_watch={elapsed=0}
+    menu.update(snapshot)
+    local watch=find("AniList","Episode watch time")
+    assert(watch.label=="Episode watch time   Tracking is off","An empty record hid the off state")
+    assert(watch.tip:find("Manual, Ask, or Auto",1,true))
+    assert(not find("AniList","Watch started"))
+    find("AniList","Tracking").run()
+    assert(applied.category=="tracking" and applied.values.mode=="manual")
+    snapshot.episode_watch={elapsed=19.2,first_watched=1000,last_watched=20000}
+    menu.update(snapshot)
+    assert(find("AniList","Episode watch time").label=="Episode watch time   Tracking is off · 00:19 saved")
+    assert(find("AniList","Watch started") and find("AniList","Last watched"))
+    snapshot.episode_watch={}
+    snapshot.tracking.mode="manual"
+    menu.update(snapshot)
+    assert(find("AniList","Episode watch time").label=="Episode watch time   No time recorded yet")
+    local rewatch=find("AniList","Rewatch tracking").tip.options
+    assert(rewatch[1].detail:find("episode 1",1,true) and rewatch[2].detail:find("already marked Rewatching",1,true))
+    snapshot.tracking.mode="ask"
+    menu.update(snapshot)
+    assert(find("AniList","Ask timing").label=="Ask timing   At threshold")
+    find("AniList","Ask timing").run()
+    assert(applied.values.ask_timing=="end")
+    assert(find("AniList","Ask prompt position") and find("AniList","Ask prompt timeout"))
+
+    local popup_model,popup_request
+    local ask=dofile(modules.."/ask.lua")(function(value)
+        popup_model=value
+        return {show=function() end,draw=function() end,close=value.closed}
+    end,function(req) popup_request=req end,{menu_animations=false})
+    local function popup_row(id)
+        for _,item in ipairs(popup_model.rows()) do if item.id==id then return item end end
+    end
+    proposal.status="CURRENT"
+    proposal.repeat_count=nil
+    proposal.base={id=9,status="PAUSED"}
+    proposal.account="test"
+    ask.show({id="first",session=8,position="bottom-left",seconds=10,proposal=proposal})
+    assert(popup_model.compact and popup_model.position()=="bottom-left")
+    assert(popup_model.footer()=="Later · 10 s")
+    assert(popup_row("status").label=="Status   Paused → Watching")
+    popup_row("keep").run()
+    assert(popup_request.ask_prompt=="first" and popup_request.job.op=="accept" and popup_request.job.keep_status)
+    assert(not popup_row("update") and popup_model.footer():find("Saving",1,true))
+    ask.notice("AniList is offline")
+    assert(popup_row("notice").label=="AniList is offline" and popup_row("update"))
+    popup_model.closed()
+    assert(popup_request.action=="ask_dismiss" and popup_request.id=="first")
+
+    width,height=1280,720
+    local closed_popup=false
+    local compact=sheet({compact=true,sections={},animate=false,position=function() return "top-right" end,
+        rows=function() return {{id="update",label="Update AniList",run=function() end}} end,
+        footer=function() return "Later · 30 s" end,refresh=function() end,
+        closed=function() closed_popup=true end})
+    compact.show("AniList update")
+    assert(bounds[1]>width*.65 and bounds[3]<width and bounds[2]<height*.15)
+    assert(bounds[5]=="rich-presence-ask" and not bindings.DOWN and not bindings.ENTER)
+    local close
+    for _,item in ipairs(compact.hits) do if item.key=="close" then close=item end end
+    assert(close and paint:find("Later · 30 s",1,true))
+    x,y=(close.x+4)*height/paint_height,(close.y+4)*height/paint_height
+    mouse_bindings[3][3]()
+    mouse_bindings[3][4]()
+    assert(closed_popup and not compact.open and not mouse_enabled)
 end
 local ok,err=pcall(verify)
 mp=original

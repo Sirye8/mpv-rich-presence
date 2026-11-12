@@ -1016,9 +1016,85 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
         if (category == "privacy" && !(key == "mode" && (val == "hidden" || val == "generic" || val == "full"))) return false;
         if (category == "tracking" && !((key == "mode" && (val == "off" || val == "manual" || val == "ask" || val == "auto"))
             || (key == "threshold" && val.is_number_integer() && val >= 1 && val <= 1440)
+            || (key == "ask_timing" && (val == "threshold" || val == "end" || val == "leave"))
+            || (key == "ask_position" && (val == "top-left" || val == "top-center" || val == "top-right"
+                || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))
+            || (key == "ask_timeout" && val.is_number_integer() && val >= 5 && val <= 300)
             || ((key == "without_sharing" || key == "resume" || key == "rewatch" || key == "keep_pending") && val.is_boolean()))) return false;
     }
     return true;
+}
+
+static nlohmann::json current_ask_proposal(rich_presence_state& state)
+{
+    if (!state.store || state.tracking.value("mode", std::string{}) != "ask" || !lookup_allowed(state))
+        return {};
+    const auto player = state.store->get("player", state.instance_id);
+    if (player.value("session", UINT64_MAX) != state.file_session || !player.value("watch_episode", false))
+        return {};
+    const auto account = state.store->get("account", "current");
+    const int viewer = account.value("id", 0);
+    const int media = player.value("media", 0);
+    const auto episode = player.value("episode", std::string{});
+    if (viewer <= 0 || media <= 0 || episode.empty() || account.value("expired", false))
+        return {};
+    {
+        std::lock_guard lock(state.anime_mutex);
+        if (!state.is_anime || !state.watch_episode || state.anime_anilist_id != media || state.anime_episode != episode)
+            return {};
+    }
+    const auto scope = std::format("{}/{}", viewer, media);
+    const auto cycle = state.store->get("cycle", scope).value("number", 0);
+    const auto proposal = state.store->get("pending", std::format("{}/{}/{}", scope, episode, cycle));
+    if (proposal.empty() || proposal.value("offline", false) || !proposal.contains("status")
+        || proposal.value("account", std::string{}) != account.value("generation", std::string{}))
+        return {};
+    return proposal;
+}
+
+static std::string ask_prompt_id(const rich_presence_state& state, const nlohmann::json& proposal)
+{
+    if (proposal.empty()) return {};
+    return std::format("{}/{}/{}", state.file_session, proposal.at("account").get<std::string>(),
+        proposal.at("key").get<std::string>());
+}
+
+static void finish_ask_prompt(rich_presence_state& state)
+{
+    if (!state.ask_prompt.empty())
+    {
+        const char* args[] = {"script-message-to", "mpv_rich_presence", "ask-review-close", state.ask_prompt.c_str(), nullptr};
+        mpv_command(state.mpv, args);
+        state.ask_prompt.clear();
+    }
+    if (state.ask_hook)
+    {
+        mpv_hook_continue(state.mpv, state.ask_hook);
+        state.ask_hook = 0;
+    }
+}
+
+static bool show_ask_prompt(rich_presence_state& state, const nlohmann::json& proposal)
+{
+    const auto id = ask_prompt_id(state, proposal);
+    if (id.empty() || id == state.seen_ask_prompt)
+        return !id.empty() && id == state.ask_prompt;
+    const int seconds = state.tracking.value("ask_timeout", 30);
+    const auto payload = nlohmann::json{{"id",id},{"session",state.file_session},{"proposal",proposal},
+        {"position",state.tracking.value("ask_position",std::string("top-right"))},{"seconds",seconds}}
+        .dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    const char* args[] = {"script-message-to", "mpv_rich_presence", "ask-review", payload.c_str(), nullptr};
+    state.seen_ask_prompt = id;
+    if (mpv_command(state.mpv, args) < 0) return false;
+    state.ask_prompt = id;
+    state.ask_deadline = chrono::steady_clock::now() + chrono::seconds(seconds);
+    return true;
+}
+
+static bool at_end_of_file(mpv_handle* mpv)
+{
+    int eof = 0;
+    return mpv_get_property(mpv, "eof-reached", MPV_FORMAT_FLAG, &eof) >= 0 && eof;
 }
 
 static void handle_client_message(rich_presence_state& state, mpv_event_client_message* msg)
@@ -1060,10 +1136,21 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 return;
             }
             if (req.value("session", state.file_session) != state.file_session) return;
+            if (action == "ask_dismiss")
+            {
+                if (req.value("id", std::string{}) == state.ask_prompt) finish_ask_prompt(state);
+                return;
+            }
             if (action == "service" && state.store)
             {
                 auto job = req.at("job");
                 auto op = job.at("op").get<std::string>();
+                if (req.contains("ask_prompt"))
+                {
+                    if ((op != "accept" && op != "skip") || state.ask_prompt.empty() ||
+                        req.at("ask_prompt") != state.ask_prompt) return;
+                    state.ask_deadline = chrono::steady_clock::now() + chrono::seconds(25);
+                }
                 if ((op == "search" || op == "select" || op == "write" || op == "accept" || op == "read")
                     && !lookup_allowed(state)) return;
                 job["window"] = state.instance_id;
@@ -1434,6 +1521,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 {
     auto state = rich_presence_state {};
     state.mpv = ctx;
+    struct ask_cleanup
+    {
+        rich_presence_state& state;
+        ~ask_cleanup() { finish_ask_prompt(state); }
+    } cleanup_review{state};
     state.instance_id = generate_instance_id();
 
     // Start background anime lookup worker
@@ -1535,6 +1627,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     mpv_observe_property(state.mpv, 0, "speed", MPV_FORMAT_DOUBLE);
     mpv_observe_property(state.mpv, 0, "paused-for-cache", MPV_FORMAT_FLAG);
     mpv_observe_property(state.mpv, 0, "playtime-remaining", MPV_FORMAT_DOUBLE);
+    mpv_observe_property(state.mpv, 0, "eof-reached", MPV_FORMAT_FLAG);
+    mpv_hook_add(state.mpv, 0, "on_unload", 30);
 
     auto hide_rich_presence = [&]() {
         if (state.is_rpc_visible && is_ready)
@@ -1545,6 +1639,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     };
 
     auto next_sample = chrono::steady_clock::time_point{};
+    auto next_ask_check = chrono::steady_clock::time_point{};
     bool service_started = false;
     bool observed = false;
     std::string observed_source, observed_title, observed_track_title, observed_artist, observed_album;
@@ -1597,7 +1692,24 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     state.force_update = true;
                 }
             }
-            if (event->event_id == MPV_EVENT_CLIENT_MESSAGE)
+            if (event->event_id == MPV_EVENT_HOOK)
+            {
+                const auto* hook = static_cast<mpv_event_hook*>(event->data);
+                bool held = false;
+                try
+                {
+                    const auto timing = state.tracking.value("ask_timing", std::string("threshold"));
+                    if (timing == "leave" || (timing == "end" && at_end_of_file(state.mpv)))
+                        held = show_ask_prompt(state, current_ask_proposal(state));
+                }
+                catch (const std::exception& e)
+                {
+                    mpv_print(state.mpv, std::format("Could not open AniList review: {}", e.what()));
+                }
+                if (held) state.ask_hook = hook->id;
+                else mpv_hook_continue(state.mpv, hook->id);
+            }
+            else if (event->event_id == MPV_EVENT_CLIENT_MESSAGE)
             {
                 handle_client_message(state, (mpv_event_client_message*)event->data);
             }
@@ -1607,6 +1719,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             }
             else if (event->event_id == MPV_EVENT_END_FILE)
             {
+                finish_ask_prompt(state);
                 ++state.file_load_id;
                 ++state.file_session;
                 state.media_has_audio = false;
@@ -1821,7 +1934,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             media.track_title = state.track_title;
         const int tracked_media = verify_movie ? 0 : media.anilist_id;
         const auto tracked_episode = verify_movie ? "" : media.episode;
-        const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
+        const bool advancing = watch && !state.ask_hook && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
             || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
                 observed_artist != media.artist || observed_album != media.album))
@@ -1911,6 +2024,17 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         {
             media.provider = state.provider;
         }
+        if (now_steady >= next_ask_check && (watch_episode || !state.ask_prompt.empty()))
+        {
+            next_ask_check = now_steady + chrono::milliseconds(250);
+            const auto proposal = current_ask_proposal(state);
+            if (!state.ask_prompt.empty() && (ask_prompt_id(state, proposal) != state.ask_prompt ||
+                now_steady >= state.ask_deadline))
+                finish_ask_prompt(state);
+            const auto timing = state.tracking.value("ask_timing", std::string("threshold"));
+            if (!proposal.empty() && (timing == "threshold" || at_end_of_file(state.mpv)))
+                show_ask_prompt(state, proposal);
+        }
         auto options = state.appearance;
         if (state.privacy.value("mode", std::string("full")) == "generic") options = {{"preset", "private"}};
         if (!state.snapshot_request.empty())
@@ -1928,7 +2052,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (state.store && state.panel_page=="AniList" && allowed && viewer>0 && watch_episode)
             {
                 const auto record = state.store->episode_watch(viewer,media.anilist_id,media.episode);
-                if (state.tracking.value("resume",true) || record.value("session",uint64_t{})==state.file_session)
+                if (state.tracking.value("resume",true) ||
+                    (record.value("owner",std::string{})==state.instance_id &&
+                    record.value("session",uint64_t{})==state.file_session))
                 {
                     episode_watch = {{"elapsed",record.value("elapsed",0.0)},
                         {"first_watched",record.value("first_watched",0.0)}, {"last_watched",record.value("last_watched",0.0)}};
@@ -2066,6 +2192,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     }
 
     // Shut down gracefully
+    finish_ask_prompt(state);
     mpv_print(state.mpv, "Shutting down...");
 
     if (state.store)

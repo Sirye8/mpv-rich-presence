@@ -38,7 +38,9 @@ Windows uses Credential Manager. Linux can use the Python keyring package with S
 
 ### Watch time and list edits
 
-Tracking starts off. Manual mode lets you edit an entry without waiting. Ask and Automatic use a fixed threshold, initially 15 minutes of real playback. Watching at 2× earns the same time per minute as watching at 1×. Pauses, seeks, buffering and long observation gaps earn no extra time. Two windows share one watch record for an account and episode.
+Tracking starts off. Manual mode records watch time and lets you apply progress yourself. Ask and Automatic use a fixed threshold, initially 15 minutes of real playback. Watching at 2× earns the same time per minute as watching at 1×. Pauses, seeks, buffering and long observation gaps earn no extra time. Two windows share one watch record for an account and episode.
+
+In **Ask** mode, **Ask timing** controls when a ready update appears. **At threshold** shows it during playback. **End of episode** waits for natural playback completion. **Before leaving** also catches normal close and next-file commands. The last two choices can hold mpv's file transition until you review the update. **Later**, **×**, or the timeout keeps the update in Pending updates and lets mpv continue. **Skip this episode** dismisses it for the current viewing cycle. Set **Ask prompt position** and **Ask prompt timeout** to move the popup or change how long it waits. The default is upper right for 30 seconds.
 
 The AniList panel shows the elapsed watch time and the local clock times of the first and latest credited playback in the current viewing cycle. Existing records retain their elapsed time. They show **Not recorded** for clock times the plugin did not save.
 

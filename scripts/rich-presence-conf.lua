@@ -100,7 +100,7 @@ mp.register_script_message("start-service", function(instance)
 end)
 mp.register_event("shutdown",function() if worker then mp.abort_async_command(worker) end end)
 
-local menu
+local menu, ask
 options.open_url = function(url)
     local host = type(url)=="string" and url:match("^https?://([^/?#]+)")
     if not host or host:find("@",1,true) or url:find('[%s%c\\"]') then return end
@@ -115,12 +115,20 @@ local ok
 ok, menu = pcall(function()
     local sheet = dofile(utils.join_path(modules,"sheet.lua"))
     local help = dofile(utils.join_path(modules,"menu_help.lua"))
+    ask = dofile(utils.join_path(modules,"ask.lua"))(sheet,panel,options)
     return dofile(utils.join_path(modules,"menu.lua"))(sheet,panel,options,help)
 end)
 if ok then
     mp.add_key_binding(options.menu_key,"rich-presence-menu",function() menu.show() end)
     mp.register_script_message("menu",function(page) menu.show(page) end)
-    mp.register_script_message("notice",menu.toast)
+    mp.register_script_message("notice",function(message,page)
+        if page=="AniList update" then ask.notice(message) else menu.toast(message,page) end
+    end)
+    mp.register_script_message("ask-review",function(raw)
+        local data=utils.parse_json(raw)
+        if data then ask.show(data) end
+    end)
+    mp.register_script_message("ask-review-close",ask.close)
     mp.register_script_message("snapshot",function(raw)
         local data=utils.parse_json(raw)
         if data then menu.update(data) end

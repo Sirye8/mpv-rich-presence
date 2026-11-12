@@ -1079,6 +1079,20 @@ class TrackingTests(unittest.TestCase):
             self.propose()
         self.assertEqual(self.mutations, [])
 
+    def test_resume_off_requires_time_from_the_current_window_and_session(self):
+        self.player["tracking"]["resume"] = False
+        self.publish()
+        key = self.worker.cycle(self.account, self.player)
+        for owner, session in (("old-window", 1), ("window", 0)):
+            self.worker.put(
+                "watch", key, dict(elapsed=900, owner=owner, session=session)
+            )
+            self.worker.propose(self.account, self.player)
+            self.assertEqual(self.mutations, [])
+        self.worker.put("watch", key, dict(elapsed=900, owner="window", session=1))
+        self.worker.propose(self.account, self.player)
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+
     def test_auto_rejects_an_episode_offset_change_within_the_same_file(self):
         def change_episode():
             self.player["episode"] = "5"

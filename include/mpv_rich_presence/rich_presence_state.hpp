@@ -63,6 +63,9 @@ namespace mpvrp
         nlohmann::json correction = nlohmann::json::object(), tracking = nlohmann::json::object();
         nlohmann::json preview = nlohmann::json::object();
         std::string snapshot_request, panel_page, last_notice;
+        std::string ask_prompt, seen_ask_prompt;
+        uint64_t ask_hook = 0;
+        std::chrono::steady_clock::time_point ask_deadline{};
         bool replace_draft = false;
         std::string anime_english, anime_romaji, anime_native;
         bool config_received = false;

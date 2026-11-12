@@ -5,9 +5,6 @@ local ok_input, input = pcall(require, "mp.input")
 local theme = {black="0B0908", rail="080605", row="201C19", hover="40352B", focus="594636",
     text="F7F3EF", muted="C2B8AD", accent="FFD9AF", ink="1B1008", rim="ABA096",
     switch="5F5348", hint="18130F"}
-local row_step, row_height = 32, 29
-local mouse_section = "rich-presence-panel"
-
 local utf8_char = "[%z\1-\127\194-\244][\128-\191]*"
 local function escape(text)
     return (text:gsub("\\", "\\\239\187\191"):gsub("{", "\\{"):gsub("}", "\\}"))
@@ -59,6 +56,8 @@ local function label(ass, x,y, text, size, color, opacity, align, bold, clip)
 end
 
 return function(model)
+    local row_step, row_height = model.compact and 28 or 32, model.compact and 25 or 29
+    local mouse_section = model.compact and "rich-presence-ask" or "rich-presence-panel"
     local ui = {open=false, page="Menu", memory={}, stack={}, hits={}}
     local overlay, layout, refresh_timer, toast_timer, hover_timer, animation_timer
     local last_frame, last_terminal
@@ -84,8 +83,8 @@ return function(model)
         end
         local max_bottom = math.min(h*.86,h-12-h*(margins.b or 0))
         local span = max_right-min_left
-        local wide = span>=716 and h>=560 and max_bottom-min_top>=88+row_step*#model.sections and ui.page~="Menu"
-        local width = math.min(span,wide and 670 or 438)
+        local wide = not model.compact and span>=716 and h>=560 and max_bottom-min_top>=88+row_step*#model.sections and ui.page~="Menu"
+        local width = math.min(span,model.compact and 360 or wide and 670 or 438)
         local position = model.position and model.position() or "top-left"
         local left = min_left
         if position:match("%-right$") then left=max_right-width
@@ -109,6 +108,7 @@ return function(model)
         local frame = w..":"..h..ass.text
         if frame==last_frame then return end
         overlay = overlay or mp.create_osd_overlay("ass-events")
+        if model.compact then overlay.z=1 end
         overlay.res_x,overlay.res_y,overlay.data = w,h,ass.text
         overlay:update()
         last_frame=frame
@@ -362,7 +362,7 @@ return function(model)
     end
 
     local function bind(key, fn, opts)
-        local id = "rich_presence_sheet_" .. key
+        local id = (model.compact and "rich_presence_ask_" or "rich_presence_sheet_") .. key
         mp.add_forced_key_binding(key,id,fn,opts)
         keys[#keys+1] = id
     end
@@ -429,6 +429,7 @@ return function(model)
             end
             local lines={ui.page}
             for i,row in ipairs(rows) do lines[#lines+1]=(i==mem.focus and "> " or "  ")..row.label end
+            if model.compact then lines[#lines+1]=model.footer().." · Esc" end
             local frame=table.concat(lines,"\n")
             if frame~=last_terminal then mp.set_property("term-status-msg",frame); last_terminal=frame end
             ui.terminal=true
@@ -455,7 +456,7 @@ return function(model)
         local previous = layout
         layout = {w=math.floor(w),h=math.floor(h),left=left,top=top,right=right,bottom=bottom,pane=pane,wide=wide,
             min_top=min_top,max_bottom=max_bottom,
-            title=fit(ui.page=="Menu" and "Rich Presence" or ui.page,20,right-pane-36),
+            title=fit(ui.page=="Menu" and "Rich Presence" or ui.page,20,right-pane-(model.compact and 57 or 36)),
             page=ui.page,direction=previous and previous.direction or 1,
             bounds=bounds_key,focus=mem.id,nav={},rows={},footer={}}
         ui.hits={}
@@ -503,7 +504,12 @@ return function(model)
             end
             item.display=display(item.caption,15,item.label_right-label_left-6)
         end
-        if ui.page=="Appearance" then
+        if model.compact then
+            hit(layout.footer,right-38,top+6,right-8,top+34,"close","close",ui.close,"×",
+                "Dismiss this prompt and keep the update for later.")
+            hit(layout.footer,pane+8,bottom-35,right-8,bottom-7,"later","later",ui.close,model.footer(),
+                "Keep this update for later and let mpv continue.")
+        elseif ui.page=="Appearance" then
             local mid=(pane+right)/2
             hit(layout.footer,pane+8,bottom-35,mid-3,bottom-7,"cancel","cancel",ui.back,"Cancel","Discard the unsaved preview.")
             for _,row in ipairs(rows) do
@@ -623,11 +629,13 @@ return function(model)
     },mouse_section,"force")
 
     local function controls()
-        bind("HOME",function() focus(-100000) end); bind("END",function() focus(100000) end)
-        bind("UP",function() focus(-1) end,{repeatable=true})
-        bind("DOWN",function() focus(1) end,{repeatable=true})
-        bind("LEFT",function() activate(-1) end); bind("RIGHT",function() activate(1) end)
-        bind("ENTER",function() activate() end); bind("ESC",ui.back)
+        if not model.compact or not dimensions() then
+            bind("HOME",function() focus(-100000) end); bind("END",function() focus(100000) end)
+            bind("UP",function() focus(-1) end,{repeatable=true})
+            bind("DOWN",function() focus(1) end,{repeatable=true})
+            bind("LEFT",function() activate(-1) end); bind("RIGHT",function() activate(1) end)
+            bind("ENTER",function() activate() end); bind("ESC",model.compact and ui.close or ui.back)
+        end
         mp.enable_key_bindings(mouse_section,"allow-hide-cursor")
     end
 

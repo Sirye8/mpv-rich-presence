@@ -29,6 +29,8 @@ return function(make_sheet, send, options, help)
     end
     local list_status_labels={CURRENT="Watching",PLANNING="Planning",PAUSED="Paused",DROPPED="Dropped",
         COMPLETED="Completed",REPEATING="Rewatching"}
+    local tracking_mode_labels={off="Off",manual="Manual",ask="Ask",auto="Auto"}
+    local ask_timing_labels={threshold="At threshold",["end"]="End of episode",leave="Before leaving"}
     local function copy(t) local r={}; for k,v in pairs(t or {}) do r[k]=v end; return r end
     local function request(action,fields)
         local r=fields or {}; r.action=action; r.session=snap.session; send(r)
@@ -367,14 +369,19 @@ return function(make_sheet, send, options, help)
             row("Anime   "..((snap.match or 0)>0 and (snap.title or "Unknown title") or "No match"))
             row("Playing episode   "..(snap.episode and snap.episode~="" and snap.episode or "Unknown"))
             local watch=snap.episode_watch or {}
-            if not account.id then row("Episode watch time   Connect AniList")
-            elseif not snap.allowed then row("Episode watch time   Lookup blocked")
-            elseif (snap.match or 0)==0 then row("Episode watch time   No anime match")
-            elseif not snap.episode or snap.episode=="" then row("Episode watch time   No episode number")
-            elseif not snap.watch_episode then row("Episode watch time   Episode needs review")
-            elseif (tracking.mode or "off")=="off" and not watch.elapsed then row("Episode watch time   Tracking is off")
-            else
-                row("Episode watch time   "..duration(watch.elapsed or 0))
+            local elapsed=watch.elapsed or 0
+            local mode=tracking.mode or "off"
+            local watch_status
+            if not account.id then watch_status="Connect AniList"
+            elseif mode=="off" then watch_status="Tracking is off"..(elapsed>0 and (" · "..duration(elapsed).." saved") or "")
+            elseif not snap.allowed then watch_status="Tracking blocked"
+            elseif (snap.match or 0)==0 then watch_status="No anime match"
+            elseif not snap.episode or snap.episode=="" then watch_status="No episode number"
+            elseif not snap.watch_episode then watch_status="Episode needs review"
+            elseif elapsed<=0 then watch_status="No time recorded yet"
+            else watch_status=duration(elapsed) end
+            row("Episode watch time   "..watch_status)
+            if elapsed>0 then
                 row("Watch started   "..clock_time(watch.first_watched))
                 row("Last watched   "..clock_time(watch.last_watched))
             end
@@ -402,7 +409,24 @@ return function(make_sheet, send, options, help)
                 if tonumber(snap.episode) then row("Mark current episode watched",function() submit(tonumber(snap.episode)) end) end
             end
             scope_row()
-            choice("Tracking",{"off","manual","ask","auto"},tracking.mode or "off",function(v) apply("tracking",{mode=v}) end)
+            choice("Tracking",{"off","manual","ask","auto"},mode,function(v) apply("tracking",{mode=v}) end,tracking_mode_labels[mode])
+            if mode=="ask" then
+                local timing=tracking.ask_timing or "threshold"
+                choice("Ask timing",{"threshold","end","leave"},timing,function(v)
+                    apply("tracking",{ask_timing=v})
+                end,ask_timing_labels[timing])
+                choice("Ask prompt position",{"top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"},
+                    tracking.ask_position or "top-right",function(v) apply("tracking",{ask_position=v}) end)
+                local seconds=tracking.ask_timeout or 30
+                row("Ask prompt timeout   "..seconds.." seconds",function()
+                    ui.text("Dismiss prompt after seconds",tostring(seconds),function(s)
+                        local value=tonumber(s)
+                        if value and value==math.floor(value) and value>=5 and value<=300 then
+                            apply("tracking",{ask_timeout=value})
+                        else notice("Enter a whole number from 5 to 300 seconds.") end
+                    end)
+                end)
+            end
             switch("Resume unfinished time",tracking.resume~=false,function()
                 apply("tracking",{resume=tracking.resume==false})
             end)
@@ -411,7 +435,12 @@ return function(make_sheet, send, options, help)
             end)
             row("Pending updates   "..#(snap.pending or {}),function() ui.push("Pending updates") end)
             switch("Rewatch tracking",tracking.rewatch==true,function() apply("tracking",{rewatch=not tracking.rewatch}) end)
-            if tracking.rewatch then row("Start new viewing cycle",function() confirm("Rearm tracking for "..(snap.title or ""),function() service("rearm") end) end) end
+            if tracking.rewatch then
+                row("Start new viewing cycle",function()
+                    confirm("Start a new local viewing cycle for "..(snap.title or "this anime")..
+                        "? Watch counters start fresh and pending updates for this entry are cleared.",function() service("rearm") end)
+                end)
+            end
             local threshold=tracking.threshold or 15
             row("Threshold   "..threshold.." minutes",function()
                 ui.text("Minimum elapsed minutes",tostring(threshold),function(s)

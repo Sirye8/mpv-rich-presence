@@ -245,6 +245,17 @@ class Worker:
             and abs(time.time() * 1000 - player.get("wall", 0)) <= 3000
         )
 
+    def watch_record_applies(self, player, watch):
+        return player["tracking"].get("resume", True) or (
+            watch.get("owner") == self.window
+            and watch.get("session") == player["session"]
+        )
+
+    def reached_threshold(self, player, watch):
+        return self.watch_record_applies(player, watch) and (
+            watch.get("elapsed", 0) >= 60 * player["tracking"].get("threshold", 15)
+        )
+
     def write(self, job):
         with serialized(self.directory):
             account, p = self.context(job, True)
@@ -289,8 +300,7 @@ class Worker:
                         raise AccountError("This proposal has expired.")
                     if automatic and (
                         not self.active_tracking(player, ("auto",))
-                        or self.get("watch", key).get("elapsed", 0)
-                        < 60 * player["tracking"].get("threshold", 15)
+                        or not self.reached_threshold(player, self.get("watch", key))
                     ):
                         raise AccountError("Automatic tracking is no longer eligible.")
 
@@ -1170,10 +1180,7 @@ class Worker:
                 end = p["time"]
             start = max(before["time"], end)
             credit = min(dt, max(0, p["time"] - start))
-            if not p["tracking"].get("resume", True) and (
-                watch.get("owner") != self.window
-                or watch.get("session") != p["session"]
-            ):
+            if not self.watch_record_applies(p, watch):
                 watch["elapsed"] = 0
                 watch.pop("first_watched", None)
                 watch.pop("last_watched", None)
@@ -1219,7 +1226,7 @@ class Worker:
             self.tracking_probe[0] != probe or self.tracking_probe[1] <= now
         )
         watch = self.get("watch", key)
-        enough_time = watch.get("elapsed", 0) >= 60 * p["tracking"].get("threshold", 15)
+        enough_time = self.reached_threshold(p, watch)
         done = self.get("history", key) or self.get("skipped", key)
         job = dict(account=a["generation"], session=p["session"], media=p["media"])
         epoch = self.get("generation", "data")
@@ -1282,9 +1289,9 @@ class Worker:
             self.tracking_probe = (probe, float("inf"))
             if self.cycle(a, current) != key or not ready:
                 return
-            if not self.active_tracking(current, ("ask", "auto")) or self.get(
-                "watch", key
-            ).get("elapsed", 0) < 60 * current["tracking"].get("threshold", 15):
+            if not self.active_tracking(
+                current, ("ask", "auto")
+            ) or not self.reached_threshold(current, self.get("watch", key)):
                 return
             mode = current["tracking"]["mode"]
             existing = self.get("pending", key)
@@ -1374,7 +1381,10 @@ class Worker:
                 if status == "CURRENT"
                 else "Episode ready to review in the AniList panel."
             )
-            self.reply(proposal=prop, message=message)
+            if mode == "ask":
+                self.reply(proposal=prop)
+            else:
+                self.reply(proposal=prop, message=message)
 
     def credit_loop(self, stop):
         # A separate SQLite connection keeps the monotonic sampler independent

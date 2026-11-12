@@ -89,13 +89,11 @@ local help = {
     ["Apply progress"]="Review the progress and status change before sending it to AniList.",
     ["Reset draft"]="Restore the saved episode count in the draft.",
     ["Mark current episode watched"]="Review setting your progress to the episode playing now.",
-    ["Tracking"]="Choose when to record watch time and how list updates are applied.",
-    ["Resume unfinished time"]="Keep the watch counter when you come back to an unfinished episode.",
-    ["Keep offline proposals"]="Keep pending proposals locally while the connection is unavailable.",
-    ["Pending updates"]="Review episodes that reached the watch threshold. Before applying, open the matching episode so the plugin can verify the episode and refresh AniList progress. Skipping suppresses automatic updates in this viewing cycle.",
-    ["Rewatch tracking"]="Offer to start a new AniList rewatch after you reach the threshold on episode 1 of a completed anime.",
-    ["Start new viewing cycle"]="Start fresh local watch counters for this anime. This does not edit your AniList entry.",
-    ["Threshold"]="Edit the minimum watch time per episode for Ask and Auto. Enter a whole number from 1 to 1440 minutes.",
+    ["Tracking"]="Choose whether to count watch time and how to send progress to AniList.",
+    ["Pending updates"]="Open saved progress proposals for episodes that reached the threshold. Play the matching episode to review and apply a proposal. Offline proposals need a fresh AniList read first. Skip suppresses the proposal for that episode in this viewing cycle.",
+    ["Start new viewing cycle"]="Start fresh local watch counters for the matched AniList entry and clear its pending updates. Earlier viewing cycles remain in Saved data.",
+    ["Threshold"]="Set how many real minutes to watch each episode before Ask or Auto can act. Enter a whole number from 1 to 1440. The default is 15. At 2× speed, one real minute still counts as one minute.",
+    ["Ask prompt timeout"]="Choose how long the Ask popup waits for a choice. Enter 5 to 300 seconds. At timeout mpv continues and the update stays in Pending updates.",
     ["Later"]="Keep the proposal pending and return to the previous page.",
     ["Skip this episode"]="Dismiss the proposal and suppress automatic credit for the episode.",
     ["Update and switch to Watching"]="Review the episode progress and change the entry to Watching.",
@@ -139,16 +137,34 @@ local choices = {
         hidden="Hide this activity on Discord."},
     ["Status on Apply"]={unchanged="Keep the saved status.",CURRENT="Mark as watching.",COMPLETED="Mark as completed.",
         REPEATING="Mark as rewatching.",PAUSED="Mark as paused.",DROPPED="Mark as dropped.",PLANNING="Mark as planned."},
-    ["Tracking"]={off="Stop recording watch time.",manual="Record time. Apply list changes yourself.",
-        ask="Review updates at the threshold.",auto="Apply eligible next episodes at the threshold."},
+    ["Tracking"]={off="Stop counting watch time. Saved time stays available.",
+        manual="Count real playback time. Use the AniList panel to apply list changes yourself.",
+        ask="Count time and open a progress review according to Ask timing once the threshold is reached.",
+        auto="Count time and advance the next consecutive episode at the threshold. Gaps, new entries, and status changes require review."},
+    ["Ask timing"]={
+        threshold="Show the popup as soon as the watch threshold is reached and the proposal is ready. Playback continues.",
+        ["end"]="Show the ready proposal when the episode reaches its end. Hold automatic playlist advance while you decide.",
+        leave="Show the ready proposal when mpv is about to close the file, including Q, window close, Next, and automatic playlist advance."},
+    ["Ask prompt position"]={
+        ["top-right"]="Upper right, the default.",["top-center"]="Centered at the top.",["top-left"]="Upper left.",
+        ["bottom-right"]="Lower right above playback controls.",["bottom-center"]="Centered above playback controls.",
+        ["bottom-left"]="Lower left above playback controls."},
     ["Panel position"]={config="Use the position in rich-presence.conf.",
         ["top-left"]="Upper left, the default.",["top-center"]="Centered at the top.",["top-right"]="Upper right.",
         ["bottom-left"]="Lower left above playback controls.",["bottom-center"]="Centered above playback controls.",
         ["bottom-right"]="Lower right above playback controls."},
-    ["Track while hidden"]={On="Allow tracking without Discord sharing.",Off="Require normal sharing permission."},
-    ["Resume unfinished time"]={On="Resume the saved counter.",Off="Start over when opening the episode."},
-    ["Keep offline proposals"]={On="Keep pending proposals locally.",Off="Wait for AniList before creating a proposal."},
-    ["Rewatch tracking"]={On="Allow starting a new viewing cycle.",Off="Use the existing viewing cycle."},
+    ["Track while hidden"]={
+        On="Keep counting eligible playback when Discord sharing is hidden. Private sessions and excluded folders still block tracking.",
+        Off="Count watch time only while sharing is permitted for the file."},
+    ["Resume unfinished time"]={
+        On="Carry over saved time for the same AniList account, episode, and viewing cycle when you reopen the file. For example, 6 minutes now and 9 later reach a 15-minute threshold.",
+        Off="Start a fresh counter when you reopen the episode or another mpv window takes over. Pausing or seeking in the same session keeps the time already counted."},
+    ["Keep offline proposals"]={
+        On="If Ask or Auto reaches the threshold while AniList is unavailable, save a local pending item. It needs a fresh list check before it can be applied.",
+        Off="Keep counting watch time while offline. Ask or Auto waits for a successful AniList read before creating the proposal."},
+    ["Rewatch tracking"]={
+        On="In Ask or Auto, reaching the threshold on episode 1 of a Completed anime offers to start a new rewatch. Approving sets Rewatching and records episode 1 in a separate cycle. Recording the known final episode adds one to the repeat count.",
+        Off="Skip the offer to start a new rewatch from Completed. Entries already marked Rewatching follow the selected Tracking mode."},
     ["Release group"]={On="Show the release group on the episode line.",Off="Hide the release group."},
     Episode={On="Show the anime episode number.",Off="Hide the episode number."},
     Artwork={On="Show available cover art.",Off="Hide the large artwork."},
@@ -179,7 +195,7 @@ local read_only = {
         Details="First text line on the current Discord card.",State="Second text line on the current Discord card."},
     ["AniList"]={Account="Account connected in mpv.",Anime="Title of the matched anime.",
         ["Playing episode"]="Season-relative episode number used for AniList.",
-        ["Episode watch time"]="Actual playback time for a confirmed single episode in this viewing cycle. Use Correct match if the title or episode is uncertain. Pauses, buffering and seeks add no time. At 2×, a real minute still adds one minute.",
+        ["Episode watch time"]="Real playback time for this episode and viewing cycle. Pauses, buffering, and seeks add no time. At 2×, a real minute still adds one minute.",
         ["Watch started"]="Local clock time of the first credited playback interval in this viewing cycle. Older records may only have elapsed time.",
         ["Last watched"]="Local clock time of the latest credited playback interval in this viewing cycle.",
         Draft="Proposed episode count. Use the plus and minus controls to change it.",
@@ -207,9 +223,10 @@ return function(label, page, action, values, current, key)
     key=key or label:match("^(.-)   ") or label
     if values then
         local descriptions=choices[key]
+        local names=key=="Ask timing" and {threshold="At threshold",["end"]="End of episode",leave="Before leaving"} or {}
         local options={}
         for _,value in ipairs(values) do
-            options[#options+1]={label=value,selected=value==current,
+            options[#options+1]={label=names[value] or value,selected=value==current,
                 detail=descriptions and descriptions[value] or
                     (value=="On" and (help[key] or "Enable this setting.") or "Leave this off.")}
         end
@@ -226,6 +243,17 @@ return function(label, page, action, values, current, key)
         elseif page=="Confirm" then description="Review the proposed action before you confirm."
         elseif page=="Providers" then description=description or "Provider attribution or setup information." end
         local value=label:match("^.-   (.+)$")
+        if page=="AniList" and key=="Episode watch time" and value then
+            if value:match("^Tracking is off") then
+                description="Set Tracking to Manual, Ask, or Auto to start counting. Manual counts time and lets you apply any AniList progress changes yourself."
+            elseif value=="Tracking blocked" then
+                description="Current sharing or privacy settings prevent tracking. Track while hidden can allow tracking when Discord is hidden. Private sessions and excluded folders block it."
+            elseif value=="No time recorded yet" then
+                description="Play the matched episode for a few seconds to start counting. Pauses, buffering, and seeks suspend the counter."
+            elseif value=="Episode needs review" then
+                description="The counter needs one confirmed whole episode. Use Correct match if the title or numbering is uncertain."
+            end
+        end
         if page=="AniList" and (key=="Watch started" or key=="Last watched") and value then
             description=value..". "..description
         end

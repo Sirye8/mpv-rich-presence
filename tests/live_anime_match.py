@@ -122,9 +122,22 @@ def verify(package, mpv, ffmpeg):
                 (json.dumps({"id": 1, "generation": "watch-test"}),),
             )
 
+        enabled = False
+
         def watch_time(sample):
+            nonlocal enabled
+            if not enabled:
+                assert not sample["watch"] and not sample["active"], sample
+                with closing(sqlite3.connect(database)) as db, db:
+                    db.execute(
+                        "UPDATE records SET value=? WHERE category='tracking' AND scope='global'",
+                        (json.dumps({"mode": "manual", "without_sharing": True}),),
+                    )
+                enabled = True
+                return False
             if not sample.get("media"):
                 return False
+            assert sample["tracking"]["mode"] == "manual", sample
             assert sample["match_title"] == "Black Clover 2nd Season", sample
             assert sample["episode"] == "4" and sample["watch_episode"], sample
             with closing(sqlite3.connect(database)) as db:
@@ -134,10 +147,17 @@ def verify(package, mpv, ffmpeg):
             return row is not None and json.loads(row[0])["elapsed"] >= 2
 
         player_samples(
-            config, black_clover, mpv, os.environ, watch_time, 25, paused=False
+            config,
+            black_clover,
+            mpv,
+            os.environ,
+            watch_time,
+            25,
+            paused=False,
+            tracking={"mode": "off", "without_sharing": True},
         )
         print(
-            "Black Clover absolute episode 174 records watch time under Season 2, episode 4"
+            "Switching Off to Manual records Black Clover episode 174 under Season 2, episode 4"
         )
 
         episode_range = root / "[SubsPlease] Black Clover - 174-175 (1080p).mkv"
