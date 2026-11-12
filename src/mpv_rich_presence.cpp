@@ -1316,6 +1316,7 @@ static void handle_file_loaded(rich_presence_state& state)
     state.channel = get_mpv_osd_string(state.mpv, "metadata/by-key/uploader");
     state.media_artist = std::move(media_artist);
     state.media_title = std::move(media_title);
+    state.track_title = state.media_has_video ? "" : get_mpv_string(state.mpv,"metadata/by-key/title");
 
     // Get full file path for folder filtering
     state.current_file_path = get_mpv_string(state.mpv, "path");
@@ -1550,7 +1551,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     auto next_sample = chrono::steady_clock::time_point{};
     bool service_started = false;
     bool observed = false;
-    std::string observed_source, observed_title, observed_artist, observed_album;
+    std::string observed_source, observed_title, observed_track_title, observed_artist, observed_album;
     nlohmann::json automatic = nlohmann::json::object();
     uint64_t observed_session = UINT64_MAX;
     bool last_allowed = false;
@@ -1588,9 +1589,12 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 auto title = get_mpv_osd_string(state.mpv, "media-title");
                 auto artist = get_audio_artist(state.mpv);
                 auto album = get_mpv_osd_string(state.mpv,"metadata/by-key/album");
-                if (title != state.media_title || artist != state.media_artist || album != state.album)
+                auto track_title = state.media_has_video ? "" : get_mpv_string(state.mpv,"metadata/by-key/title");
+                if (title != state.media_title || track_title != state.track_title ||
+                    artist != state.media_artist || album != state.album)
                 {
                     state.media_title = title;
+                    state.track_title = std::move(track_title);
                     state.media_artist = artist;
                     state.album = album;
                     state.force_update = true;
@@ -1611,6 +1615,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 state.media_has_audio = false;
                 state.media_has_video = false;
                 state.media_title.clear();
+                state.track_title.clear();
                 state.media_artist.clear();
                 state.current_file_path.clear();
                 {
@@ -1813,10 +1818,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         else if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
             source = "original";
         const bool extra = source != "original";
+        if (!media.video && !state.scope_path.starts_with("stream-") &&
+            (source == "auto" || source == "musicbrainz" || source == "acoustid"))
+            media.track_title = state.track_title;
         const int tracked_media = verify_movie ? 0 : media.anilist_id;
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
-            || observed_source != source || (extra && (observed_title != media.title ||
+            || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
                 observed_artist != media.artist || observed_album != media.album))
             || last_allowed != allowed || observed != watch || last_sample_id != tracked_media
             || (watch && (advancing != last_sample_active || sampled_seek != last_seek || last_sample_speed != media.speed))))
@@ -1837,10 +1845,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 sample["album"] = media.album;
                 if (!media.video)
                 {
-                    sample["track_title"] = get_mpv_string(state.mpv,"metadata/by-key/title");
+                    sample["track_title"] = media.track_title;
                     auto album_artist = get_mpv_string(state.mpv,"metadata/by-key/album_artist");
                     if (album_artist.empty()) album_artist = get_mpv_string(state.mpv,"metadata/by-key/albumartist");
                     sample["album_artist"] = std::move(album_artist);
+                    sample["release_date"] = get_mpv_string(state.mpv,"metadata/by-key/date");
                 }
                 sample["video"] = media.video;
                 sample["remote"] = state.scope_path.starts_with("stream-");
@@ -1862,6 +1871,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             state.store->put("player",state.instance_id,sample);
             observed_source = source;
             observed_title = media.title;
+            observed_track_title = media.track_title;
             observed_artist = media.artist;
             observed_album = media.album;
             sampled_seek = last_seek;
@@ -1884,6 +1894,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (candidate != automatic) { state.force_update = true; automatic = candidate; }
             const bool resolved = candidate.value("session",uint64_t{}) == state.file_session &&
                 candidate.value("source",std::string{}) == source && candidate.value("title",std::string{}) == media.title &&
+                candidate.value("track_title",std::string{}) == media.track_title &&
                 candidate.value("artist",std::string{}) == media.artist && candidate.value("album",std::string{}) == media.album;
             if (resolved) media.provider = candidate.value("hit",nlohmann::json::object());
             if (verify_movie && (!resolved || !media.provider.empty()))
@@ -1936,7 +1947,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?
                     state.store->pending() : nlohmann::json::array()},
-                {"sources",state.sources},{"provider",media.anime ? "anilist" : media.provider.value("provider",std::string("local"))},
+                {"sources",state.sources},{"provider",media.anime ? "anilist" :
+                    media.provider.value("provider",std::string(media.track_title.empty() ? "local" : "local tags"))},
                 {"hard_block",state.hard_block},{"records", state.store && state.panel_page=="Saved data" ? state.store->records() : nlohmann::json::array()},
                 {"reason", !state.config_received ? "Waiting for configuration" : state.store_failed ? "Saved data unavailable" :
                     state.private_session ? "Private session" : !state.is_enabled.value_or(false) ? "Sharing off" :

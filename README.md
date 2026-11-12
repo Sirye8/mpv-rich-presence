@@ -48,7 +48,7 @@ The minus and plus controls edit a draft. Apply shows the account and proposed c
 
 **Automatic** checks AniList first for video. A completed miss allows movie or TV lookup. If a feature-length file with an explicit year loosely matches a much shorter anime from a different year, TMDB can confirm the movie by exact title and year. When AniList is unavailable the card uses the local title. Movie and TV matching prefers TMDB, with Wikidata and TVmaze as fallbacks.
 
-For local audio, MusicBrainz uses the track, artist, album, and duration tags. It handles featured artists and common remaster suffixes. Cover Art Archive supplies available release artwork. If the tags cannot identify the track or album, Automatic can try AcoustID. Fingerprinting sends the fingerprint and audio duration to AcoustID and uses the included application key.
+For local audio, the track, artist, and album tags appear as soon as playback starts. MusicBrainz checks the title, credits, runtime, and album edition in the background. This handles common remaster suffixes, featured artists, and tags with both native and romanized titles. The card adds artwork once Cover Art Archive returns an image for the matched album. Discord uses public image URLs, so embedded cover art stays in mpv. If the tags cannot identify the track or album, Automatic can try AcoustID. Fingerprinting sends the fingerprint and audio duration to AcoustID and uses the included application key.
 
 To classify a folder, open a file inside it and press `Alt+p`. Go to **Recognition & folders**, set **Save for** to **folder**, and choose **Media recognition**. The rule applies to that folder and its subfolders.
 

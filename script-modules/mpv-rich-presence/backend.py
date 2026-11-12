@@ -30,14 +30,18 @@ from providers import (
     fingerprint,
     fingerprint_match,
     match_name,
+    music_art,
+    music_art_sources,
     music_artists,
+    music_names,
     music_title,
     musicbrainz_album,
-    same_music_credit,
+    musicbrainz_match,
     video_query,
 )
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
+MUSIC_RETRY_DELAYS = (5, 15)
 
 
 @contextlib.contextmanager
@@ -70,6 +74,8 @@ class Worker:
         self.vault = Vault()
         self.previous = None
         self.resolved = None
+        self.music_retry = 0
+        self.music_attempts = 0
         self.expected = None
         self.data_generation = None
 
@@ -558,11 +564,121 @@ class Worker:
         else:
             raise AccountError("Unknown action.")
 
+    def recognize_music(self, p, source, refresh, publish, valid):
+        title = music_title(p.get("track_title") or p["title"])
+        artist = p.get("artist", "")
+        album = p.get("album", "")
+        album_artist = p.get("album_artist") or next(iter(music_artists(artist)), "")
+        date = p.get("release_date", "")
+        duration = p.get("duration", 0)
+        automatic = p["source"] == "auto"
+        failed = False
+
+        def cached(stage, terms, request):
+            nonlocal failed
+            key = (
+                "music-v3:"
+                + stage
+                + "/"
+                + hashlib.sha256(json.dumps([terms, refresh]).encode()).hexdigest()
+            )
+            try:
+                return self.cached_fetch(key, "hit", request, valid)
+            except (AccountError, OSError, ValueError):
+                valid()
+                failed = True
+                return None
+
+        def tagged_name(name, *, is_album=False):
+            return [match_name(part) for part in music_names(name, album=is_album)]
+
+        hit = None
+        if source == "musicbrainz" and re.fullmatch(
+            r"[0-9a-fA-F-]{36}", p.get("recording", "")
+        ):
+            hit = dict(
+                provider=source,
+                kind="recording",
+                id=p["recording"],
+                name=title,
+                artist=artist,
+                album=album,
+                release=p.get("release"),
+                link="https://musicbrainz.org/recording/" + p["recording"],
+            )
+        elif source == "musicbrainz" and title and (artist or not automatic):
+            hit = cached(
+                "track",
+                [
+                    tagged_name(title),
+                    artist.casefold(),
+                    tagged_name(album, is_album=True),
+                    round(duration),
+                    date,
+                ],
+                lambda: musicbrainz_match(
+                    candidates(
+                        source,
+                        title,
+                        self.settings,
+                        self.throttle,
+                        artist=artist,
+                        album=album,
+                    ),
+                    title,
+                    artist,
+                    album,
+                    duration,
+                    date,
+                ),
+            )
+
+        if hit:
+            publish(hit)
+        sources = music_art_sources(hit or {})
+        if source == "musicbrainz" and album and album_artist and not sources:
+            release = cached(
+                "album",
+                [tagged_name(album, is_album=True), album_artist.casefold(), date],
+                lambda: musicbrainz_album(album_artist, album, date, self.throttle),
+            )
+            if release:
+                sources = music_art_sources(release)
+                if not hit:
+                    hit = dict(release, name=title, artist=artist, album=album)
+                    publish(hit)
+
+        path = p.get("path", "")
+        if not hit and (automatic or source == "acoustid") and os.path.isfile(path):
+            stat = os.stat(path)
+            hit = cached(
+                "fingerprint",
+                [path, stat.st_size, stat.st_mtime_ns, title, artist, album],
+                lambda: fingerprint_match(
+                    fingerprint(path, self.settings, self.throttle, valid),
+                    title,
+                    artist,
+                    album,
+                ),
+            )
+            if hit:
+                publish(hit)
+                sources = music_art_sources(hit)
+        if hit and sources:
+            cover = cached("cover", sources, lambda: music_art(sources))
+            if cover:
+                publish(dict(hit, cover=cover))
+                return False
+        if not hit:
+            publish(None)
+        return failed
+
     def recognize(self, p):
         profile_source = p.get("source", "original")
         refresh = self.get("refresh", self.window)
         if refresh != getattr(self, "last_refresh", None):
             self.resolved = None
+            self.music_retry = 0
             self.last_refresh = refresh
 
         def context(sample):
@@ -572,16 +688,23 @@ class Worker:
                     "session",
                     "source",
                     "title",
+                    "track_title",
                     "artist",
                     "album",
+                    "album_artist",
+                    "release_date",
                     "allowed",
                 )
             )
 
         key = context(p)
         if key == self.resolved:
-            return
+            if not self.music_retry or time.monotonic() < self.music_retry:
+                return
+        else:
+            self.music_attempts = 0
         self.resolved = key
+        self.music_retry = 0
         if profile_source == "original" or not p.get("allowed"):
             return
         raw = p.get("title", "")
@@ -625,10 +748,43 @@ class Worker:
             source = "tmdb-movie"
         artist = p.get("artist", "")
         album = p.get("album", "")
-        automatic_music = source == "musicbrainz" and profile_source == "auto"
-        if source == "musicbrainz":
-            title = music_title(p.get("track_title") or raw)
         generation = self.get("generation", "data")
+
+        def valid():
+            if (
+                refresh != self.get("refresh", self.window)
+                or key != context(self.get("player", self.window))
+                or generation != self.get("generation", "data")
+            ):
+                raise AccountError("Playback or privacy settings changed.")
+
+        def publish(hit):
+            with self.transaction():
+                valid()
+                self.put(
+                    "auto",
+                    self.window,
+                    dict(
+                        session=p["session"],
+                        source=profile_source,
+                        title=raw,
+                        track_title=p.get("track_title", ""),
+                        artist=artist,
+                        album=album,
+                        hit=hit or {},
+                    ),
+                )
+
+        if source in ("musicbrainz", "acoustid"):
+            if not p["video"] and not p.get("remote"):
+                failed = self.recognize_music(p, source, refresh, publish, valid)
+                if failed and self.music_attempts < len(MUSIC_RETRY_DELAYS):
+                    self.music_retry = (
+                        time.monotonic() + MUSIC_RETRY_DELAYS[self.music_attempts]
+                    )
+                    self.music_attempts += 1
+            return
+
         hit = None
         if source == "stream":
             hit = dict(
@@ -642,37 +798,12 @@ class Worker:
             if not hit["link"]:
                 del hit["link"]
         elif (
-            source == "musicbrainz"
-            and not p["video"]
-            and re.fullmatch(r"[a-fA-F0-9-]{36}", p.get("recording", ""))
+            source in ("tmdb-movie", "tmdb-tv", "tvmaze", "wikidata")
+            and p["video"]
+            and not p.get("remote")
         ):
-            hit = dict(
-                provider=source,
-                kind="recording",
-                id=p["recording"],
-                name=title,
-                artist=artist,
-                album=album,
-                link="https://musicbrainz.org/recording/" + p["recording"],
-            )
-            if re.fullmatch(r"[0-9a-fA-F-]{36}", p.get("release", "")):
-                hit["cover"] = (
-                    "https://coverartarchive.org/release/" + p["release"] + "/front-250"
-                )
-        elif (source in ("tmdb-movie", "tmdb-tv", "tvmaze", "wikidata")) == p[
-            "video"
-        ] and not p.get("remote"):
-            # Search only a title. Never pass a path, URI or query string.
-            if (
-                not verify_movie
-                and not automatic_music
-                and (
-                    not title
-                    or (
-                        source != "musicbrainz"
-                        and re.search(r"[/\\?&#\x00-\x1f]|://", title)
-                    )
-                )
+            if not verify_movie and (
+                not title or re.search(r"[/\\?&#\x00-\x1f]|://", title)
             ):
                 return
             cache_key = (
@@ -693,29 +824,14 @@ class Worker:
                             episode,
                             airdate,
                             p.get("duration"),
-                            p.get("path", "")
-                            if source == "acoustid" or automatic_music
-                            else "",
+                            "",
                             refresh,
                         ]
                     ).encode()
                 ).hexdigest()
             )
 
-            def valid():
-                current = self.get("player", self.window)
-                if refresh != self.get("refresh", self.window) or key != context(
-                    current
-                ):
-                    raise AccountError("Playback or privacy settings changed.")
-
             def fetch_hit():
-                def identify_audio():
-                    rows = fingerprint(
-                        p.get("path", ""), self.settings, self.throttle, valid
-                    )
-                    return fingerprint_match(rows, title, artist, album)
-
                 if (
                     not verify_movie
                     and source.startswith("tmdb-")
@@ -731,14 +847,9 @@ class Worker:
                         source, chosen, self.settings, self.throttle, episode, airdate
                     )
 
-                if source == "acoustid":
-                    return identify_audio()
-
                 def matching(provider):
                     valid()
-                    query = (
-                        title if provider == "musicbrainz" else title.replace(":", " ")
-                    )
+                    query = title.replace(":", " ")
                     if provider.startswith("tmdb-") and year:
                         query += f" ({year})"
                     rows = candidates(
@@ -752,12 +863,7 @@ class Worker:
                     exact = [
                         r
                         for r in rows
-                        if match_name(
-                            music_title(r["name"])
-                            if provider == "musicbrainz"
-                            else r.get("match", r["name"])
-                        )
-                        == match_name(title)
+                        if match_name(r.get("match", r["name"])) == match_name(title)
                     ]
                     if year and (
                         provider in ("wikidata", "tvmaze", "tmdb-movie") or verify_movie
@@ -765,40 +871,6 @@ class Worker:
                         exact = [
                             r for r in exact if year in r.get("years", [r.get("year")])
                         ]
-                    if provider == "musicbrainz":
-                        if artist:
-                            exact = [r for r in exact if same_music_credit(artist, r)]
-                        if album:
-                            exact = [
-                                r
-                                for r in exact
-                                if match_name(music_title(r.get("album", "")))
-                                == match_name(music_title(album))
-                            ]
-                        if p.get("duration", 0) > 0:
-                            with_runtime = [
-                                r
-                                for r in exact
-                                if r.get("duration_ms")
-                                and abs(r["duration_ms"] / 1000 - p["duration"]) <= 5
-                            ]
-                            exact = with_runtime or [
-                                r for r in exact if not r.get("duration_ms")
-                            ]
-                        recordings = {r["id"] for r in exact}
-                        if len(recordings) == 1 and len(exact) > 1:
-                            track = dict(exact[0])
-                            groups = {r.get("release_group") for r in exact}
-                            if len(groups) == 1 and None not in groups:
-                                track["cover"] = (
-                                    "https://coverartarchive.org/release-group/"
-                                    + groups.pop()
-                                    + "/front-250"
-                                )
-                            else:
-                                track.pop("cover", None)
-                            track["album"] = album
-                            return [track]
                     return exact
 
                 if verify_movie:
@@ -865,42 +937,12 @@ class Worker:
                         return preferred
 
                 provider = source
-                if automatic_music and (not title or not artist):
-                    try:
-                        return identify_audio()
-                    except (AccountError, OSError, ValueError):
-                        return None
                 try:
                     exact = matching(provider)
-                except AccountError:
-                    if not mixed_title and not automatic_music:
+                except (AccountError, OSError, ValueError):
+                    if not mixed_title:
                         raise
                     exact = []
-                except (OSError, ValueError):
-                    if not mixed_title and provider != "musicbrainz":
-                        raise
-                    exact = []
-                if provider == "musicbrainz" and len(exact) != 1:
-                    valid()
-                    credits = music_artists(artist)
-                    try:
-                        release = musicbrainz_album(
-                            title,
-                            p.get("album_artist") or (credits[0] if credits else ""),
-                            album,
-                            self.throttle,
-                        )
-                        if release:
-                            return release
-                    except (AccountError, OSError, ValueError):
-                        if not automatic_music:
-                            raise
-                    if automatic_music:
-                        try:
-                            return identify_audio()
-                        except (AccountError, OSError, ValueError):
-                            pass
-                    return None
                 if not exact and (
                     (profile_source == "auto" and provider == "wikidata") or mixed_title
                 ):

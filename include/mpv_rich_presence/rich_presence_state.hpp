@@ -72,6 +72,7 @@ namespace mpvrp
         std::string album, channel;
         std::string media_artist = "";
         std::string media_title = "";
+        std::string track_title;
 
         std::mutex anime_mutex;
         std::atomic<int> file_load_id = 0;

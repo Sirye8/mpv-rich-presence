@@ -105,7 +105,13 @@ namespace mpvrp
             {
                 details = song;
                 if ((!m.video || preset == "detailed" || clean) && !song.empty()) name = song;
-                if (preset == "detailed" && !m.video && !m.title.empty())
+                if (!m.video && !m.track_title.empty())
+                {
+                    name = m.track_title;
+                    details = m.artist;
+                    state = m.album;
+                }
+                else if (preset == "detailed" && !m.video && !m.title.empty())
                 {
                     name = m.title;
                     details = m.artist;

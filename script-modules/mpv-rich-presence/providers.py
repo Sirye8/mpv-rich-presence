@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import subprocess
 import time
 import unicodedata
 import urllib.parse as url
+from urllib.error import HTTPError
 import urllib.request
 from account import AccountError, NoRedirect, graphql
 
@@ -126,15 +128,16 @@ def wikidata_movies(query, throttle):
     return result
 
 
-def fetch(base, params=None, headers=None, body=None):
+USER_AGENT = "mpv-rich-presence/1.0 (https://github.com/Sirye8/mpv-rich-presence)"
+
+
+def fetch(base, params=None, headers=None, body=None, *, timeout=8):
     if params:
         base += "?" + url.urlencode(params)
     headers = dict(headers or {})
-    headers["User-Agent"] = (
-        "mpv-rich-presence/1.0 (https://github.com/Sirye8/mpv-rich-presence)"
-    )
+    headers["User-Agent"] = USER_AGENT
     with urllib.request.build_opener(NoRedirect).open(
-        urllib.request.Request(base, data=body, headers=headers), timeout=8
+        urllib.request.Request(base, data=body, headers=headers), timeout=timeout
     ) as r:
         payload = r.read(2_000_001)
     if len(payload) > 2_000_000:
@@ -203,6 +206,62 @@ def music_title(title):
     return title
 
 
+def music_names(name, *, album=False):
+    """Keep the full tag and recognize paired native and romanized names."""
+    name = music_title(name)
+    variants = [name]
+    parts = re.split(r"\s+[-–|]\s+|\s*[~～／/]\s*", name, maxsplit=1)
+    if len(parts) == 2:
+        scripts = [
+            {
+                unicodedata.name(ch, "").startswith("LATIN ")
+                for ch in part
+                if ch.isalpha()
+            }
+            for part in parts
+        ]
+        if {frozenset(script) for script in scripts} == {
+            frozenset({True}),
+            frozenset({False}),
+        }:
+            variants.extend(parts)
+        elif (
+            not album
+            and re.search("[~～]", name)
+            and len(match_name(parts[1]).split()) >= 3
+        ):
+            variants.append(parts[1])
+    if album:
+        wrapped = re.search(r"(?i)(?:album|アルバム)\s*[「『](.+?)[」』]$", name)
+        theme = re.search(r"(?i)\s*[(（]\s*TV\s*(?:アニメ|anime\b)", name)
+        if wrapped:
+            variants.append(wrapped[1])
+        if theme:
+            variants.append(name[: theme.start()])
+        if re.fullmatch(r"I{2,4}", name):
+            variants.append("l" * len(name))
+        if re.fullmatch(r"l{2,4}", name):
+            variants.append("I" * len(name))
+    return tuple(dict.fromkeys(part for part in variants if part))
+
+
+def same_music_name(first, second, *, album=False):
+    return bool(
+        {match_name(name) for name in music_names(first, album=album)}
+        & {match_name(name) for name in music_names(second, album=album)}
+    )
+
+
+def music_search_field(field, name):
+    terms = []
+    for value in music_names(name, album=field != "recording"):
+        try:
+            terms.append(musicbrainz_terms(**{field: value}))
+        except AccountError:
+            continue
+    return "(" + " OR ".join(terms) + ")" if terms else ""
+
+
 def music_artists(credit):
     return [
         part.strip()
@@ -235,45 +294,214 @@ def same_music_credit(expected, item):
     )
 
 
-def musicbrainz_album(title, artist, album, throttle):
-    """Resolve release artwork when multiple recordings share the same tags."""
-    if not artist or not album:
+def music_edition(release):
+    group = release.get("release-group") or {}
+    return dict(
+        release=release.get("id"),
+        album=release.get("title", ""),
+        release_group=group.get("id"),
+        group_title=group.get("title", ""),
+        release_date=release.get("date") or "",
+    )
+
+
+def prefer_music_date(editions, date):
+    if not re.fullmatch(r"\d{4}(?:-\d{2}-\d{2})?", date):
+        return editions
+    dated = [row for row in editions if row.get("release_date", "").startswith(date)]
+    if not dated:
+        return editions
+    groups = {row.get("release_group") for row in dated} - {None}
+    return dated + [
+        row
+        for row in editions
+        if row not in dated and row.get("release_group") in groups
+    ]
+
+
+def musicbrainz_album(artist, album, date, throttle):
+    """Find artwork for a tagged edition, including translated album titles."""
+    query = music_search_field("release", album)
+    if not query:
         return None
     throttle("musicbrainz")
     rows = fetch(
-        "https://musicbrainz.org/ws/2/release-group/",
+        "https://musicbrainz.org/ws/2/release/",
         {
-            "query": musicbrainz_terms(releasegroup=music_title(album), artist=artist),
+            "query": query + " AND " + musicbrainz_terms(artist=artist),
             "fmt": "json",
             "limit": 8,
         },
-    )["release-groups"]
+        timeout=4,
+    )["releases"]
     matches = [
-        r
+        music_edition(r)
         for r in rows
-        if match_name(music_title(r["title"])) == match_name(music_title(album))
+        if same_music_name(r["title"], album, album=True)
         and match_name(musicbrainz_artist(r)) == match_name(artist)
     ]
-    albums = [
-        r
-        for r in matches
-        if r.get("primary-type") == "Album" and not r.get("secondary-types")
-    ]
-    if len(albums) == 1:
-        matches = albums
-    if len(matches) != 1:
+    matches = prefer_music_date(matches, date)
+    groups = {r["release_group"] or r["release"] for r in matches}
+    if len(groups) != 1:
         return None
-    group = matches[0]
+    edition = matches[0]
     return dict(
         provider="musicbrainz",
         kind="recording",
-        name=title,
         artist=artist,
-        album=group["title"],
-        release_group=group["id"],
-        link="https://musicbrainz.org/release-group/" + group["id"],
-        cover="https://coverartarchive.org/release-group/" + group["id"] + "/front-250",
+        album=album,
+        release=edition["release"],
+        release_group=edition["release_group"],
+        art_releases=[row["release"] for row in matches[1:4]],
+        link="https://musicbrainz.org/release/" + edition["release"],
     )
+
+
+def musicbrainz_match(rows, title, artist, album, duration, date=""):
+    matching = [
+        row
+        for row in rows
+        if same_music_name(row["name"], title)
+        and (not artist or same_music_credit(artist, row))
+        and (
+            not duration
+            or not row.get("duration_ms")
+            or abs(row["duration_ms"] / 1000 - duration) <= 5
+        )
+    ]
+    releases = (
+        [
+            row
+            for row in matching
+            if same_music_name(row.get("album", ""), album, album=True)
+            or same_music_name(row.get("group_title", ""), album, album=True)
+        ]
+        if album
+        else []
+    )
+    pool = prefer_music_date(releases, date) if releases else matching
+    timed = [row for row in pool if row.get("duration_ms")]
+    pool = timed or pool
+    if not pool:
+        return None
+
+    groups = {row.get("release_group") for row in pool}
+    group = next(iter(groups)) if len(groups) == 1 else None
+    if len({row["id"] for row in pool}) == 1:
+        hit = dict(
+            pool[0], provider="musicbrainz", album=album or pool[0].get("album", "")
+        )
+        hit.pop("release", None)
+    elif releases and group:
+        # The tagged album is identifiable even when its editions use different recording IDs.
+        hit = dict(
+            provider="musicbrainz",
+            kind="recording",
+            name=title,
+            artist=artist,
+            album=album,
+            link="https://musicbrainz.org/release-group/" + group,
+        )
+    else:
+        return None
+    hit["release_group"] = group
+    # For an album tag, only probe editions that agree with that tag. For an
+    # untagged album, use artwork only if all candidate editions agree.
+    if (releases and (group or len(pool) == 1)) or (not album and group):
+        hit["art_releases"] = list(
+            dict.fromkeys(row["release"] for row in pool if row.get("release"))
+        )[:4]
+    else:
+        hit.pop("release_group", None)
+    return hit
+
+
+def music_art_sources(hit):
+    releases = [
+        ("release", release)
+        for release in [hit.get("release"), *hit.get("art_releases", [])]
+        if release
+    ]
+    sources = (
+        releases[:1] + [("release-group", hit.get("release_group"))] + releases[1:]
+    )
+    return tuple(
+        dict.fromkeys(
+            (kind, ident)
+            for kind, ident in sources
+            if ident
+            and re.fullmatch(
+                r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", ident
+            )
+        )
+    )
+
+
+def cover_art_image(source, deadline):
+    """Resolve CAA redirects to a verified public HTTPS image."""
+    kind, ident = source
+    address = f"https://coverartarchive.org/{kind}/{ident}/front-250"
+    opener = urllib.request.build_opener(NoRedirect)
+    for _ in range(3):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Cover Art Archive timed out.")
+        request = urllib.request.Request(
+            address, method="HEAD", headers={"User-Agent": USER_AGENT}
+        )
+        try:
+            with opener.open(request, timeout=min(remaining, 2.5)) as response:
+                return (
+                    address
+                    if response.headers.get_content_type().startswith("image/")
+                    else ""
+                )
+        except HTTPError as exc:
+            with exc:
+                if exc.code in (404, 410):
+                    return ""
+                location = exc.headers.get("Location")
+                if exc.code not in (301, 302, 303, 307, 308) or not location:
+                    raise
+                target = url.urlsplit(url.urljoin(address, location))
+                if (
+                    target.scheme not in ("http", "https")
+                    or not target.hostname
+                    or target.netloc != target.hostname
+                    or (
+                        target.hostname != "coverartarchive.org"
+                        and not target.hostname.endswith(".archive.org")
+                        and target.hostname != "archive.org"
+                    )
+                ):
+                    return ""
+                address = target._replace(scheme="https", fragment="").geturl()
+    return ""
+
+
+def music_art(sources):
+    # Probe a release and its album together. Only try additional editions
+    # if neither of those has art, and preserve the preferred source order.
+    failed = None
+    deadline = time.monotonic() + 4
+    pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        for start in range(0, len(sources), 2):
+            pending = [
+                pool.submit(cover_art_image, s, deadline)
+                for s in sources[start : start + 2]
+            ]
+            for result in pending:
+                try:
+                    if cover := result.result():
+                        return cover
+                except OSError as exc:
+                    failed = exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    if failed:
+        raise failed
+    return ""
 
 
 def candidates(provider, query, settings, throttle, *, artist="", album=""):
@@ -343,30 +571,39 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
         ]
     if provider == "musicbrainz":
         credits = music_artists(artist)
+        terms = [music_search_field("recording", query)]
+        if not terms[0]:
+            return []
+        if credits:
+            terms.append(musicbrainz_terms(artist=credits[0]))
+        search = " AND ".join(terms)
+        if album_query := music_search_field("release", album):
+            search = f"({search}) OR ({search} AND {album_query})"
         rows = fetch(
             "https://musicbrainz.org/ws/2/recording/",
             {
-                "query": musicbrainz_terms(
-                    recording=music_title(query),
-                    artist=credits[0] if credits else "",
-                    release=music_title(album),
-                ),
+                "query": search,
                 "fmt": "json",
                 "limit": 20,
             },
+            timeout=4,
         )
         result = []
         for m in rows["recordings"]:
             releases = m.get("releases") or []
             if album:
-                releases = [
+                matching = [
                     r
                     for r in releases
-                    if match_name(music_title(r["title"]))
-                    == match_name(music_title(album))
+                    if same_music_name(r["title"], album, album=True)
+                    or same_music_name(
+                        (r.get("release-group") or {}).get("title", ""),
+                        album,
+                        album=True,
+                    )
                 ]
+                releases = matching or releases
             for release in releases[: 8 if album else 3] or [{}]:
-                release_id = release.get("id")
                 release_title = release.get("title", "")
                 result.append(
                     dict(
@@ -375,18 +612,11 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
                         name=m["title"],
                         title=m["title"]
                         + (" · " + release_title if release_title else ""),
-                        release=release_id,
-                        release_group=(release.get("release-group") or {}).get("id"),
-                        album=release_title,
+                        **music_edition(release),
                         artist=musicbrainz_artist(m),
                         artist_names=[c["name"] for c in m.get("artist-credit", [])],
                         duration_ms=m.get("length"),
                         link="https://musicbrainz.org/recording/" + m["id"],
-                        cover="https://coverartarchive.org/release/"
-                        + release_id
-                        + "/front-250"
-                        if release_id
-                        else "",
                     )
                 )
         return result
@@ -486,7 +716,7 @@ def fingerprint_match(rows, title, artist, album):
     tagged = [
         row
         for row in confident.values()
-        if (not title or match_name(music_title(row["name"])) == match_name(title))
+        if (not title or same_music_name(row["name"], title))
         and (not artist or same_music_credit(artist, row))
     ]
     # Tags can resolve tied database entries. A sole result can repair a bad tag.
@@ -502,25 +732,27 @@ def fingerprint_match(rows, title, artist, album):
 def fingerprint_details(hit, album=""):
     hit = dict(hit, provider="acoustid")
     groups = hit.pop("groups", [])
-    matched = [
-        g
-        for g in groups
-        if match_name(music_title(g["title"])) == match_name(music_title(album))
-    ]
+    matched = [g for g in groups if same_music_name(g["title"], album, album=True)]
     groups = matched or [g for g in groups if g.get("type") == "Album"]
     if len(groups) == 1:
         hit["album"] = groups[0]["title"]
-        hit["cover"] = (
-            "https://coverartarchive.org/release-group/"
-            + groups[0]["id"]
-            + "/front-250"
-        )
+        hit["release_group"] = groups[0]["id"]
     return hit
 
 
 def details(provider, hit, settings, throttle, episode, airdate=None):
-    if provider == "acoustid":
-        return fingerprint_details(hit)
+    if provider in ("musicbrainz", "acoustid"):
+        item = (
+            fingerprint_details(hit)
+            if provider == "acoustid"
+            else dict(hit, provider=provider)
+        )
+        try:
+            if cover := music_art(music_art_sources(item)):
+                item["cover"] = cover
+        except OSError:
+            pass
+        return item
     item = dict(hit, provider=provider)
     if provider.startswith("tmdb-"):
         throttle(provider)

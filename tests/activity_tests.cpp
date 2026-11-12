@@ -64,6 +64,13 @@ int main(int argc, char** argv)
     if (repeated.at("name") != "Track / Track") return 1;
     auto layout = format_activity(music, {{"headline","Old override"},{"audio_layout",{{"preset","clean"}}}});
     if (layout.at("name") == "Old override") return 1;
+    music.title="Artist - Track";
+    music.track_title="Track";
+    music.album="Album";
+    const auto tagged_card = format_activity(music, json::object());
+    if (tagged_card.at("name") != "Track" || tagged_card.at("details") != "Artist" ||
+        tagged_card.at("state") != "Album" || tagged_card.contains("large_image") ||
+        tagged_card.contains("buttons")) return 1;
 
     music.provider = {{"kind","recording"},{"name","Matched track"},{"artist","Matched artist"},{"album","Matched album"}};
     const auto music_card = format_activity(music, json::object());

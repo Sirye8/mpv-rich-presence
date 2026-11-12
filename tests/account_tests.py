@@ -19,7 +19,7 @@ sys.path.insert(
 )
 from account import AccountError, ClientSecretRequired, callback_server, save_progress
 from backend import Worker
-from providers import fingerprint_match
+from providers import fingerprint_match, music_art, music_art_sources, musicbrainz_match
 
 
 class CallbackTests(unittest.TestCase):
@@ -219,7 +219,7 @@ class RecognitionTests(unittest.TestCase):
                     (
                         "Hotel California - 2013 Remaster",
                         "Eagles",
-                        "Hotel California",
+                        "Hotel California (2013 Remaster)",
                         391,
                         "Hotel California",
                         "Eagles",
@@ -268,6 +268,124 @@ class RecognitionTests(unittest.TestCase):
                     self.assertEqual(
                         worker.get("auto", "window")["hit"]["provider"], "musicbrainz"
                     )
+            finally:
+                worker.db.close()
+
+    def test_music_edition_matching_with_bilingual_titles(self):
+        album = "よふかしのうた - Yofukashino Uta"
+        recording = dict(
+            id="recording",
+            name="よふかしのうた",
+            artist="Creepy Nuts",
+            album="よふかしのうた",
+            duration_ms=237000,
+        )
+        single = "20c3d5a5-297a-4b9c-8f7c-abb5ff8786ef"
+        single_group = "7fa49ca2-4fd9-423f-bda9-7673ced09eb9"
+        editions = [
+            dict(
+                recording,
+                release="ep",
+                release_group="ep-group",
+                release_date="2019-08-07",
+            ),
+            dict(
+                recording,
+                release=single,
+                release_group=single_group,
+                release_date="2018-12-12",
+            ),
+        ]
+        hit = musicbrainz_match(
+            editions, album, "Creepy Nuts", album, 240, "2018-12-12"
+        )
+        self.assertEqual(hit["id"], "recording")
+        self.assertEqual(
+            music_art_sources(hit),
+            (("release", single), ("release-group", single_group)),
+        )
+        self.assertIsNone(
+            musicbrainz_match(editions, album, "Other artist", album, 240)
+        )
+        self.assertIsNone(musicbrainz_match(editions, album, "Creepy Nuts", album, 99))
+
+    def test_music_album_spellings_and_available_cover(self):
+        release = "78742576-dba3-4fd5-99f0-bda8b27f79bf"
+        group = "8a24ae4f-704d-4065-912a-beba2659a386"
+        song = dict(
+            id="song",
+            name="Магниты",
+            artist="Aspen",
+            release=release,
+            release_group=group,
+        )
+        hit = musicbrainz_match(
+            [dict(song, album="lll")], "Магниты", "Aspen", "III", 218
+        )
+        self.assertEqual(hit["album"], "III")
+        cover = "https://archive.org/path/cover.jpg"
+        with patch(
+            "providers.cover_art_image",
+            side_effect=lambda source, _: cover if source[0] == "release-group" else "",
+        ):
+            self.assertEqual(music_art(music_art_sources(hit)), cover)
+
+    def test_music_publishes_before_artwork_and_retries_a_temporary_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                player = dict(
+                    source="auto",
+                    session=1,
+                    title="Artist - Track",
+                    track_title="Track",
+                    artist="Artist",
+                    album="Album",
+                    video=False,
+                    allowed=True,
+                )
+                worker.put("player", "window", player)
+                row = dict(
+                    id="track",
+                    kind="recording",
+                    name="Track",
+                    artist="Artist",
+                    album="Album",
+                    release="78742576-dba3-4fd5-99f0-bda8b27f79bf",
+                )
+                cover = "https://archive.org/path/cover.jpg"
+
+                def artwork(_):
+                    hit = worker.get("auto", "window")["hit"]
+                    self.assertEqual(hit["name"], "Track")
+                    self.assertNotIn("cover", hit)
+                    if art.call_count <= 2:
+                        raise TimeoutError()
+                    return cover
+
+                with (
+                    patch("backend.candidates", return_value=[row]) as search,
+                    patch("backend.music_art", side_effect=artwork) as art,
+                ):
+                    for _ in range(2):
+                        worker.recognize(player)
+                        self.assertGreater(worker.music_retry, time.monotonic())
+                        worker.music_retry = time.monotonic() - 1
+                    worker.recognize(player)
+                    self.assertEqual(
+                        worker.get("auto", "window")["hit"]["cover"], cover
+                    )
+                    player.update(session=2, path="different.flac")
+                    worker.put("player", "window", player)
+                    worker.recognize(player)
+                    self.assertEqual(
+                        worker.get("auto", "window")["hit"]["cover"], cover
+                    )
+                    self.assertEqual(search.call_count, 1)
+                    self.assertEqual(art.call_count, 3)
             finally:
                 worker.db.close()
 
