@@ -38,7 +38,10 @@ def main(address, pid):
     parsed = urlsplit(address)
     if parsed.scheme != "https" or parsed.netloc != "s4.anilist.co":
         raise ValueError("Unexpected AniList avatar host.")
-    with urllib.request.build_opener(NoRedirect()).open(address, timeout=6) as response:
+    request = urllib.request.Request(address, headers={
+        "User-Agent": "mpv-rich-presence (+https://github.com/Sirye8/mpv-rich-presence)",
+    })
+    with urllib.request.build_opener(NoRedirect()).open(request, timeout=6) as response:
         data = response.read(512 * 1024 + 1)
     if len(data) > 512 * 1024 or not data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF8", b"RIFF")):
         raise ValueError("Unsupported avatar.")

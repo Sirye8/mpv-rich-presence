@@ -26,11 +26,11 @@ return function(options, modules, interpreter, utils)
         local values={bounds[1]-l,bounds[2]-t,bounds[3]-l,bounds[4]-t,radius,strength or 6}
         local key=table.concat(values,",")
         if geometry==key then return end
-        local args={}
+        local args=mp.get_property_native("glsl-shader-opts") or {}
         for i,name in ipairs(parameters) do
-            args[i]="panel-blur/"..name.."="..string.format("%.2f",values[i])
+            args["panel-blur/"..name]=string.format("%.2f",values[i])
         end
-        if not mp.commandv("change-list","glsl-shader-opts","append",table.concat(args,",")) then return end
+        if not mp.set_property_native("glsl-shader-opts",args) then return end
         if not active then
             active=not not mp.commandv("change-list","glsl-shaders","append",shader)
             if not active then
@@ -44,7 +44,7 @@ return function(options, modules, interpreter, utils)
 
     local avatar_url,pixels,job,displayed,rectangle,retry_after
     local avatar_file
-    local avatar_id=182
+    local avatar_id=58
     local function remove_avatar()
         if displayed then mp.commandv("overlay-remove",avatar_id); displayed=nil end
     end
@@ -78,7 +78,8 @@ return function(options, modules, interpreter, utils)
             job=nil
             retry_after=mp.get_time()+60
             if not result or result.status~=0 or #(result.stdout or "")~=16384 then return end
-            avatar_file=avatar_file or os.tmpname()
+            avatar_file=avatar_file or utils.join_path(os.getenv("TEMP") or os.getenv("TMPDIR") or "/tmp",
+                "mpv-rich-presence-avatar-"..mp.get_property("pid")..".bgra")
             local file=io.open(avatar_file,"wb")
             if not file then return end
             local written=file:write(result.stdout)
