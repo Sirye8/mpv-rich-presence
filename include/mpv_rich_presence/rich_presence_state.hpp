@@ -81,6 +81,7 @@ namespace mpvrp
         std::atomic<int> failed_anime_lookup = -1;
 
         bool watch_episode = false;
+        nlohmann::json recognition_options = nlohmann::json::object();
         std::string episode_review;
         int conflicting_anime_minutes = 0;
         bool fuzzy_episode_match = false;
@@ -98,6 +99,9 @@ namespace mpvrp
         int last_published_paused = -1;
         int last_caching_state = 0;
         bool was_active_instance = false;
+        bool publish_pending = false, presence_wanted = false;
+        uint64_t publish_generation = 0;
+        uint64_t last_published_ms = 0;
         std::atomic<bool> anime_dirty = false;
         double last_reported_pos = -1.0;
         std::chrono::steady_clock::time_point last_activity_update;

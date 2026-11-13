@@ -9,7 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import contextlib
 import urllib.error
 import urllib.parse
@@ -30,6 +30,31 @@ from providers import fingerprint_match, music_art, music_art_sources, musicbrai
 
 
 class CallbackTests(unittest.TestCase):
+    def test_profile_confirmation_keeps_token_out_of_browser(self):
+        for action, expected in (("connect", b"Connected"), ("cancel", b"Sign-in cancelled"), ("switch", b"Use another account")):
+            commit = Mock(return_value=True)
+            with callback_server(
+                "test-state", port=0, code_flow=True, exchange=lambda *args: "fixture-token",
+                review=lambda token: {"id": 1, "name": "<Test>"},
+                connect=commit,
+            ) as server:
+                origin = f"http://127.0.0.1:{server.server_port}"
+                thread = threading.Thread(target=server.serve_forever)
+                thread.start()
+                try:
+                    with urllib.request.urlopen(origin + "/callback?code=x&state=test-state") as response:
+                        page = response.read()
+                    self.assertIn(b"Connect as &lt;Test&gt;", page)
+                    self.assertNotIn(b"fixture-token", page)
+                    commit.assert_not_called()
+                    data = urllib.parse.urlencode(dict(state="test-state", action=action)).encode()
+                    with urllib.request.urlopen(origin + "/confirm", data=data) as response:
+                        self.assertIn(expected, response.read())
+                    self.assertEqual(commit.call_count, int(action=="connect"))
+                finally:
+                    server.shutdown()
+                    thread.join()
+
     def test_personal_form(self):
         def exchange(code, secret, remember):
             if not secret:
@@ -150,6 +175,46 @@ class PublicSignInTests(unittest.TestCase):
 
 
 class RecognitionTests(unittest.TestCase):
+    def test_tv_folder_rules_are_opt_in_and_resolve_each_episode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(":memory:", "window", {})
+            self.addCleanup(worker.db.close)
+            worker.db.execute("CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+            folder = Path(directory).as_posix()
+            worker.put("tv-rule", f"folder:{folder}", {"tvmaze:8": {
+                "provider":"tvmaze", "hit":{"id":8,"name":"Fixture Show"},
+                "titles":["fixture show"], "dedicated":True,
+            }})
+            for session, name, enabled, embedded, expected in (
+                (1,"Fixture Show.S02E01.mkv",False,"",None),
+                (2,"Fixture Show.S02E02.mkv",True,"","S02E02"),
+                (3,"Other Show.S02E02.mkv",True,"",None),
+                (4,"S02E03.mkv",True,"","S02E03"),
+                (5,"Fixture Show.S02E01.mkv",True,"Other Show",None),
+            ):
+                sample = dict(session=session, source="tv", title=name, filename=name, video=True,
+                              allowed=True, path=f"{folder}/{name}", embedded_title=embedded,
+                              recognition_options={"tv_rules":enabled})
+                worker.put("player","window",sample)
+                with (
+                    patch("backend.candidates", return_value=[]),
+                    patch("backend.details", side_effect=lambda p, h, s, t, ep, date: dict(h, numbering="S%02dE%02d" % tuple(map(int, ep)))),
+                ):
+                    worker.recognize(sample)
+                self.assertEqual(worker.get("auto","window")["hit"].get("numbering"),expected,name)
+
+    def test_stale_search_result_cannot_be_saved(self):
+        worker = Worker(":memory:", "window", {})
+        self.addCleanup(worker.db.close)
+        worker.db.execute("CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+        worker.put("player","window",dict(session=1,allowed=True,path="/example.mkv",media=0))
+        candidate = {"id":18,"name":"Fixture"}
+        worker.put("search-request","window",{"id":"new"})
+        worker.put("response","window",dict(context=1,search=dict(id="old",provider="anilist",results=[candidate])))
+        with self.assertRaisesRegex(AccountError,"Search again"):
+            worker.handle(dict(op="select",session=1,media=0,scope="file",request="old",candidate=candidate))
+        self.assertFalse(worker.get("match","file:/example.mkv"))
+
     def test_music_match_accepts_store_score_credit(self):
         title, artist = "F1", "Hans Zimmer"
         album = "F1® The Movie (Original Score By Hans Zimmer)"
@@ -501,8 +566,8 @@ class RecognitionTests(unittest.TestCase):
                 ):
                     for _ in range(2):
                         worker.recognize(player)
-                        self.assertGreater(worker.music_retry, time.monotonic())
-                        worker.music_retry = time.monotonic() - 1
+                        self.assertGreater(worker.lookup_retry, time.monotonic())
+                        worker.lookup_retry = time.monotonic() - 1
                     worker.recognize(player)
                     self.assertEqual(
                         worker.get("auto", "window")["hit"]["cover"], cover
@@ -1441,6 +1506,30 @@ class TrackingTests(unittest.TestCase):
             self.mutations, [{"id": 9, "progress": 4, "status": "REPEATING"}]
         )
         self.assertEqual(self.row["repeat"], 2)
+
+    def test_interrupted_auto_write_reconciles_without_a_second_mutation(self):
+        with patch.object(self.worker, "finish_write", side_effect=sqlite3.OperationalError("fixture")):
+            with self.assertRaises(sqlite3.OperationalError):
+                self.propose()
+        scope = "1/195604"
+        intent = self.worker.get("write-intent", scope)
+        self.assertTrue(intent)
+        self.assertEqual(self.row["progress"], 4)
+        result = self.worker.recover_write(self.account, scope, intent)
+        self.assertEqual(result["progress"], 4)
+        self.assertFalse(self.worker.get("write-intent", scope))
+        self.assertTrue(self.worker.get("history", intent["key"]))
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+
+    def test_unique_coverage_counts_replayed_footage_once(self):
+        self.player["tracking"] = dict(mode="manual", coverage=True)
+        for tick, pos, seek in ((1,0,0),(2,2,0),(3,0,1),(4,2,1)):
+            self.player.update(time=tick,pos=pos,seek=seek,speed=2)
+            self.publish()
+            self.worker.sample()
+        watch = self.worker.get("watch",self.worker.cycle(self.account,self.player))
+        self.assertEqual(watch["elapsed"],2)
+        self.assertEqual(watch["coverage"],2)
 
 
 if __name__ == "__main__":

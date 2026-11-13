@@ -10,13 +10,15 @@ return function(make_sheet, send, options, help)
     local layout, replace = "all", false
     local edit, edit_key, edit_base, list_status
     local status, status_timer, search
+    local search_number=0
     local filter=""
+    local pending_filter=""
     local last_read
     local record
     local ui
     local saved_groups={
-        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","folder-filter"}},
-        {"Saved matches",{"match","provider"}},
+        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","folder-filter","recognition-options"}},
+        {"Saved matches",{"match","provider","tv-rule"}},
         {"Saved caches",{"cache"}},
         {"Saved AniList data",{"watch","pending","skipped","history","entry"}},
     }
@@ -28,6 +30,8 @@ return function(make_sheet, send, options, help)
         tracking={"Tracking preferences","AniList mode, threshold and Ask preferences saved for each scope. Watch history has its own category."},
         panel={"Panel settings","The saved panel position. Clearing this record uses the conf value."},
         ["folder-filter"]={"Folder filter override","The saved folder filter mode or list. Removing it restores both values from rich-presence.conf."},
+        ["recognition-options"]={"Optional recognition settings","Clear the switches for conditional TV folder rules and local metadata files. Saved rules and the sidecar files stay available."},
+        ["tv-rule"]={"TV folder rules","Saved series identities and approved filename titles for an exact folder. Removing a folder record removes its rules. File-specific matches stay available."},
         match={"AniList corrections","Pinned AniList IDs, episode offsets and non-anime flags. Open a record to remove individual fields."},
         provider={"Other provider matches","Pinned movie, TV and music metadata. Clearing a match returns the scope to automatic lookup or its chosen provider."},
         cache={"Metadata cache","Temporary provider responses. Clearing them makes the player fetch metadata again when needed."},
@@ -78,6 +82,12 @@ return function(make_sheet, send, options, help)
         args.account=(snap.account or {}).generation
         args.notice_page=args.notice_page or ui.page
         request("service",{job=args})
+    end
+    local function start_search(provider,query)
+        search_number=search_number+1
+        search={id=tostring(search_number),provider=provider,query=query,session=snap.session}
+        service("search",{provider=provider,query=query,request=search.id,notice_page="Search results"})
+        if ui.page~="Search results" then ui.push("Search results") else ui.draw() end
     end
     local function clear_notice()
         if status_timer then status_timer:kill(); status_timer=nil end
@@ -210,15 +220,41 @@ return function(make_sheet, send, options, help)
             end,true)
             row("Cancel",ui.back)
         elseif page=="Now playing" then
-            row("Sharing   "..(snap.reason or "Waiting for mpv"))
+            row("Discord   "..(snap.reason or "Waiting for mpv"))
             row("Activity   "..(card.type or "").." "..(card.name or ""))
-            if card.details then row("Details   "..card.details) end
-            if card.state then row("State   "..card.state) end
+            if card.details and card.details~=card.name then row("Details   "..card.details) end
+            if card.state and card.state~=card.name then row("State   "..card.state) end
+            row("Why this match?",function() ui.push("Match evidence") end)
+            if snap.fingerprint_available then
+                row("Fingerprint this file",function() start_search("acoustid") end)
+            end
             row("View outgoing card",function() draft={}; replace=false; ui.push("Card preview") end)
             row("Correct match",function() pick("Recognition & folders") end)
+            if snap.allowed and (snap.match or 0)>0 then
+                row("Correct episode",function()
+                    local id, session, total=snap.match, snap.session, snap.total or 0
+                    ui.text("Episode number on this AniList entry",snap.episode or "",function(s)
+                        if session~=snap.session or id~=snap.match then return end
+                        local number=tonumber(s)
+                        if not number or number~=math.floor(number) or number<1 or number>9999 or
+                            (total>0 and number>total) then
+                            return notice("Enter a whole episode number within the AniList entry.")
+                        end
+                        confirm("Use AniList episode "..number.." for this file? Saved watch time stays with its original episode.",function()
+                            if snap.match==id then apply("match",{id=id,episode=number,not_anime=false},"file") end
+                        end)
+                    end)
+                end)
+            end
             row(snap.hidden_file and "Share this file" or "Hide this file",function() request("hide_file"); refresh() end)
             row("Use this window for Discord",function() request("claim"); refresh() end)
             if snap.match and snap.match>0 then row(valid_entry and ("AniList progress   "..entry.progress) or "View AniList progress",function() pick("AniList") end) end
+        elseif page=="Match evidence" then
+            row("Recognition   "..(snap.recognition_status or "Waiting"))
+            row("Provider   "..(snap.provider or "local"))
+            row("Recognition rule   "..(snap.source_scope or "configuration"))
+            row("Match rule   "..(snap.match_scope or "configuration"))
+            if snap.episode_review and snap.episode_review~="" then row("Review reason   "..snap.episode_review) end
         elseif page=="Card preview" then
             row("Activity   "..(card.type or "").." "..(card.name or ""))
             for _,field in ipairs({{"Details","details"},{"State","state"},{"Artwork","large_image"},{"Artwork tooltip","large_text"},
@@ -294,9 +330,19 @@ return function(make_sheet, send, options, help)
                 row("Media recognition   "..label,function() ui.push("Choose source") end)
             end
             row("Source rule   "..(snap.source_scope or "configuration"))
+            local recognition=snap.recognition_options or {}
+            switch("TV folder rules",recognition.tv_rules==true,function()
+                apply("recognition-options",{tv_rules=not recognition.tv_rules},"global")
+            end)
+            switch("Local metadata files",recognition.sidecar_metadata==true,function()
+                apply("recognition-options",{sidecar_metadata=not recognition.sidecar_metadata},"global")
+            end)
+            switch("Ask before fingerprinting",recognition.confirm_fingerprint==true,function()
+                apply("recognition-options",{confirm_fingerprint=not recognition.confirm_fingerprint},"global")
+            end)
             row("Provider settings and credits",function() ui.push("Providers") end)
             row("AniList search",function() ui.text("Search anime","",function(q)
-                service("search",{provider="anilist",query=q,notice_page="Search results"}); search="anilist"; ui.push("Search results")
+                start_search("anilist",q)
             end) end)
             row("Enter AniList ID or URL",function() ui.text("AniList ID or URL","",function(s)
                 local id=tonumber(s:match("^%d+$") or s:match("^https://anilist%.co/anime/(%d+)"))
@@ -315,11 +361,11 @@ return function(make_sheet, send, options, help)
             for _,provider in ipairs({{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},{"musicbrainz","MusicBrainz"}}) do
                 local id,name=provider[1],provider[2]
                 row("Search "..name,function() ui.text("Search "..name,"",function(q)
-                    service("search",{provider=id,query=q,notice_page="Search results"}); search=id; ui.push("Search results")
+                    start_search(id,q)
                 end) end)
             end
             row("Fingerprint this file",function()
-                service("search",{provider="acoustid",notice_page="Search results"}); search="acoustid"; ui.push("Search results")
+                start_search("acoustid")
             end)
         elseif page=="Choose source" then
             row("Inherit recognition source",function()
@@ -347,19 +393,50 @@ return function(make_sheet, send, options, help)
             link("AcoustID","https://acoustid.org/","Identifies local audio using a fingerprint. Only the fingerprint and duration are sent. The package includes an application key.",
                 options.bundled_fpcalc and "Fingerprinting included" or "Uses fpcalc on PATH")
         elseif page=="Search results" then
-            if answer.provider~=search then row("Searching…") else
-                for _,r in ipairs(answer.results or {}) do
+            local result=answer.search or {}
+            if not search or search.session~=snap.session then
+                row("Playback changed. Start a new search.")
+            elseif result.id~=search.id then row("Searching…")
+            elseif result.state=="failed" then
+                row("Search failed   "..(result.error or "Provider unavailable"))
+                row("Retry search",function() start_search(search.provider,search.query) end)
+            else
+                local current=search
+                local tv=current.provider=="tmdb-tv" or current.provider=="tvmaze"
+                for _,r in ipairs(result.results or {}) do
                     local hit=r
                     row(hit.title,function()
-                        confirm("Use "..hit.title.." for "..scope,function()
-                            if search=="anilist" then apply("match",{id=hit.id,not_anime=false})
-                            else service("select",{candidate=hit,scope=scope}) end
+                        local target=tv and "file" or scope
+                        confirm("Use "..hit.title.." for "..target,function()
+                            if search~=current then return end
+                            service("select",{candidate=hit,scope=target,request=current.id})
                         end)
                     end)
+                    if tv and snap.has_local_folder and (snap.recognition_options or {}).tv_rules then
+                        local function save_rule(dedicated)
+                            local prompt=dedicated and ("Does this folder contain only "..hit.title.."? Files with only an episode number can use this series.")
+                                or ("Save a folder rule for "..hit.title.."?")
+                            confirm(prompt,function()
+                                if search~=current then return end
+                                service("select",{candidate=hit,scope=dedicated and "tv-dedicated" or "tv-rule",request=current.id})
+                            end)
+                        end
+                        local item=row("Use "..hit.title.." for matching files in this folder",function() save_rule(false) end)
+                        item.tip="Save this series for files in this exact folder that share the approved series title. Each file still needs its own episode number or air date. Unclear or conflicting titles use Automatic recognition. Other shows can have their own rules."
+                        item=row("Dedicated folder for "..hit.title,function() save_rule(true) end)
+                        item.tip="Use only for a folder dedicated to this one series. A file named S02E04 can use this rule. A file with a conflicting title or identifier uses regular recognition. Only one series per folder can claim files with no title."
+                    end
                 end
-                if #(answer.results or {})==0 then row("No results") end
+                if #(result.results or {})==0 then row("No results") end
             end
         elseif page=="Privacy & windows" then
+            local status_row=row("Discord status   "..(snap.reason or "Waiting"))
+            status_row.tip="Read only. Shows whether this window can publish a full or generic card, or why sharing is paused or hidden. Other windows may publish their own cards."
+            local lookup_row=row("Online metadata   "..(snap.allowed and "Allowed" or "Blocked"))
+            lookup_row.tip="Read only. When allowed, supported providers receive the search title and relevant tags or episode numbers. When blocked, new lookups and AniList requests for this file are stopped. Private sessions and folder exclusions take priority."
+            local tracking_row=row("AniList tracking   "..(snap.track_allowed and "Eligible" or "Off or blocked"))
+            tracking_row.tip="Read only. Shows whether current permissions allow counting watch time. The AniList page also shows whether this particular episode is confirmed and can update the list."
+            row("Local watch history",function() ui.push("Saved AniList data") end)
             scope_row()
             row("Folder filters",function() ui.push("Folder filters") end)
             choice("Discord",{"full","generic","hidden"},(snap.privacy or {}).mode or "full",function(v)
@@ -455,7 +532,15 @@ return function(make_sheet, send, options, help)
             end
         elseif page=="AniList" then
             row("Account   "..(account.name or "Not signed in"))
+            if account.name then
+                local item=row("Connection   "..(account.persistent and "Saved on this device" or "This session only"))
+                item.tip="Read only. Saved connections use the operating system's credential store. Session-only connections expire when the helper or mpv exits."
+            end
             row(account.expired and "Reconnect to AniList" or account.name and "Switch or reconnect account" or "Connect account",function() service("connect") end)
+            if answer.signin then
+                local item=row("Cancel browser sign-in",function() request("cancel_connect",{id=answer.signin}) end)
+                item.tip="Cancel this browser attempt and discard the pending connection. A previously connected account stays active."
+            end
             if not account.name then
                 row("Connect for this session",function() service("connect",{session_only=true}) end)
             end
@@ -479,6 +564,10 @@ return function(make_sheet, send, options, help)
             elseif elapsed<=0 then watch_status="No time recorded yet"
             else watch_status=duration(elapsed) end
             row("Episode watch time   "..watch_status)
+            if tracking.coverage then
+                local item=row("Unique footage watched   "..duration(watch.coverage or 0))
+                item.tip="Read only. Shows how much distinct footage was played while this option was enabled. Replaying a scene counts once here. The episode watch timer and AniList threshold still use real elapsed playback time."
+            end
             if snap.episode_review and snap.episode_review~="" then
                 row("Episode type   "..snap.episode_review)
             end
@@ -531,6 +620,9 @@ return function(make_sheet, send, options, help)
             switch("Resume unfinished time",tracking.resume~=false,function()
                 apply("tracking",{resume=tracking.resume==false})
             end)
+            switch("Measure unique footage",tracking.coverage==true,function()
+                apply("tracking",{coverage=not tracking.coverage})
+            end)
             switch("Keep offline proposals",tracking.keep_pending==true,function()
                 apply("tracking",{keep_pending=not tracking.keep_pending})
             end)
@@ -570,17 +662,27 @@ return function(make_sheet, send, options, help)
                 end)
             end)
         elseif page=="Pending updates" then
+            if #(snap.pending or {})>0 then
+                local item=row("Filter updates",function() ui.text("Filter by title or episode",pending_filter,function(value) pending_filter=value end) end)
+                item.tip="Search pending proposals by anime title or episode number. Filtering changes the display only. Open the matching episode to verify and apply an update."
+                if pending_filter~="" then row("Clear filter",function() pending_filter="" end) end
+            end
+            local visible=0
             for _,item in ipairs(snap.pending or {}) do
                 local prop=item
                 local label=(prop.title~="" and prop.title or ("AniList "..prop.media)).." · Episode "..prop.episode
-                row(label,nil,false,nil,"Proposal "..prop.key)
-                if prop.offline then row("Waiting to refresh remote progress")
-                elseif snap.allowed and snap.watch_episode and prop.media==snap.match and prop.episode==tonumber(snap.episode) then
-                    review_update(prop)
-                else row("Play this episode to apply its update") end
-                row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
+                if label:lower():find(pending_filter:lower(),1,true) then
+                    visible=visible+1
+                    row(label,nil,false,nil,"Proposal "..prop.key)
+                    if prop.offline then row("Waiting to refresh remote progress")
+                    elseif snap.allowed and snap.watch_episode and prop.media==snap.match and prop.episode==tonumber(snap.episode) then
+                        review_update(prop)
+                    else row("Play this episode to apply its update") end
+                    row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
+                end
             end
             if #(snap.pending or {})==0 then row("No pending updates") end
+            if #(snap.pending or {})>0 and visible==0 then row("No updates match the filter") end
         elseif page=="Ask prompt timeout" then
             local function set_timeout(value)
                 apply("tracking",{ask_timeout=value})
@@ -666,7 +768,7 @@ return function(make_sheet, send, options, help)
             end
         elseif page=="Saved match" and record then
             row("Scope   "..record.scope)
-            for _,field in ipairs({{"id","Pinned AniList ID"},{"not_anime","Non-anime flag"},{"offset","Episode offset"}}) do
+            for _,field in ipairs({{"id","Pinned AniList ID"},{"not_anime","Non-anime flag"},{"offset","Episode offset"},{"episode","Corrected episode"}}) do
                 local key,label=field[1],field[2]
                 if record.fields[key]~=nil then
                     row(label.."   "..tostring(record.fields[key]),function()
@@ -679,7 +781,9 @@ return function(make_sheet, send, options, help)
             end
         elseif page=="Diagnostics" then
             row("Sharing   "..(snap.reason or "Waiting")); row("SDK   "..(snap.sdk or "Waiting"))
+            if (snap.last_published or 0)>0 then row("Last Discord publish   "..clock_time(snap.last_published)) end
             row("Configuration   "..(snap.configured and "Received" or "Waiting"))
+            if options.helper_status then row("Python helper   "..options.helper_status()) end
             row("Publisher   "..(snap.owner and "This window" or "Other window"))
             row("Lookup   "..(snap.allowed and "Allowed" or "Blocked"))
             row("Recognition status   "..tostring(snap.recognition_status or "Waiting"))

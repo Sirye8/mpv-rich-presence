@@ -10,6 +10,11 @@ local help = {
     ["View outgoing card"]="Open the read-only preview of the text, artwork and links Discord receives.",
     ["Preview"]="Open the read-only card preview with your current Appearance draft.",
     ["Correct match"]="Open recognition settings to change the source, title match or episode offset.",
+    ["Correct episode"]="Enter the episode number used by the current AniList entry. This saves a correction for the current file only and leaves time already counted against the previous episode there. To change the series or season entry, use Correct match first.",
+    ["Why this match?"]="See the chosen provider, the scope of the active recognition and match rules, and any reason AniList needs a review.",
+    ["Local watch history"]="Review saved episode timers, list snapshots and pending changes on this device. Changing Discord visibility does not erase these records.",
+    ["Retry search"]="Run this search again for the same file. A new search clears the previous result set so only results for this request can be selected.",
+    ["Python helper"]="The local process that handles AniList sign-in, tracking, and supplemental metadata. If it exits, mpv retries with increasing delays. A new account or search action can retry after automatic recovery runs out.",
     ["Hide this file"]="Hide Discord for this file. The separate tracking permission still applies.",
     ["Share this file"]="Remove the temporary hide for this file.",
     ["Use this window for Discord"]="Make this window the active Discord publisher.",
@@ -43,6 +48,9 @@ local help = {
     ["Cancel"]="Discard the current action or unsaved preview.",
     ["Confirm"]="Apply the action described above to the selected scope.",
     ["Media recognition"]="Choose which providers can look up media for this scope. A file rule takes priority over the nearest folder rule, then the global panel rule, then the conf default. Choose Inherit to remove the current override.",
+    ["TV folder rules"]="Off by default. When enabled, a TMDB TV or TVmaze search can save a series for matching titles in the exact folder. For example, a Loki rule can match Loki.S02E04 while Severance.S02E04 uses its own rule or Automatic. Bare episode numbers and conflicting titles use Automatic. Every file resolves its own episode. Rules are saved in Saved data and become inactive when this switch is off.",
+    ["Local metadata files"]="Off by default. When enabled, a video can have a .mpv-rp.json file beside it, such as Loki.S02E04.mpv-rp.json next to Loki.S02E04.mkv. Set kind to movie or tv and tmdb to a numeric TMDB ID. For TV, season and episode are optional integers. The plugin fetches the referenced metadata only when lookups are allowed. Existing manual matches take precedence.",
+    ["Measure unique footage"]="Off by default. Count the parts of an episode that actually played while this option was enabled. Replaying five minutes adds five minutes to elapsed watch time and only counts those five minutes once here. Seeks, pauses, and buffering add no coverage. The AniList threshold continues to use elapsed watch time. This setting follows Save for and Resume unfinished time.",
     ["Inherit recognition source"]="Remove this override and use the next applicable folder, global, or conf setting.",
     ["Automatic"]="Run the AniList anime matcher first for video. If it completes without a match, try movie or TV providers. For local audio, start with MusicBrainz tags and try AcoustID if the tags do not identify a match.",
     ["Anime"]="Use AniList's anime matcher only. If nothing matches, use the local title.",
@@ -145,6 +153,18 @@ local help = {
 }
 
 local choices = {
+    ["Ask before fingerprinting"]={
+        On="If MusicBrainz cannot identify a local track, show Fingerprint this file in Now playing. Choosing it sends an audio fingerprint and duration to AcoustID. The audio file stays on this device.",
+        Off="Keep the default fallback. Automatic can look up a fingerprint when local tags and MusicBrainz cannot identify the track."},
+    ["TV folder rules"]={
+        On="Offer conditional series rules in TV search results. A rule needs a matching series title and an episode or date. Each file gets its own episode metadata.",
+        Off="Ignore saved folder series rules. File-specific corrections and the selected recognition source still apply."},
+    ["Local metadata files"]={
+        On="Read a matching .mpv-rp.json file beside the video when supplemental recognition runs. Use a TMDB movie or TV ID and optional TV season and episode.",
+        Off="Use normal recognition and saved manual matches. Local metadata files are ignored."},
+    ["Measure unique footage"]={
+        On="Count each part of the episode once while this is enabled. The watch timer and AniList threshold still count real playback time.",
+        Off="Stop recording unique coverage. Watch time and AniList progress follow your tracking mode."},
     ["Filter mode"]={disabled="Ignore the folder list.",whitelist="Allow only listed folders and their subfolders. An empty whitelist blocks every file.",blacklist="Block listed folders and their subfolders. An empty blacklist blocks no files."},
     ["Save for"]={global="Apply to all media.",folder="Apply to this folder and its subfolders.",file="Apply only to the current file."},
     ["Media layout"]={all="Every media type.",anime="Matched anime.",audio="Unmatched audio.",video="Unmatched video.",

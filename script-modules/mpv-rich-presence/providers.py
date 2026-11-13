@@ -794,9 +794,13 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
         return item
     item = dict(hit, provider=provider)
     if provider.startswith("tmdb-"):
-        throttle(provider)
         kind = hit["kind"]
-        data = tmdb_request("/%s/%d" % (kind, hit["id"]), settings)
+        series = settings.get("tmdb_series") if kind=="tv" else None
+        if series:
+            data = series(hit["id"])
+        else:
+            throttle(provider)
+            data = tmdb_request("/%s/%d" % (kind, hit["id"]), settings)
         item["name"] = data.get("title") or data.get("name") or hit["name"]
         item["year"] = (data.get("release_date") or data.get("first_air_date") or "")[
             :4

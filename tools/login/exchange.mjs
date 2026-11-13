@@ -74,9 +74,13 @@ export default {
       }
       if (request.method === "GET" && url.pathname === "/callback") {
         const { state, challenge } = await unseal(key, "approval", url.searchParams.get("state"));
+        const dest = new URL(loopback);
+        if (url.searchParams.get("error") === "access_denied") {
+          dest.search = new URLSearchParams({ state, error: "access_denied" }).toString();
+          return new Response(null, { status: 303, headers: { ...headers, Location: dest.href } });
+        }
         const code = url.searchParams.get("code");
         if (!code || code.length > 4096) throw Error();
-        const dest = new URL(loopback);
         dest.search = new URLSearchParams({ state, code: await seal(key, "ticket", { code, challenge }, 90) }).toString();
         return new Response(null, { status: 303, headers: { ...headers, Location: dest.href } });
       }

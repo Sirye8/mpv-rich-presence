@@ -34,6 +34,12 @@ def fixture_cases():
     clover = anime(97940, "Black Clover", 170, sequel=195604)
     clover2 = anime(195604, "Black Clover 2nd Season", None)
     cases = []
+    same_title = [anime(90001, "Identical Fixture", 12), anime(90002, "Identical Fixture", 12)]
+    for rows in (same_title, list(reversed(same_title))):
+        cases.append(case("[Group] Identical Fixture - 03 (1080p).mkv", ("local", "", ""),
+                          page=rows, watch=False))
+    cases.append(case("[Group] Identical Fixture - 03 (1080p).mkv", ("anilist", 90001, 3),
+                      page=[same_title[0], same_title[0]], watch=True))
     for episode in (1, 169, 170, 171, 172, 174, 180, 200):
         second = episode > 170
         cases.append(case(

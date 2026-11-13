@@ -6,5 +6,7 @@
 
 namespace mpvrp
 {
-    void publish_activity(rich_presence_state& state, const nlohmann::json& card, Discord_Client_UpdateRichPresenceCallback callback);
+    void publish_activity(rich_presence_state& state, const nlohmann::json& card,
+        Discord_Client_UpdateRichPresenceCallback callback, void* context = nullptr,
+        Discord_FreeFn free_context = nullptr);
 }

@@ -61,7 +61,7 @@ return function(model)
     local ui = {open=false, page="Menu", memory={}, stack={}, hits={}}
     local overlay, layout, refresh_timer, toast_timer, hover_timer, animation_timer
     local last_frame, last_terminal
-    local keys, editing, pressed, hovered, tooltip = {}
+    local keys, editing, pressed, hovered, tooltip, drag = {}
     local scale = 1
     local motion = {shell=0, page=1, focus=1, hover=0, hint=0, scroll=0}
     local tweens = {}
@@ -200,8 +200,8 @@ return function(model)
         end
         if layout.scroll then
             local scroll = layout.scroll
-            box(ass,right-5,top+45,right-3,bottom-43,theme.rim,.19*shell,1)
-            box(ass,right-5,scroll.first,right-3,scroll.last,theme.accent,.8*shell,1)
+            box(ass,right-6,scroll.start,right-2,scroll.finish,theme.rim,.25*shell,2)
+            box(ass,right-6,scroll.first,right-2,scroll.last,theme.accent,(drag and 1 or .8)*shell,2)
         end
         if tooltip and motion.hint>0 then
             local tip = tooltip
@@ -380,7 +380,7 @@ return function(model)
         mp.unobserve_property(ui.draw)
         mp.unobserve_property(ui.mouse_moved)
         unbind()
-        ui.stack,ui.hits,pressed,editing = {},{},nil,nil
+        ui.stack,ui.hits,pressed,editing,drag = {},{},nil,nil,nil
         model.closed()
         tweens={}
         if layout and overlay then animate("shell",motion.shell,0,.14) end
@@ -396,7 +396,7 @@ return function(model)
         if model.changed then model.changed() end
         if layout then layout.direction=direction end
         ui.page=page
-        pressed=nil
+        pressed,drag=nil,nil
         clear_hover(true)
         animate("page",0,1,.16)
         model.refresh()
@@ -484,8 +484,11 @@ return function(model)
                 item.display=display(page,15,item.r-item.x-21)
             end
         end
-        mem.top=math.max(1,math.min(mem.top,mem.focus,math.max(1,#rows-available+1)))
-        if mem.focus>=mem.top+available then mem.top=mem.focus-available+1 end
+        mem.top=math.max(1,math.min(mem.top,math.max(1,#rows-available+1)))
+        if mem.reveal then
+            mem.top=math.max(mem.focus-available+1,math.min(mem.top,mem.focus))
+            mem.reveal=nil
+        end
         for i=mem.top,math.min(#rows,mem.top+available-1) do
             local row=rows[i]
             local y=top+44+(i-mem.top)*row_step
@@ -546,7 +549,8 @@ return function(model)
         if #rows>shown then
             local size=shown*row_step-3
             local first=top+45+size*(mem.top-1)/#rows
-            layout.scroll={first=first,last=first+size*shown/#rows}
+            layout.scroll={first=first,last=first+size*shown/#rows,
+                start=top+45, finish=top+45+size, limit=#rows-shown+1, page_size=shown}
         end
         if previous and previous.page==ui.page and previous.focus~=mem.id then animate("focus",.4,1,.11) end
         if tooltip then
@@ -565,21 +569,60 @@ return function(model)
         clear_hover(false)
         mem.id=nil
         mem.focus=mem.focus+delta
+        mem.reveal=true
         ui.draw()
     end
 
     local function activate(delta)
-        local row=model.rows(ui.page)[ui.memory[ui.page].focus]
+        local mem=ui.memory[ui.page]
+        mem.reveal=true
+        local row=model.rows(ui.page)[mem.focus]
         if row and not row.disabled then
             if delta and row.adjust then row.adjust(delta) elseif not delta and row.run then row.run() end
             ui.draw()
         end
     end
 
+    local function scroll_to(value)
+        local mem=ui.memory[ui.page]
+        local top=math.max(1,math.min(layout.scroll.limit,value))
+        if top==mem.top then return end
+        mem.top=top
+        clear_hover(true)
+        ui.draw()
+    end
+
     local function pointer(event)
         if not ui.open or editing then return end
         local x,y=mp.get_mouse_pos()
         x,y=x/scale,y/scale
+        local bar=layout and layout.scroll
+        if drag then
+            if event=="up" or drag.page~=ui.page or not bar then
+                drag=nil
+                render()
+            elseif event=="hover" then
+                local travel=bar.finish-bar.start-(bar.last-bar.first)
+                if travel>0 then scroll_to(1+math.floor((y-bar.start-drag.offset)/travel*(bar.limit-1)+.5)) end
+            end
+            return
+        end
+        if bar and x>=layout.right-8 and x<layout.right and y>=bar.start and y<=bar.finish then
+            if event=="down" then
+                pressed=nil
+                if y>=bar.first and y<bar.last then
+                    drag={page=ui.page,offset=y-bar.first}
+                    clear_hover(true)
+                    render()
+                else
+                    scroll_to(ui.memory[ui.page].top+(y<bar.first and -bar.page_size or bar.page_size))
+                end
+            elseif event=="hover" and hovered then
+                clear_hover(true)
+                render()
+            end
+            return
+        end
         local target
         for _,item in ipairs(ui.hits) do
             if x>=item.x and x<item.r and y>=item.y and y<item.b then target=item; break end
@@ -631,21 +674,38 @@ return function(model)
     end
 
     ui.mouse_moved=function(_,position)
-        if position and position.hover==false then clear_hover(false); render()
+        if position and position.hover==false then drag=nil; clear_hover(false); render()
         else pointer("hover") end
     end
     local function scroll(delta)
         if tooltip and tooltip.key==hovered and tooltip.max_scroll>0 then
             tooltip.scroll=math.max(0,math.min(tooltip.max_scroll,tooltip.scroll+delta*72))
             render()
-        else focus(delta) end
+        elseif layout and layout.scroll then
+            local mem=ui.memory[ui.page]
+            mem.wheel=(mem.wheel or 0)+delta*3
+            local steps=mem.wheel>=0 and math.floor(mem.wheel) or math.ceil(mem.wheel)
+            mem.wheel=mem.wheel-steps
+            if steps~=0 then scroll_to(mem.top+steps) end
+        end
     end
-    mp.set_key_bindings({
+    local bindings={
         {"wheel_up",function() scroll(-1) end},
         {"wheel_down",function() scroll(1) end},
         {"mbtn_left",nil,function() pointer("down") end,function() pointer("up") end},
         {"mbtn_left_dbl","ignore"},
-    },mouse_section,"force")
+    }
+    if mp.register_script_message and mp.get_script_name then
+        local name=mouse_section.."-wheel"
+        mp.add_key_binding(nil,name,function(event)
+            if event.event=="press" or event.event=="down" then
+                scroll((event.arg=="up" and -1 or 1)*(event.scale or 1))
+            end
+        end,{complex=true,scalable=true})
+        bindings[1][2]="script-binding "..mp.get_script_name().."/"..name.." up"
+        bindings[2][2]="script-binding "..mp.get_script_name().."/"..name.." down"
+    end
+    mp.set_key_bindings(bindings,mouse_section,"force")
 
     local function controls()
         if not model.compact or not dimensions() then

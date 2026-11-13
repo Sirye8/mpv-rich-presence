@@ -93,7 +93,8 @@ def read_entry(token, viewer, media, call=graphql):
 
 
 def save_progress(
-    token, base, target, total, valid, call=graphql, status=None, repeat_count=None
+    token, base, target, total, valid, call=graphql, status=None, repeat_count=None,
+    before_send=lambda: None,
 ):
     if type(target) is not int or target < 0 or (total and target > total):
         raise AccountError("Progress is out of range.")
@@ -143,6 +144,7 @@ def save_progress(
         + arguments
         + "){id userId mediaId progress status repeat updatedAt}}"
     )
+    before_send()
     try:
         row = dict(call(query, variables, token)["SaveMediaListEntry"])
     except SessionExpired:
@@ -162,7 +164,27 @@ def save_progress(
     return dict(row, viewer=base["viewer"], media=base["media"])
 
 
-def callback_server(state, port=47653, code_flow=False, exchange=None):
+def signin_page(title, description, content=""):
+    return f"""<!doctype html><html lang="en"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(title)} | mpv Rich Presence</title>
+<style>
+:root {{color-scheme:dark;font:16px system-ui,sans-serif;background:#0b1622;color:#e5edf5}}
+body {{margin:0;min-height:100vh;display:grid;place-items:center}}
+main {{box-sizing:border-box;width:min(92vw,30rem);padding:2rem;background:#152232;border:1px solid #293b50;border-radius:20px}}
+header {{font-size:.85rem;font-weight:700;color:#71caff}}
+h1 {{font-size:1.55rem;margin:.6rem 0}} p {{line-height:1.55;color:#bacadd}}
+.profile {{display:flex;align-items:center;gap:1rem;margin:1.4rem 0}}
+img {{width:3.5rem;height:3.5rem;border-radius:50%;object-fit:cover}}
+form {{display:flex;gap:.65rem;flex-wrap:wrap;align-items:center}}
+button,a {{font:inherit;color:#8ad1ff}} button {{cursor:pointer;border:1px solid #426480;border-radius:10px;background:#1b3046;padding:.65rem .9rem}}
+button.primary {{background:#68c4ff;color:#0b1622;border-color:transparent;font-weight:700}}
+:focus-visible {{outline:3px solid #a6ddff;outline-offset:3px}}
+</style><main><header>mpv Rich Presence · AniList</header>
+<h1>{html.escape(title)}</h1><p>{html.escape(description)}</p>{content}</main></html>"""
+
+
+def callback_server(state, port=47653, code_flow=False, exchange=None, review=None, connect=None):
     class Callback(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -172,12 +194,41 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'",
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                "img-src https://s4.anilist.co; connect-src 'self'; form-action 'self'; frame-ancestors 'none'",
             )
             self.end_headers()
             self.wfile.write(body.encode())
+
+        def show_review(self, token):
+            try:
+                viewer = review(token)
+            except (AccountError, OSError, ValueError, KeyError) as exc:
+                self.server.error = str(exc) if isinstance(exc, AccountError) else "AniList did not return an account profile."
+                self.send_body(502, signin_page("Sign-in failed", self.server.error))
+                return
+            self.server.provisional = (token, viewer)
+            name = html.escape(viewer["name"])
+            avatar = (viewer.get("avatar") or {}).get("medium") or ""
+            image = (f'<img src="{html.escape(avatar, quote=True)}" alt="">'
+                     if avatar.startswith("https://s4.anilist.co/") else "")
+            self.send_body(200, signin_page("Connect your AniList account",
+                "Confirm the account you want to use for watch tracking in mpv.",
+                f"""<script>history.replaceState(null,"","/callback");
+                addEventListener("load",()=>setTimeout(()=>{{
+                    const form=document.querySelector("form");
+                    if(form){{const p=document.createElement("p");
+                    p.textContent="This sign-in expired. Return to mpv and choose Connect again.";
+                    form.replaceWith(p);}}
+                }}, {max(0, int((self.server.deadline-time.monotonic())*1000))}));</script>
+                <div class="profile">{image}<strong>{name}</strong></div>
+                <form action="/confirm" method="post"><input type="hidden" name="state" value="{state}">
+                <button class="primary" name="action" value="connect">Connect as {name}</button>
+                <button name="action" value="switch">Use another account</button>
+                <button name="action" value="cancel">Cancel</button></form>"""))
 
         def do_GET(self):
             request = urllib.parse.urlsplit(self.path)
@@ -187,15 +238,19 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
                 return self.send_error(404)
             if code_flow:
                 params = urllib.parse.parse_qs(request.query)
-                if not secrets.compare_digest(
-                    params.get("state", [""])[0], state
-                ) or not params.get("code"):
+                if not secrets.compare_digest(params.get("state", [""])[0], state):
+                    return self.send_error(400)
+                if review and params.get("error"):
+                    self.server.error = "AniList authorization was declined."
+                    return self.send_body(400, signin_page("Authorization declined",
+                        "Return to mpv and choose Connect to try again."))
+                if not params.get("code") or self.server.provisional:
                     return self.send_error(400)
                 code = params["code"][0]
                 if exchange:
                     self.server.code = code
                     try:
-                        self.server.result = exchange(code, None, False)
+                        token = exchange(code, None, False)
                     except ClientSecretRequired:
                         self.send_body(
                             200,
@@ -216,8 +271,11 @@ def callback_server(state, port=47653, code_flow=False, exchange=None):
                             if isinstance(exc, AccountError)
                             else "Sign-in failed during the code exchange."
                         )
-                        self.send_body(502, html.escape(self.server.error))
+                        self.send_body(502, signin_page("Sign-in failed", self.server.error))
                         return
+                    if review:
+                        return self.show_review(token)
+                        self.server.result = token
                 else:
                     self.server.result = code
                 self.send_body(
@@ -241,7 +299,7 @@ r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting ag
             # state-verified callback. Reject foreign hosts and origins.
             allowed_origins = (origin, "null", None) if code_flow else (origin,)
             if (
-                self.path != path
+                (self.path != path and not (review and self.path=="/confirm"))
                 or self.headers.get("Host") != origin.removeprefix("http://")
                 or self.headers.get("Origin") not in allowed_origins
             ):
@@ -253,17 +311,47 @@ r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting ag
                 result = urllib.parse.parse_qs(self.rfile.read(size).decode("ascii"))
                 if not secrets.compare_digest(result["state"][0], state):
                     raise ValueError()
+                if self.path=="/confirm":
+                    if not self.server.provisional:
+                        return self.send_error(400)
+                    if time.monotonic()>=self.server.deadline:
+                        self.server.error = "Sign-in timed out."
+                        return self.send_body(410, signin_page("Sign-in expired", "Return to mpv and choose Connect again."))
+                    token, viewer = self.server.provisional
+                    self.server.provisional = None
+                    action = result.get("action", [""])[0]
+                    if action == "switch":
+                        self.server.error = "Switch accounts on AniList, then reconnect."
+                        return self.send_body(200, signin_page("Use another account",
+                            "Switch accounts on AniList, then return to mpv and choose Connect again.",
+                            '<a href="https://anilist.co/" rel="noreferrer" target="_blank">Open AniList</a>'))
+                    if action != "connect":
+                        self.server.error = "Sign-in cancelled."
+                        return self.send_body(200, signin_page("Sign-in cancelled",
+                            "You can close this tab and return to mpv."))
+                    try:
+                        persistent = connect(token, viewer)
+                    except Exception as exc:
+                        self.server.error = str(exc) if isinstance(exc, AccountError) else "mpv could not save this connection."
+                        return self.send_body(502, signin_page("Connection failed", self.server.error))
+                    self.server.result = token
+                    return self.send_body(200, signin_page(
+                        "Connected" if persistent else "Connected for this session",
+                        f"You are connected as {viewer['name']}. Return to mpv or close this tab."))
                 if code_flow:
                     if not exchange or not getattr(self.server, "code", None):
                         return self.send_error(400)
                     try:
-                        self.server.result = exchange(
+                        token = exchange(
                             self.server.code, result["secret"][0], "remember" in result
                         )
                     except (AccountError, OSError):
                         self.server.error = "AniList declined the code exchange. Reconnect with your current credentials."
                         self.send_body(400, self.server.error)
                         return
+                    if review:
+                        return self.show_review(token)
+                    self.server.result = token
                     self.send_body(200, "Connected. Return to mpv.")
                     return
                 token = result["access_token"][0]
@@ -286,6 +374,8 @@ r.ok?"Return to mpv. You can close this tab.":"Sign-in failed. Try connecting ag
     server.timeout = 1
     server.error = None
     server.result = None
+    server.provisional = None
+    server.deadline = time.monotonic() + 180
     return server
 
 
@@ -364,7 +454,8 @@ def wake_exchange(
 
 
 def authorize(
-    client_id, valid, flow="pkce", vault=None, broker="", progress=lambda message: None
+    client_id, valid, flow="pkce", vault=None, broker="", progress=lambda message: None,
+    review=None, connect=None,
 ):
     if not str(client_id).isdigit():
         raise AccountError("Set anilist_client_id in rich-presence.conf first.")
@@ -418,7 +509,7 @@ def authorize(
             vault.write(key, secret)
         return token
 
-    with callback_server(state, code_flow=code_flow, exchange=exchange) as server:
+    with callback_server(state, code_flow=code_flow, exchange=exchange, review=review, connect=connect) as server:
         params = dict(
             client_id=client_id,
             response_type="code" if code_flow else "token",
@@ -452,7 +543,7 @@ def authorize(
         progress("Approve access in your browser, then return to mpv.")
         if not webbrowser.open(url):
             raise AccountError("Could not open your browser.")
-        limit = time.monotonic() + 180
+        limit = server.deadline = time.monotonic() + 180
         while time.monotonic() < limit and not server.result and not server.error:
             valid()
             server.handle_request()

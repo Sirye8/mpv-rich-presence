@@ -2,6 +2,7 @@
 #include "mpv_rich_presence/activity.hpp"
 #include "mpv_rich_presence/string_utils.hpp"
 
+#include <algorithm>
 #include <format>
 #include <regex>
 #include <sstream>
@@ -22,6 +23,9 @@ namespace mpvrp
         std::string part, result;
         while (std::getline(input,part,'|'))
         {
+            static const std::regex placeholder(R"(\{([a-zA-Z_][a-zA-Z_0-9]*)\})");
+            if (std::any_of(std::sregex_iterator(part.begin(),part.end(),placeholder),std::sregex_iterator{},
+                [&](const auto& token) { return !fields.contains(token[1].str()); })) continue;
             bool missing = false;
             for (auto& [key,value] : fields.items())
             {
@@ -186,7 +190,7 @@ namespace mpvrp
             }
         }
         if (options.contains("compact")) card["compact"] = options.at("compact");
-        card["name"] = truncate_utf8_bytes(name, 128);
+        card["name"] = name.empty() ? "mpv" : truncate_utf8_bytes(name, 128);
         if (!details.empty() && options.value("details", true)) card["details"] = details;
         if (!state.empty() && options.value("state", true)) card["state"] = state;
         if (options.value("badge", !generic))
@@ -216,6 +220,8 @@ namespace mpvrp
                     card["end"] = m.now + static_cast<uint64_t>(m.playtime_left * 1000);
             }
         }
+        for (const auto* key : {"details","state","large_text","small_text"})
+            if (card.contains(key)) card[key] = truncate_utf8_bytes(card.at(key).get_ref<const std::string&>(),128);
         return card;
     }
 }

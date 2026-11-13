@@ -53,6 +53,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "mpv_rich_presence/anime_recognition.hpp"
@@ -135,7 +136,11 @@ static void read_profiles(rich_presence_state& state)
         state.hard_block = state.store->blocked(state.scope_path);
         state.appearance = state.store->effective("appearance", state.scope_path, &state.appearance_scope);
         state.correction = state.store->effective("match", state.scope_path, &state.match_scope);
-        state.provider = state.store->effective("provider", state.scope_path);
+        std::string provider_scope;
+        state.provider = state.store->effective("provider", state.scope_path, &provider_scope);
+        if (provider_scope!="file override" && state.provider.value("kind",std::string{})=="tv")
+            state.provider = state.store->get("provider","file:"+state.scope_path);
+        state.recognition_options = state.store->get("recognition-options","global");
         state.sources = state.store->effective("sources", state.scope_path, &state.source_scope);
         state.tracking = state.store->effective("tracking", state.scope_path);
         state.folder_filter = state.store->get("folder-filter", "global");
@@ -320,7 +325,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     state.episode_label = std::move(match->episode_label);
     state.episode_review = std::move(match->episode_review);
     state.watch_episode = match->watch_episode;
-    state.is_anime = true;
+    state.is_anime = media.id>0;
     state.conflicting_anime_minutes = match->conflicting_anime_minutes;
     state.fuzzy_episode_match = match->fuzzy_episode;
     state.anime_duration_minutes = media.duration_minutes;
@@ -370,19 +375,31 @@ static void anime_worker_loop(rich_presence_state& state)
             state.has_pending_lookup = false;
         }
 
-        bool confirmed = true;
-        try
+        for (const auto delay : {0s, 5s, 15s})
         {
-            process_anime_lookup(state, filename_str, folder, duration, embedded_title, current_load_id, correction, confirmed);
+            if (delay != 0s)
+            {
+                std::unique_lock lock(state.worker_mutex);
+                if (state.worker_cv.wait_for(lock, delay, [&] {
+                    return state.worker_stop.load(std::memory_order_acquire) ||
+                        state.has_pending_lookup || state.file_load_id != current_load_id;
+                })) break;
+            }
+            if (state.file_load_id != current_load_id) break;
+            bool confirmed = true;
+            try
+            {
+                process_anime_lookup(state, filename_str, folder, duration, embedded_title, current_load_id, correction, confirmed);
+            }
+            catch (...)
+            {
+                confirmed = false;
+            }
+            if (state.file_load_id != current_load_id) break;
+            state.failed_anime_lookup = confirmed ? -1 : current_load_id;
+            state.completed_anime_lookup = current_load_id;
+            if (confirmed) break;
         }
-        catch (...)
-        {
-            confirmed = false;
-        }
-        // A failed search is terminal for this attempt. Keep it distinct from
-        // a confirmed miss so Automatic can still protect ambiguous anime.
-        if (!confirmed) state.failed_anime_lookup = current_load_id;
-        state.completed_anime_lookup = current_load_id;
     }
 }
 
@@ -412,11 +429,15 @@ static void on_eligibility_changed(rich_presence_state& state)
             std::lock_guard<std::mutex> lock(state.anime_mutex);
             state.is_anime = false;
             state.anime_anilist_id = 0;
+            state.episode_review.clear();
         }
-        if (state.is_rpc_visible && state.discord_api && state.discord)
+        if ((state.is_rpc_visible || state.publish_pending) && state.discord_api && state.discord)
         {
             state.discord_api->Discord_Client_ClearRichPresence(&state.discord->get());
             state.is_rpc_visible = false;
+            state.presence_wanted = false;
+            state.publish_pending = false;
+            ++state.publish_generation;
         }
     }
     else
@@ -488,10 +509,13 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             else if (!val.is_boolean()) return false;
         }
         if (category == "sources" && !(key == "source" && valid_source(val))) return false;
+        if (category == "recognition-options" &&
+            !((key=="tv_rules" || key=="sidecar_metadata" || key=="confirm_fingerprint") && val.is_boolean())) return false;
         if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
             val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
         if (category == "match" && !((key == "id" && val.is_number_integer() && val > 0 && val <= INT32_MAX)
             || (key == "offset" && val.is_number_integer() && val >= -9999 && val <= 9999)
+            || (key == "episode" && val.is_number_integer() && val > 0 && val <= 9999)
             || (key == "not_anime" && val.is_boolean()))) return false;
         if (category == "exclude" && !(key == "blocked" && val.is_boolean())) return false;
         if (category == "privacy" && !(key == "mode" && (val == "hidden" || val == "generic" || val == "full"))) return false;
@@ -503,7 +527,7 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             || (key == "ask_leave_position" && (val == "center" || val == "top-left" || val == "top-center" || val == "top-right"
                 || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))
             || (key == "ask_timeout" && val.is_number_integer() && (val == 0 || (val >= 5 && val <= 300)))
-            || ((key == "without_sharing" || key == "resume" || key == "rewatch" || key == "keep_pending") && val.is_boolean()))) return false;
+            || ((key == "without_sharing" || key == "resume" || key == "rewatch" || key == "keep_pending" || key=="coverage") && val.is_boolean()))) return false;
     }
     return true;
 }
@@ -614,6 +638,11 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 return;
             }
             if (req.value("session", state.file_session) != state.file_session) return;
+            if (action=="cancel_connect" && state.store)
+            {
+                state.store->put("signin-cancel",state.instance_id,{{"id",req.value("id",std::string{})}});
+                return;
+            }
             if (action == "ask_dismiss")
             {
                 if (req.value("id", std::string{}) == state.ask_offer)
@@ -647,6 +676,18 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     && !lookup_allowed(state)) return;
                 job["window"] = state.instance_id;
                 job["session"] = state.file_session;
+                if (op=="search")
+                {
+                    const auto request = job.value("request", std::string{});
+                    if (request.empty() || request.size()>64) return;
+                    state.store->put("search-request",state.instance_id,{{"id",request}});
+                }
+                if (op=="connect")
+                {
+                    const auto attempt = generate_instance_id();
+                    job["attempt"] = attempt;
+                    state.store->put("signin-request",state.instance_id,{{"id",attempt}});
+                }
                 {
                     std::lock_guard lock(state.anime_mutex);
                     job["media"] = state.anime_anilist_id;
@@ -742,11 +783,17 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             else if ((action == "apply" || action == "clear") && state.store)
             {
                 const auto category = req.at("category").get<std::string>();
-                if (category == "panel")
+                if (category == "panel" || category == "recognition-options")
                 {
-                    if (action == "clear") state.store->clear("panel","global");
+                    if (action == "clear") state.store->clear(category,"global");
                     else if (const auto& values = req.at("values"); valid_settings(category,values))
-                        state.store->save("panel","global",values);
+                        state.store->save(category,"global",values);
+                    if (category=="recognition-options")
+                    {
+                        state.recognition_options = state.store->get(category,"global");
+                        state.store->clear("auto",state.instance_id);
+                        state.store->put("refresh",state.instance_id,{{"id",generate_instance_id()}});
+                    }
                     return;
                 }
                 if (category != "appearance" && category != "match" && category != "privacy" && category != "exclude" && category != "sources" && category != "tracking") return;
@@ -769,6 +816,9 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     const auto& values = req.at("values");
                     if (!valid_settings(category, values)) return;
                     auto patch = values;
+                    if (category=="match" && patch.contains("id") && !patch.contains("episode") &&
+                        state.store->get(category,scope).value("id",0)!=patch.at("id"))
+                        patch["episode"] = nullptr;
                     if (category == "privacy" && values.value("mode",std::string("hidden")) != "hidden") patch["block_lookup"] = nullptr;
                     if (category == "appearance" && req.value("replace",false)) state.store->put(category,scope,patch);
                     else state.store->save(category, scope, patch);
@@ -783,6 +833,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 std::lock_guard lock(state.anime_mutex);
                 state.is_anime = false;
                 state.anime_anilist_id = 0;
+                state.episode_review.clear();
             }
             if (old_lookup != lookup_allowed(state) || old_sources != state.sources || old_correction != state.correction || action == "refresh_match")
                 on_eligibility_changed(state);
@@ -949,6 +1000,7 @@ static void handle_file_loaded(rich_presence_state& state)
         std::lock_guard<std::mutex> lock(state.anime_mutex);
         state.is_anime = false;
         state.anime_anilist_id = 0;
+        state.episode_review.clear();
     }
 
     // Reset pause state and activity tracking for new file
@@ -1025,16 +1077,28 @@ void on_discord_log(Discord_String msg, Discord_LoggingSeverity severity, void* 
     mpv_print(state.mpv, std::format("[{}] {}", severity_str, msg_view));
 }
 
+struct presence_request
+{
+    rich_presence_state& state;
+    uint64_t generation;
+};
+
 void on_discord_update_rich_presence(Discord_ClientResult* result, void* payload)
 {
-    auto& state = *(rich_presence_state*)payload;
+    const auto& request = *static_cast<presence_request*>(payload);
+    auto& state = request.state;
 
     const auto success = state.discord_api->Discord_ClientResult_Successful(result);
     const auto code = success ? 0 : state.discord_api->Discord_ClientResult_ErrorCode(result);
     state.discord_api->Discord_ClientResult_Drop(result);
+    if (request.generation!=state.publish_generation) return;
+    state.publish_pending = false;
+    if (!state.presence_wanted) return;
     if (success)
     {
         state.last_sdk = "Published";
+        state.last_published_ms = chrono::duration_cast<chrono::milliseconds>(
+            chrono::system_clock::now().time_since_epoch()).count();
         state.is_rpc_visible = true;
         state.retry_backoff_ms = 0;
         state.needs_retry = false;
@@ -1150,6 +1214,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
     // Observe properties
     mpv_observe_property(state.mpv, 1, "metadata", MPV_FORMAT_NONE);
+    mpv_observe_property(state.mpv, 1, "media-title", MPV_FORMAT_NONE);
     mpv_observe_property(state.mpv, 0, "pause", MPV_FORMAT_FLAG);
     mpv_observe_property(state.mpv, 0, "seeking", MPV_FORMAT_FLAG);
     mpv_observe_property(state.mpv, 0, "speed", MPV_FORMAT_DOUBLE);
@@ -1157,10 +1222,18 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     mpv_observe_property(state.mpv, 0, "playtime-remaining", MPV_FORMAT_DOUBLE);
 
     auto hide_rich_presence = [&]() {
-        if (state.is_rpc_visible && is_ready)
+        const bool was_wanted = std::exchange(state.presence_wanted,false);
+        if ((state.is_rpc_visible || (was_wanted && state.publish_pending)) && is_ready)
         {
             state.discord_api->Discord_Client_ClearRichPresence(&state.discord->get());
             state.is_rpc_visible = false;
+            state.last_sdk = "Cleared";
+        }
+        if (was_wanted)
+        {
+            state.publish_pending = false;
+            state.needs_retry = false;
+            ++state.publish_generation;
         }
     };
 
@@ -1169,6 +1242,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     bool service_started = false;
     bool observed = false;
     std::string observed_source, observed_title, observed_track_title, observed_artist, observed_album;
+    std::string observed_channel;
+    nlohmann::json observed_recognition_options = nlohmann::json::object();
     nlohmann::json automatic = nlohmann::json::object();
     uint64_t observed_session = UINT64_MAX;
     bool last_allowed = false;
@@ -1208,13 +1283,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 auto artist = get_audio_artist(state.mpv);
                 auto album = get_mpv_osd_string(state.mpv,"metadata/by-key/album");
                 auto track_title = state.media_has_video ? "" : get_mpv_string(state.mpv,"metadata/by-key/title");
+                auto channel = get_mpv_osd_string(state.mpv,"metadata/by-key/uploader");
                 if (title != state.media_title || track_title != state.track_title ||
-                    artist != state.media_artist || album != state.album)
+                    artist != state.media_artist || album != state.album || channel != state.channel)
                 {
                     state.media_title = title;
                     state.track_title = std::move(track_title);
                     state.media_artist = artist;
                     state.album = album;
+                    state.channel = std::move(channel);
                     state.force_update = true;
                 }
             }
@@ -1306,10 +1383,10 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             std::lock_guard lock(state.anime_mutex);
             completed_anime_lookup = state.completed_anime_lookup;
             media.anime = state.is_anime;
+            episode_review = state.episode_review;
             if (media.anime)
             {
                 watch_episode = state.watch_episode;
-                episode_review = state.episode_review;
                 conflicting_anime_minutes = state.conflicting_anime_minutes;
                 fuzzy_episode_match = state.fuzzy_episode_match;
                 anime_duration_minutes = state.anime_duration_minutes;
@@ -1447,8 +1524,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         const bool anime_unavailable = anime_requested && !anime_pending && state.failed_anime_lookup == load_id;
         const bool pinned_anime = state.correction.contains("id") && !state.correction.value("not_anime", false);
         const double duration_estimate = media.position + media.remaining;
+        const bool ambiguous_anime = !media.anime && !episode_review.empty();
         const auto route = route_recognition(source, allowed, bool(state.store), pinned_anime,
-            !state.provider.empty(), anime_pending, anime_unavailable, media.anime,
+            !state.provider.empty(), anime_pending, anime_unavailable || ambiguous_anime, media.anime,
             completed_anime_lookup == load_id, fuzzy_episode_match, anime_duration_minutes,
             conflicting_anime_minutes, duration_estimate);
         source = route.source;
@@ -1469,7 +1547,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             media.episode.clear();
             media.anime_title.clear();
             watch_episode = false;
-            episode_review.clear();
+            if (episode_review!="Multiple AniList entries match this title") episode_review.clear();
         }
         if (candidate != automatic) { state.force_update = true; automatic = candidate; }
         const int tracked_media = media.anilist_id;
@@ -1477,7 +1555,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
             || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
-                observed_artist != media.artist || observed_album != media.album))
+                observed_artist != media.artist || observed_album != media.album || observed_channel != media.channel))
+            || observed_recognition_options != state.recognition_options
             || last_allowed != allowed || observed != watch || last_sample_id != tracked_media
             || last_sample_episode != tracked_episode || last_watch_episode != watch_episode
             || (watch && (advancing != last_sample_active || sampled_seek != last_seek || last_sample_speed != media.speed))))
@@ -1505,8 +1584,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     sample["release_date"] = get_mpv_string(state.mpv,"metadata/by-key/date");
                 }
                 sample["video"] = media.video;
+                sample["recognition_options"] = state.recognition_options;
                 sample["remote"] = state.scope_path.starts_with("stream-");
-                if (!sample["remote"].get<bool>()) sample["filename"] = get_mpv_string(state.mpv, "filename");
+                if (!sample["remote"].get<bool>())
+                {
+                    sample["filename"] = get_mpv_string(state.mpv, "filename");
+                    if (state.recognition_options.value("tv_rules",false))
+                        sample["embedded_title"] = get_mpv_string(state.mpv,"metadata/by-key/title");
+                }
                 double duration_s = 0;
                 mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
                 sample["duration"] = duration_s;
@@ -1536,6 +1621,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 }
             }
             state.store->put("player",state.instance_id,sample);
+            observed_recognition_options = state.recognition_options;
+            observed_channel = media.channel;
             observed_source = source;
             observed_title = media.title;
             observed_track_title = media.track_title;
@@ -1588,12 +1675,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     record.value("session",uint64_t{})==state.file_session))
                 {
                     episode_watch = {{"elapsed",record.value("elapsed",0.0)},
+                        {"coverage",record.value("coverage",0.0)},
                         {"first_watched",record.value("first_watched",0.0)}, {"last_watched",record.value("last_watched",0.0)}};
                 }
             }
             auto snapshot = nlohmann::json{
                 {"session", state.file_session}, {"instance", state.instance_id}, {"allowed", lookup_allowed(state)},
                 {"configured", state.config_received}, {"owner", eligible && currently_active},{"pinned",state.pinned_here},{"pinned_elsewhere",state.pinned_elsewhere}, {"sdk", state.last_sdk},
+                {"last_published",state.last_published_ms},
                 {"match", media.anilist_id}, {"episode", media.episode}, {"total", media.total}, {"title", media.anime_title},
                 {"appearance", state.appearance}, {"privacy", state.privacy}, {"tracking", state.tracking},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
@@ -1612,11 +1701,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",std::move(account)},{"watch_episode",watch_episode},
                 {"episode_review",episode_review},
-                {"recognition_status", !allowed ? "Blocked" : anime_pending || (extra && !resolved) ? "Searching" :
+                {"recognition_status", !allowed ? "Blocked" :
+                    (ambiguous_anime || (resolved && candidate.value("ambiguous",false))) ? "Ambiguous match" :
+                    anime_pending || (extra && !resolved) ? "Searching" :
                     media.anime || !media.provider.empty() || !state.provider.empty() ? "Matched" :
                     anime_unavailable || (resolved && candidate.value("unavailable", false)) ? "Provider unavailable" :
-                    "Local title or tags"},
-                {"episode_watch",std::move(episode_watch)},
+                    resolved ? "No match" : "Local title or tags"},
+                {"episode_watch",std::move(episode_watch)},{"recognition_options",state.recognition_options},
+                {"fingerprint_available",resolved && candidate.value("fingerprint_available",false)},
                 {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?
                     state.store->pending() : nlohmann::json::array()},
@@ -1729,7 +1821,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         bool first_update = (state.last_reported_pos < 0.0);
         bool forced = state.force_update;
 
-        if (!forced && !retry_ready && !pause_changed && !anime_updated && !buffering_update && !seek_detected && !periodic_update && !first_update)
+        if (state.publish_pending && now_steady-state.last_activity_update>=10s)
+        {
+            state.publish_pending = false;
+            ++state.publish_generation;
+            state.last_sdk = "Publish acknowledgement timed out";
+            state.force_update = forced = true;
+        }
+        if (state.publish_pending ||
+            (!forced && !retry_ready && !pause_changed && !anime_updated && !buffering_update && !seek_detected && !periodic_update && !first_update && state.presence_wanted))
             continue;
 
         state.force_update = false;
@@ -1738,7 +1838,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         state.last_reported_pos = media_time_pos_s;
         state.last_activity_update = now_steady;
 
-        publish_activity(state, format_activity(media, options), on_discord_update_rich_presence);
+        state.presence_wanted = state.publish_pending = true;
+        auto card = format_activity(media, options);
+        auto context = new presence_request{state,++state.publish_generation};
+        publish_activity(state, card, on_discord_update_rich_presence, context,
+            [](void* data) { delete static_cast<presence_request*>(data); });
     }
 
     // Shut down gracefully
@@ -1748,10 +1852,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     {
         state.store->close_window(state.instance_id);
     }
+    hide_rich_presence();
     release_active_instance(state.instance_id);
-
-    if (is_ready)
-        state.discord_api->Discord_Client_ClearRichPresence(&state.discord->get());
 
     return EXIT_SUCCESS;
 }

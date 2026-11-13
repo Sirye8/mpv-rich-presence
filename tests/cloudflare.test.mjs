@@ -46,6 +46,11 @@ test("a viewer exchanges one code with the original verifier", async t => {
   assert.equal(params.get("code_challenge"), challenge);
   assert.equal(params.get("redirect_uri"), origin + "/callback");
   const callback = origin + "/callback?code=example-code&state=" + params.get("state");
+  const declined = await worker.fetch(new Request(origin + "/callback?error=access_denied&state=" + params.get("state")), env);
+  assert.equal(declined.status, 303);
+  const declineLocation = new URL(declined.headers.get("Location"));
+  assert.equal(declineLocation.searchParams.get("state"), state);
+  assert.equal(declineLocation.searchParams.get("error"), "access_denied");
   const response = await worker.fetch(new Request(callback), env);
   assert.equal(response.status,303);
   const location = new URL(response.headers.get("Location"));

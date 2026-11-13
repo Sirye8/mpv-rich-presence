@@ -91,7 +91,7 @@ namespace mpvrp
     void profile_store::close_window(const std::string& owner)
     {
         execute(db, "DELETE FROM records WHERE (category='pin' AND json_extract(value,'$.owner')=?) OR "
-                    "(category IN ('player','response','auto','cancel','refresh') AND scope=?) OR "
+                    "(category IN ('player','response','auto','cancel','refresh','search-request','signin-request','signin-cancel') AND scope=?) OR "
                     "(category='job' AND json_extract(value,'$.window')=?) OR "
                     "(category='account' AND json_extract(value,'$.persistent')=0 AND json_extract(value,'$.window')=?)",
                     {owner,owner,owner,owner});
@@ -105,7 +105,7 @@ namespace mpvrp
     }
 
     static constexpr auto saved_records = " FROM records WHERE (category IN "
-        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','folder-filter','cache') "
+        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','folder-filter','cache','tv-rule','recognition-options') "
         "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)="
         "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT))) ";
 
@@ -222,7 +222,8 @@ namespace mpvrp
 
     void profile_store::put(const std::string& category, const std::string& scope, const json& value)
     {
-        execute(db, "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) DO UPDATE SET value=excluded.value",
+        execute(db, "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) "
+                    "DO UPDATE SET value=excluded.value WHERE records.value<>excluded.value",
                 {category,scope,value.dump()});
     }
 

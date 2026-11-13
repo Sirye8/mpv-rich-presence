@@ -3,7 +3,8 @@
 
 namespace mpvrp
 {
-    void publish_activity(rich_presence_state& state, const nlohmann::json& card, Discord_Client_UpdateRichPresenceCallback callback)
+    void publish_activity(rich_presence_state& state, const nlohmann::json& card,
+        Discord_Client_UpdateRichPresenceCallback callback, void* context, Discord_FreeFn free_context)
     {
         const auto& api = *state.discord_api;
         discord_activity activity(state.discord_api);
@@ -52,6 +53,7 @@ namespace mpvrp
             if (card.contains("end")) api.Discord_ActivityTimestamps_SetEnd(&timestamps.get(), card.at("end"));
             api.Discord_Activity_SetTimestamps(&activity.get(), &timestamps.get());
         }
-        api.Discord_Client_UpdateRichPresence(&state.discord->get(), &activity.get(), callback, nullptr, &state);
+        api.Discord_Client_UpdateRichPresence(&state.discord->get(), &activity.get(), callback, free_context,
+            context ? context : &state);
     }
 }

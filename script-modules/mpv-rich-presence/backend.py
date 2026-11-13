@@ -38,12 +38,21 @@ from providers import (
     music_title,
     musicbrainz_album,
     musicbrainz_match,
+    tmdb_request,
     video_query,
     generic_clip,
 )
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
 MUSIC_RETRY_DELAYS = (5, 15)
+VIDEO_RETRY_DELAYS = (5, 15)
+
+
+def tv_rule_matches(rule, titles, year, provider_id, provider):
+    if provider_id and (provider != "tmdb-tv" or str(rule["hit"]["id"]) != provider_id):
+        return False
+        return False
+    return all(title in rule["titles"] for title in titles) if titles else rule.get("dedicated", False)
 
 
 @contextlib.contextmanager
@@ -77,8 +86,9 @@ class Worker:
         self.previous = None
         self.tracking_probe = None
         self.resolved = None
-        self.music_retry = 0
+        self.lookup_retry = 0
         self.music_attempts = 0
+        self.video_attempts = 0
         self.expected = None
         self.data_generation = None
         self.cache_generation = None
@@ -91,7 +101,8 @@ class Worker:
 
     def put(self, category, scope, value):
         self.db.execute(
-            "INSERT OR REPLACE INTO records VALUES(?,?,?)",
+            "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) "
+            "DO UPDATE SET value=excluded.value WHERE records.value<>excluded.value",
             (category, scope, json.dumps(value)),
         )
 
@@ -258,6 +269,33 @@ class Worker:
             watch.get("elapsed", 0) >= 60 * player["tracking"].get("threshold", 15)
         )
 
+    def finish_write(self, scope, intent, result):
+        with self.transaction():
+            self.remember_entry(
+                intent["account"], intent["player"], result, keep_status=intent["keep_status"]
+            )
+            self.put("history", intent["key"], {
+                "progress": result["progress"], "time": time.time(),
+                "window": intent["window"], "session": intent["player"]["session"],
+            })
+            self.clear_proposals(scope)
+            self.delete("write-intent", scope)
+
+    def recover_write(self, account, scope, intent):
+        base = intent["base"]
+        entry = read_entry(self.credential(account), base["viewer"], base["media"])
+        expected = intent["expected"]
+        if entry["id"] and all(entry[field] == value for field, value in expected.items()):
+            self.finish_write(scope, intent, entry)
+            return entry
+        with self.transaction():
+            self.remember_entry(intent["account"], intent["player"], entry)
+            pending = self.get("pending", intent["key"])
+            if pending:
+                self.put("pending", intent["key"], dict(pending, needs_review=True))
+            self.delete("write-intent", scope)
+        raise AccountError("Previous update could not be confirmed. Review the current list entry.")
+
     def write(self, job):
         with serialized(self.directory):
             account, p = self.context(job, True)
@@ -308,6 +346,27 @@ class Worker:
 
             validate()
             token = self.credential(account)
+            scope = f"{account['id']}/{p['media']}"
+            if unresolved := self.get("write-intent", scope):
+                self.recover_write(account, scope, unresolved)
+                raise AccountError("Previous update was confirmed. Refresh before making another change.")
+            expected = dict(progress=job["target"])
+            if job.get("status") is not None:
+                expected["status"] = job["status"]
+            if job.get("repeat_count") is not None:
+                expected["repeat"] = job["repeat_count"]
+            intent = dict(
+                account=account, player={k: p[k] for k in ("media", "session", "episode", "tracking")},
+                key=proposal["key"] if proposal else self.cycle(account, p),
+                window=self.window, base=base, expected=expected,
+                keep_status=bool(proposal and job.get("keep_status") and
+                                 expected.get("status", base["status"]) == base["status"]),
+            )
+
+            def record_intent():
+                with self.transaction():
+                    self.put("write-intent", scope, intent)
+
             options = {"status": job.get("status")}
             if job.get("repeat_count") is not None:
                 options["repeat_count"] = job["repeat_count"]
@@ -318,6 +377,7 @@ class Worker:
                     job["target"],
                     p["total"],
                     validate,
+                    before_send=record_intent,
                     **options,
                 )
             except EntryChanged as exc:
@@ -326,32 +386,7 @@ class Worker:
                     self.remember_entry(account, p, exc.entry)
                 self.reply(entry=dict(exc.entry, session=p["session"]), proposal=None)
                 raise
-            self.context(job, True)
-            with self.transaction():
-                self.context(job, True)
-                key = proposal["key"] if proposal else self.cycle(account, p)
-                self.remember_entry(
-                    account,
-                    p,
-                    result,
-                    keep_status=bool(
-                        proposal
-                        and job.get("keep_status")
-                        and result["status"] == base["status"]
-                    ),
-                )
-                self.put(
-                    "history",
-                    key,
-                    {
-                        "progress": result["progress"],
-                        "time": time.time(),
-                        "window": self.window,
-                        "session": p["session"],
-                    },
-                )
-                # A list edit also invalidates older proposals for this entry.
-                self.clear_proposals(f"{account['id']}/{p['media']}")
+            self.finish_write(scope, intent, result)
             self.reply(
                 entry=dict(result, session=p["session"]),
                 proposal=None,
@@ -406,6 +441,12 @@ class Worker:
                         "expires": time.time() + (86400 if result else 300),
                     },
                 )
+                if key.startswith("tmdb-series/"):
+                    self.db.execute(
+                        "DELETE FROM records WHERE category='cache' AND scope IN ("
+                        "SELECT scope FROM records WHERE category='cache' AND scope LIKE 'tmdb-series/%' "
+                        "ORDER BY json_extract(value,'$.expires') DESC LIMIT -1 OFFSET 512)"
+                    )
             return result
         finally:
             with self.transaction():
@@ -425,41 +466,53 @@ class Worker:
                         "Configure the exchange for your custom AniList client."
                     )
                 broker = PUBLIC_EXCHANGE
-            token = authorize(
-                self.settings.get("client_id"),
-                lambda: self.context(job),
-                vault=self.vault,
-                broker=broker,
-                progress=lambda message: self.reply(message=message),
-            )
-            viewer = graphql("query{Viewer{id name avatar{medium}}}", {}, token)[
-                "Viewer"
-            ]
-            with serialized(self.directory):
+            def valid():
                 self.context(job)
-                generation = secrets.token_hex(16)
-                persistent = self.vault.write(
-                    generation, token, remember=not job.get("session_only", False)
+                if job.get("attempt") and (
+                    self.get("signin-request", self.window).get("id") != job["attempt"] or
+                    self.get("signin-cancel", self.window).get("id") == job["attempt"]
+                ):
+                    raise AccountError("Sign-in cancelled.")
+
+            def review(token):
+                valid()
+                viewer = graphql("query{Viewer{id name avatar{medium}}}", {}, token)["Viewer"]
+                if not isinstance(viewer, dict) or type(viewer.get("id")) is not int or not isinstance(viewer.get("name"), str):
+                    raise AccountError("AniList did not return an account profile.")
+                return viewer
+
+            def connect(token, viewer):
+                with serialized(self.directory):
+                    valid()
+                    generation = secrets.token_hex(16)
+                    persistent = self.vault.write(generation, token, remember=not job.get("session_only", False))
+                    try:
+                        with self.transaction():
+                            valid()
+                            self.put("account", "current", dict(
+                                id=viewer["id"], name=viewer["name"], avatar=viewer.get("avatar"),
+                                generation=generation, persistent=persistent, window=self.window,
+                            ))
+                    except Exception:
+                        self.vault.forget(generation, persistent)
+                        raise
+                    if account.get("generation"):
+                        self.vault.forget(account["generation"], account.get("persistent"))
+                self.reply(
+                    entry=None, proposal=None, offline=False,
+                    message="Connected." if persistent else "Connected for this session.",
                 )
-                if account.get("generation"):
-                    self.vault.forget(account["generation"], account.get("persistent"))
-                self.put(
-                    "account",
-                    "current",
-                    dict(
-                        id=viewer["id"],
-                        name=viewer["name"],
-                        avatar=viewer["avatar"],
-                        generation=generation,
-                        persistent=persistent,
-                        window=self.window,
-                    ),
+                return persistent
+
+            try:
+                self.reply(signin=job.get("attempt"), offline=False)
+                authorize(
+                    self.settings.get("client_id"), valid, vault=self.vault, broker=broker,
+                    progress=lambda message: self.reply(message=message),
+                    review=review, connect=connect,
                 )
-            self.reply(
-                entry=None,
-                proposal=None,
-                message="Connected." if persistent else "Connected for this session.",
-            )
+            finally:
+                self.reply(signin=None)
         elif op in ("disconnect", "reset"):
             with serialized(self.directory):
                 self.context(job)
@@ -471,7 +524,7 @@ class Worker:
                         "DELETE FROM records WHERE category IN ('job','response')"
                     )
                     if account.get("id"):
-                        categories = ["pending"]
+                        categories = ["pending", "write-intent"]
                         if job.get("forget_history"):
                             categories += [
                                 "watch",
@@ -504,7 +557,10 @@ class Worker:
             cached = dict(previous, session=p["session"]) if previous else None
             self.reply(read_state="loading", entry=cached, offline=False)
             try:
-                entry = read_entry(self.credential(account), account["id"], p["media"])
+                with serialized(self.directory):
+                    intent = self.get("write-intent", scope)
+                    entry = (self.recover_write(account, scope, intent) if intent else
+                             read_entry(self.credential(account), account["id"], p["media"]))
             except AccountError:
                 self.reply(read_state="offline", entry=cached, offline=True)
                 raise
@@ -591,13 +647,17 @@ class Worker:
                     "sources",
                     "panel",
                     "folder-filter",
+                    "recognition-options",
+                    "tv-rule",
                 ):
                     removed = self.get(category, job["scope"])
                     if category == "match" and job.get("field"):
-                        if job["field"] not in ("id", "not_anime", "offset"):
+                        if job["field"] not in ("id", "not_anime", "offset", "episode"):
                             raise AccountError("Unknown match field.")
                         remaining = dict(removed)
                         remaining.pop(job["field"], None)
+                        if job["field"]=="id":
+                            remaining.pop("episode", None)
                         if remaining:
                             self.put(category, job["scope"], remaining)
                         else:
@@ -674,6 +734,7 @@ class Worker:
         elif op == "search":
             provider = job["provider"]
             query = job.get("query", "")
+            request = job["request"]
             key = (
                 provider
                 + "/"
@@ -684,43 +745,85 @@ class Worker:
 
             def valid():
                 self.context(job, True)
+                if self.get("search-request", self.window).get("id") != request:
+                    raise AccountError("Search was superseded.")
 
             def fetch_results():
                 if provider == "acoustid":
                     return fingerprint(p["path"], self.settings, self.throttle, valid)
                 return candidates(provider, query, self.settings, self.throttle)
 
-            hits = self.cached_fetch(
-                key, "results", lambda: fetch_results()[:24], valid
-            )
-            self.reply(
-                results=hits,
-                provider=provider,
-                search_session=p["session"],
-                message="Search complete.",
-            )
+            try:
+                valid()
+                hits = self.cached_fetch(key, "results", lambda: fetch_results()[:24], valid)
+            except (AccountError, OSError, ValueError) as exc:
+                valid()
+                error = str(exc) if isinstance(exc, AccountError) else "The provider could not finish this search."
+                self.reply(search=dict(id=request, state="failed", error=error, results=[]))
+            else:
+                valid()
+                self.reply(search=dict(id=request, state="ready", provider=provider, results=hits))
         elif op == "select":
-            previous = self.get("response", self.window)
-            if previous.get("search_session") != p["session"] or job[
-                "candidate"
-            ] not in previous.get("results", []):
+            response = self.get("response", self.window)
+            previous = response.get("search", {})
+            if (
+                response.get("context") != p["session"]
+                or previous.get("id") != job.get("request")
+                or previous.get("id") != self.get("search-request", self.window).get("id")
+                or job["candidate"] not in previous.get("results", [])
+            ):
                 raise AccountError("Search again for this file.")
-            se = re.search(r"\bS(\d+)E(\d+)\b", os.path.basename(p["path"]), re.I)
-            hit = details(
-                previous["provider"],
-                job["candidate"],
-                self.settings,
-                self.throttle,
-                se.groups() if se else None,
-            )
-            self.context(job, True)
             scope = {
                 "file": "file:" + p["path"],
                 "folder": "folder:" + os.path.dirname(p["path"]).replace("\\", "/"),
                 "global": "global",
+                "tv-rule": "folder:" + os.path.dirname(p["path"]).replace("\\", "/"),
+                "tv-dedicated": "folder:" + os.path.dirname(p["path"]).replace("\\", "/"),
             }[job["scope"]]
+            provider = previous["provider"]
+            selected = job["candidate"]
+            is_tv = provider in ("tmdb-tv", "tvmaze")
+            if provider == "anilist":
+                with self.transaction():
+                    self.context(job, True)
+                    if self.get("search-request", self.window).get("id") != job["request"]:
+                        raise AccountError("Search again for this file.")
+                    correction = self.get("match", scope)
+                    if correction.get("id") != selected["id"]:
+                        correction.pop("episode", None)
+                    self.put("match", scope, dict(correction, id=selected["id"], not_anime=False))
+                self.reply(message="Match saved.")
+                return
+            title, year, episode, airdate = video_query(os.path.basename(p["path"]))
+            if is_tv and job["scope"] in ("tv-rule", "tv-dedicated"):
+                if not p.get("recognition_options", {}).get("tv_rules") or not title or not (episode or airdate):
+                    raise AccountError("Enable TV folder rules and open a file named with its series and episode.")
+                hit = details(provider, selected, self.settings, self.throttle, None)
+                # Keep only the series identity and the alias explicitly approved for this folder.
+                rule = dict(
+                    provider=provider, hit=selected, year=hit.get("year") or year,
+                    dedicated=job["scope"]=="tv-dedicated",
+                    titles=sorted({match_name(title), match_name(hit["name"])}),
+                )
+                with self.transaction():
+                    self.context(job, True)
+                    if self.get("search-request", self.window).get("id") != job["request"]:
+                        raise AccountError("Search again for this file.")
+                    rules = self.get("tv-rule", scope)
+                    if rule["dedicated"]:
+                        rules = {key: dict(value, dedicated=False) for key, value in rules.items()}
+                    rules[f"{provider}:{selected['id']}"] = rule
+                    self.put("tv-rule", scope, rules)
+                    self.put("refresh", self.window, {"id": secrets.token_hex(8)})
+                self.reply(message="TV rule saved for matching files in this folder.")
+                return
+            if is_tv and job["scope"] != "file":
+                raise AccountError("Save this TV episode for the current file.")
+            hit = details(provider, selected, self.settings, self.throttle, episode, airdate)
             with self.transaction():
                 self.context(job, True)
+                if self.get("search-request", self.window).get("id") != job["request"]:
+                    raise AccountError("Search again for this file.")
                 self.put("provider", scope, hit)
                 self.put("match", scope, {"not_anime": True})
             self.reply(message="Match saved.")
@@ -823,6 +926,9 @@ class Worker:
                     return False
 
         path = p.get("path", "")
+        if not hit and automatic and p.get("recognition_options", {}).get("confirm_fingerprint") and os.path.isfile(path):
+            publish(None, fingerprint_available=True)
+            return False
         if not hit and (automatic or source == "acoustid") and os.path.isfile(path):
             stat = os.stat(path)
             hit = cached(
@@ -844,12 +950,22 @@ class Worker:
             publish(None, unavailable=failed)
         return failed
 
+    def video_details(self, provider, row, episode, airdate, valid):
+        def series(identifier):
+            def fetch_series():
+                self.throttle(provider)
+                return tmdb_request(f"/tv/{identifier}", self.settings)
+
+            return self.cached_fetch(f"tmdb-series/{identifier}", "series", fetch_series, valid)
+        settings = dict(self.settings, tmdb_series=series) if provider == "tmdb-tv" else self.settings
+        return details(provider, row, settings, self.throttle, episode, airdate)
+
     def recognize(self, p):
         profile_source = p.get("source", "original")
         refresh = self.get("refresh", self.window)
         if refresh != getattr(self, "last_refresh", None):
             self.resolved = None
-            self.music_retry = 0
+            self.lookup_retry = 0
             self.last_refresh = refresh
 
         def context(sample):
@@ -869,17 +985,23 @@ class Worker:
                     "folder_episode",
                     "folder_has_episode",
                     "allowed",
+                    "recognition_options",
+                    "embedded_title",
+                    "channel",
+                    "page",
+                    "live",
                 )
             )
 
         key = context(p)
         if key == self.resolved:
-            if not self.music_retry or time.monotonic() < self.music_retry:
+            if not self.lookup_retry or time.monotonic() < self.lookup_retry:
                 return
         else:
             self.music_attempts = 0
+            self.video_attempts = 0
         self.resolved = key
-        self.music_retry = 0
+        self.lookup_retry = 0
         if profile_source == "original" or not p.get("allowed"):
             return
         raw = p.get("title", "")
@@ -896,7 +1018,9 @@ class Worker:
             ):
                 raise AccountError("Playback or privacy settings changed.")
 
-        def publish(hit, *, unavailable=False):
+        ambiguous = False
+
+        def publish(hit, *, unavailable=False, fingerprint_available=False):
             with self.transaction():
                 valid()
                 self.put(
@@ -911,6 +1035,8 @@ class Worker:
                         album=album,
                         hit=hit or {},
                         unavailable=unavailable,
+                        ambiguous=ambiguous and not hit and not unavailable,
+                        fingerprint_available=fingerprint_available,
                     ),
                 )
 
@@ -924,6 +1050,7 @@ class Worker:
         if p["video"] and not p.get("remote"):
             title, year, episode, airdate = video_query(raw)
             filename = video_query(p.get("filename", ""))
+            missing_tv_season = False
             if (
                 filename[2]
                 or filename[3]
@@ -931,22 +1058,68 @@ class Worker:
                 or (filename[1] and (verify_movie or not year or year == filename[1]))
             ):
                 title, year, episode, airdate = filename
+            sidecar_allowed = p.get("recognition_options", {}).get("sidecar_metadata")
             if source == "auto" and p.get("folder_title") and (
                 not title or match_name(title) == match_name(filename[0])
             ):
                 # A bare episode needs a season from the filename or folder to
                 # query the TV catalog. AniList already handled absolute numbers.
                 if p.get("folder_has_episode") and not p.get("folder_episode"):
-                    publish(None)
-                    return
+                    missing_tv_season = True
+                    if not sidecar_allowed:
+                        publish(None)
+                        return
                 # A movie folder needs a unique TMDB title. Never fall
                 # through to TV with a bare feature label.
                 if not p.get("folder_has_episode"):
                     source = "tmdb-movie"
                 title = p["folder_title"]
                 year = p.get("folder_year", "")
-                episode = p.get("folder_episode")
+                episode = p.get("folder_episode") or episode
                 airdate = None
+            options = p.get("recognition_options", {})
+            path = p.get("path")
+            if path and options.get("sidecar_metadata") and profile_source in ("auto", "movie-tv", "movie", "tv", "verify-tv", "verify-movie"):
+                try:
+                    with Path(path).with_suffix(".mpv-rp.json").open("rb") as sidecar:
+                        contents = sidecar.read(4097)
+                    metadata = json.loads(contents) if len(contents)<=4096 else {}
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                    kind, identifier = metadata.get("kind"), metadata.get("tmdb")
+                    if kind in ("movie", "tv") and type(identifier) is int and 0 < identifier < 2**31 and (
+                        profile_source in ("auto", "movie-tv", kind, f"verify-{kind}")
+                    ):
+                        if kind == "tv" and all(type(metadata.get(k)) is int and 0 <= metadata[k] <= 999 for k in ("season", "episode")) and metadata["episode"] > 0:
+                            episode = (str(metadata["season"]), str(metadata["episode"]))
+                        p = dict(p, tmdb=str(identifier), sidecar_selected=True)
+                        source = "tmdb-" + kind
+                        video_profile = False
+                except (OSError, ValueError):
+                    pass
+            if missing_tv_season and not p.get("sidecar_selected"):
+                publish(None)
+                return
+            if (path and options.get("tv_rules") and profile_source in ("auto", "tv", "movie-tv", "verify-tv")
+                and (episode or airdate) and not p.get("sidecar_selected")):
+                filename_title = filename[0]
+                embedded = video_query(p.get("embedded_title", ""))[0]
+                titles = {match_name(t) for t in (filename_title, embedded) if t}
+                folder = "folder:" + os.path.dirname(path).replace("\\", "/")
+                rules = [(rule["provider"], rule["hit"]) for rule in self.get("tv-rule", folder).values()
+                         if tv_rule_matches(rule, titles, year, p.get("tmdb", ""), rule["provider"])]
+                if len(rules) == 1:
+                    provider, selected = rules[0]
+                    try:
+                        hit = self.cached_fetch(
+                            f"tv-rule/{provider}/{selected['id']}/{episode or airdate}", "hit",
+                            lambda: self.video_details(provider, selected, episode, airdate, valid), valid,
+                        )
+                        if hit and hit.get("numbering"):
+                            publish(hit)
+                            return
+                    except (AccountError, OSError, ValueError, KeyError):
+                        valid()
         if (
             source == "auto"
             and p["video"]
@@ -981,15 +1154,15 @@ class Worker:
                 source = "tvmaze"
             else:
                 source = "wikidata"
-        if verify_movie:
+        if verify_movie and not p.get("sidecar_selected"):
             source = "tmdb-movie"
-        elif verify_tv:
+        elif verify_tv and not p.get("sidecar_selected"):
             source = "tmdb-tv"
         if source in ("musicbrainz", "acoustid"):
             if not p["video"] and not p.get("remote"):
                 failed = self.recognize_music(p, source, refresh, publish, valid)
                 if failed and self.music_attempts < len(MUSIC_RETRY_DELAYS):
-                    self.music_retry = (
+                    self.lookup_retry = (
                         time.monotonic() + MUSIC_RETRY_DELAYS[self.music_attempts]
                     )
                     self.music_attempts += 1
@@ -1014,7 +1187,7 @@ class Worker:
             and p["video"]
             and not p.get("remote")
         ):
-            if not verify_movie and (
+            if not verify_movie and not p.get("tmdb", "").isdigit() and (
                 not title or re.search(r"[/\\?&#\x00-\x1f]|://", title)
             ):
                 publish(None)
@@ -1033,6 +1206,7 @@ class Worker:
                             album,
                             p.get("album_artist"),
                             p.get("tmdb"),
+                            bool(p.get("sidecar_selected")),
                             year,
                             episode,
                             airdate,
@@ -1044,8 +1218,9 @@ class Worker:
             )
 
             def fetch_hit():
+                nonlocal ambiguous
                 if (
-                    not verify_movie
+                    (not verify_movie or p.get("sidecar_selected"))
                     and source.startswith("tmdb-")
                     and p.get("tmdb", "").isdigit()
                 ):
@@ -1060,6 +1235,7 @@ class Worker:
                     )
 
                 def matching(provider):
+                    nonlocal ambiguous
                     valid()
                     query = title.replace(":", " ")
                     if provider.startswith("tmdb-") and year:
@@ -1100,6 +1276,7 @@ class Worker:
                         exact = [
                             r for r in exact if year in r.get("years", [r.get("year")])
                         ]
+                    ambiguous = ambiguous or len({str(row.get("id")) for row in exact})>1
                     return exact
 
                 if verify_movie:
@@ -1124,7 +1301,7 @@ class Worker:
 
                 def describe(provider, row):
                     valid()
-                    show = details(provider, row, self.settings, self.throttle, episode, airdate)
+                    show = self.video_details(provider, row, episode, airdate, valid)
                     if episode and provider.startswith(("tmdb-tv", "tvmaze")) and not show.get("numbering"):
                         return None
                     if label := row.get("episode_label"):
@@ -1233,10 +1410,20 @@ class Worker:
                 return None
 
             try:
-                hit = self.cached_fetch(cache_key, "hit", fetch_hit, valid)
+                def resolve_video():
+                    result = fetch_hit()
+                    return {"hit":result, "ambiguous":True} if ambiguous and not result else result
+
+                hit = self.cached_fetch(cache_key, "hit", resolve_video, valid)
+                if hit and hit.get("ambiguous") is True:
+                    ambiguous = True
+                    hit = None
             except (AccountError, OSError, ValueError, KeyError):
                 valid()
                 publish(None, unavailable=True)
+                if self.video_attempts < len(VIDEO_RETRY_DELAYS):
+                    self.lookup_retry = time.monotonic() + VIDEO_RETRY_DELAYS[self.video_attempts]
+                    self.video_attempts += 1
                 return
         publish(hit)
 
@@ -1304,12 +1491,27 @@ class Worker:
                 watch["elapsed"] = 0
                 watch.pop("first_watched", None)
                 watch.pop("last_watched", None)
+                watch.pop("segments", None)
+                watch.pop("coverage", None)
             elapsed = watch.get("elapsed", 0)
             if credit:
                 if elapsed == 0:
                     watch["first_watched"] = p["wall"] - credit * 1000
                 watch["last_watched"] = p["wall"]
             elapsed += credit
+            if credit and p["tracking"].get("coverage"):
+                first, last = p["pos"] - pos * credit / dt, p["pos"]
+                segments = watch.get("segments", [])
+                merged = []
+                for left, right in sorted([*segments, [first, last]]):
+                    if merged and left <= merged[-1][1] + 0.001:
+                        merged[-1][1] = max(merged[-1][1], right)
+                    else:
+                        merged.append([left, right])
+                # Avoid an unbounded record if a file has many discontinuities.
+                if len(merged)<=4096:
+                    watch["segments"] = merged
+                    watch["coverage"] = sum(right - left for left, right in merged)
             self.put(
                 "watch",
                 key,
@@ -1335,6 +1537,16 @@ class Worker:
         self.expected = (a["generation"], p["session"])
         episode = int(p["episode"])
         key = self.cycle(a, p)
+        scope = f"{a['id']}/{p['media']}"
+        if intent := self.get("write-intent", scope):
+            if time.monotonic() >= getattr(self, "recovery_retry", 0):
+                self.recovery_retry = time.monotonic() + 15
+                with serialized(self.directory):
+                    current = self.get("account", "current")
+                    intent = self.get("write-intent", scope)
+                    if current.get("generation")==a["generation"] and intent:
+                        self.recover_write(current, scope, intent)
+            return
         probe = (
             *self.expected,
             p["media"],
@@ -1498,7 +1710,7 @@ class Worker:
                         repeat_count=repeat_count,
                     )
                 )
-            except AccountError:
+            except (AccountError, OSError, sqlite3.Error):
                 with self.transaction():
                     if self.get("pending", key) == prop:
                         self.put("pending", key, dict(prop, needs_review=True))
@@ -1552,7 +1764,7 @@ class Worker:
                 cache_epoch = self.get("generation", "cache")
                 if self.cache_generation != cache_epoch:
                     self.resolved = None
-                    self.music_retry = 0
+                    self.lookup_retry = 0
                     self.cache_generation = cache_epoch
                 cancellation = self.get("cancel", self.window)
                 if cancellation:
@@ -1568,13 +1780,16 @@ class Worker:
                         self.delete("cancel", self.window)
                     self.previous = None
 
-                with self.transaction():
-                    row = self.db.execute(
-                        "SELECT scope,value FROM records WHERE category='job' AND json_extract(value,'$.window')=? ORDER BY rowid LIMIT 1",
-                        (self.window,),
-                    ).fetchone()
-                    if row:
-                        self.delete("job", row[0])
+                row = self.db.execute(
+                    "SELECT scope,value FROM records WHERE category='job' AND json_extract(value,'$.window')=? ORDER BY rowid LIMIT 1",
+                    (self.window,),
+                ).fetchone()
+                if row:
+                    with self.transaction():
+                        if self.get("job", row[0]):
+                            self.delete("job", row[0])
+                        else:
+                            row = None
                 if row:
                     job = json.loads(row[1])
                     self.notice_page = job.get("notice_page", "")

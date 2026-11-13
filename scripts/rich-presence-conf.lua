@@ -80,26 +80,46 @@ mp.register_script_message("ping", pong)
 pong()
 
 
-local worker
-mp.register_script_message("start-service", function(instance)
-    if worker then return end
+local worker, restart
+local worker_status="Not started"
+local stopping, failures=false,0
+options.helper_status=function() return worker_status end
+local function start_worker(instance)
+    if worker or restart or stopping then return end
     -- These settings are public. Tokens and provider keys never pass through argv.
     -- mpv does not reliably feed subprocess stdin on Windows.
     local settings = utils.format_json({broker=options.anilist_exchange_url,
         personal=options.anilist_personal_client,client_id=options.anilist_client_id})
     local args = {interpreter, "-I", utils.join_path(modules,"backend.py"), database, instance, settings, config,
         mp.get_property("pid")}
+    local started=mp.get_time()
+    worker_status="Running"
     worker = mp.command_native_async({name="subprocess",args=args,playback_only=false,
         capture_stderr=true}, function(_,result)
         worker=nil
-        if not result or result.status~=0 then
-            local failure = result and (result.stderr or ""):match("([%a]+Error):")
-            mp.msg.warn("Account helper unavailable ("..tostring(result and result.status or "launch failed")..
-                (failure and ", "..failure or "").."). Check the Python setting.")
-        end
+        if stopping then return end
+        if mp.get_time()-started>=60 then failures=0 end
+        failures=failures+1
+        local delay=({1,3,10,30})[failures]
+        worker_status=delay and ("Restarting in "..delay.." s") or "Unavailable"
+        local failure = result and (result.stderr or ""):match("([%a]+Error):")
+        mp.msg.warn("Account helper exited ("..tostring(result and result.status or "launch failed")..
+            (failure and ", "..failure or "").."). "..worker_status..".")
+        if delay then restart=mp.add_timeout(delay,function()
+            restart=nil
+            start_worker(instance)
+        end) end
     end)
+end
+mp.register_script_message("start-service",function(instance)
+    if worker_status=="Unavailable" then failures=0 end
+    start_worker(instance)
 end)
-mp.register_event("shutdown",function() if worker then mp.abort_async_command(worker) end end)
+mp.register_event("shutdown",function()
+    stopping=true
+    if restart then restart:kill() end
+    if worker then mp.abort_async_command(worker) end
+end)
 
 local menu, ask
 options.open_url = function(url)

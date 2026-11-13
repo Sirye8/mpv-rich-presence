@@ -698,6 +698,38 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     // same search results before using the original fuzzy/episode ranking.
     // This keeps absolute numbering anchored at the base series.
     const bool prefer_exact_series = automatic_match && !explicit_film && parsed_ep > 0;
+    bool ambiguous_entry = false;
+    const auto release_year = ws2s(elements.get(anitomy::kElementAnimeYear));
+    const auto choose_exact = [&](const auto& page, const auto& matches) -> std::optional<anilist_media> {
+        std::vector<const anilist_media*> exact;
+        std::unordered_set<int> ids;
+        for (const auto& media : page)
+            if (matches(media) && ids.insert(media.id).second) exact.push_back(&media);
+        if (exact.size()>1 && release_year.size()==4)
+        {
+            auto dated = exact;
+            std::erase_if(dated,[&](const auto* media) {
+                return std::to_string(media->release_year)!=release_year;
+            });
+            if (!dated.empty()) exact = std::move(dated);
+        }
+        if (exact.size()>1 && parsed_season<=1 && parsed_part==0 && parsed_ep>0)
+        {
+            auto roots = exact;
+            std::erase_if(roots,[&](const auto* media) {
+                return !std::any_of(exact.begin(),exact.end(),[&](const auto* other) {
+                    return media->sequel_id==other->id && other->sequel_id!=media->id;
+                }) || std::any_of(exact.begin(),exact.end(),[&](const auto* other) {
+                    return other->sequel_id==media->id;
+                });
+            });
+            // A direct link can establish a two-entry sequence. An unrelated
+            // candidate still leaves the filename ambiguous.
+            if (exact.size()==2 && roots.size()==1) exact = std::move(roots);
+        }
+        ambiguous_entry = exact.size()>1;
+        return exact.empty() ? std::nullopt : std::optional<anilist_media>(*exact.front());
+    };
     std::unordered_set<std::string> searched;
     for (const auto& q_str : search_queries)
     {
@@ -711,10 +743,10 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
 
         if (!arc_query.empty() && q_str == arc_search_title)
         {
-            const auto exact_arc = std::find_if(page.begin(), page.end(), [&](const auto& media) {
+            const auto exact_arc = choose_exact(page, [&](const auto& media) {
                 return is_anilist_tracking_series(media) && exact_series_title(arc_query, media, 0);
             });
-            if (exact_arc != page.end())
+            if (exact_arc)
             {
                 candidate = *exact_arc;
                 break;
@@ -724,12 +756,12 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
 
         if (prefer_exact_series)
         {
-            const auto exact = std::find_if(page.begin(), page.end(), [&](const auto& media) {
+            const auto exact = choose_exact(page, [&](const auto& media) {
                 return is_anilist_tracking_series(media) &&
                     (parsed_part == 0 ? exact_series_title(a_title, media, parsed_season)
                                       : exact_series_title(q_str, media, 0));
             });
-            if (exact != page.end())
+            if (exact)
             {
                 candidate = *exact;
                 break;
@@ -823,6 +855,11 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
 
         if (best)
         {
+            if (!automatic_match && parsed_ep>0 && !correction.contains("id") &&
+                exact_series_title(a_title,*best,parsed_season))
+                choose_exact(page,[&](const auto& media) {
+                    return is_anilist_tracking_series(media) && exact_series_title(a_title,media,parsed_season);
+                });
             candidate = best;
             break;
         }
@@ -848,9 +885,29 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     if (!candidate)
         return std::nullopt;
 
+    if (ambiguous_entry)
+    {
+        anime_match match;
+        match.episode_review = "Multiple AniList entries match this title";
+        return match;
+    }
+
     if (explicit_film && candidate->format == "MOVIE")
         parsed_ep = 0;
     anilist_media current_resolved_media = *candidate;
+    if (correction.contains("id") && correction.contains("episode"))
+    {
+        const auto episode = correction.at("episode").get<int>();
+        anime_match match;
+        match.media = *candidate;
+        match.raw_episode = parsed_ep;
+        match.episode = episode;
+        match.release_group = std::move(a_group);
+        match.watch_episode = episode>0 && (candidate->episodes<=0 || episode<=candidate->episodes)
+            && is_anilist_tracking_series(*candidate);
+        if (!match.watch_episode) match.episode_review = "Corrected episode is outside the trackable range";
+        return match;
+    }
     parsed_ep += correction.value("offset", 0);
     bool unambiguous_numbering = true;
     const bool matched_folder_arc = !arc_query.empty() && exact_series_title(arc_query, *candidate, 0);
