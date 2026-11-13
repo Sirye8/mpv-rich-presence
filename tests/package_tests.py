@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as directory:
     for part in ("scripts", "script-opts"):
         shutil.copytree(root / part, config / part)
     applied = False
-    for mode in ("cancel", "apply", "cancel", "position", "inherit-position"):
+    for mode in ("cancel", "apply", "cancel", "position", "inherit-position", "custom", "reset-preset"):
         log = Path(directory) / "mpv.log"
         subprocess.run(
             [
@@ -68,6 +68,10 @@ with tempfile.TemporaryDirectory() as directory:
             assert row and json.loads(row[0])["preset"] == "clean", (
                 "Apply did not persist the draft"
             )
+            if mode=="custom":
+                assert json.loads(row[0]).get("custom") is True
+            if mode=="reset-preset":
+                assert json.loads(row[0]) == {"preset":"clean"}
         else:
             assert row is None, "Cancel persisted a preview"
         if mode == "position":

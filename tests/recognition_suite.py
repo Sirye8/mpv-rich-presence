@@ -198,7 +198,7 @@ def run_worker(worker, test, native, index):
         patch("backend.fingerprint", side_effect=fingerprint),
         patch("backend.os.path.isfile", return_value=bool(test["hits"].get("acoustid"))),
         patch("backend.os.stat", return_value=SimpleNamespace(st_size=1, st_mtime_ns=1)),
-        patch.object(worker, "cached_fetch", side_effect=lambda key, field, request, valid: request()),
+        patch.object(worker, "cached_fetch", side_effect=lambda key, field, request, valid, **opts: request()),
     ):
         worker.recognize(sample)
     record = worker.get("auto", worker.window)

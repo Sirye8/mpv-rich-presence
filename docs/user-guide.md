@@ -51,6 +51,14 @@ Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to cha
 
 **Appearance → Panel position** offers six anchors. **Config** uses `panel_position` from the conf file. Top anchors reserve room for the OSC title strip. Set `menu_scale` to resize the panel or `menu_animations=no` for instant transitions.
 
+Select a text field to edit it in place. Use **Done** or Enter to accept, **Cancel** or Escape to discard, and Ctrl+V to paste where mpv provides clipboard access. Terminal-only mpv uses its text prompt.
+
+Open **Appearance → Panel theme** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), or **Graphite** (opaque charcoal). Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
+
+Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the open panel. Other video outputs keep translucency. Custom settings accept six-digit RGB colors, 40 to 100% opacity, and a blur strength from 2 to 12 pixels. Turn off **Background blur** in the panel, or set `panel_blur=no` to change the startup default.
+
+Choosing a preset restores its appearance defaults for the selected save scope and media layout. Choosing a preset for **All media** also resets media-specific overrides saved at that scope. Changing an appearance field marks the layout **Custom** and keeps the selected preset as its base. Use **Apply** to save.
+
 To open a page from the mpv console, use `script-message-to mpv_rich_presence menu Appearance`.
 
 ## Recognize media
@@ -66,6 +74,8 @@ For files with no usable title, Automatic can use the immediate folder name. For
 Common camera and screen recording names stay local in Automatic. Short videos with a bare title and no year, episode marker or TMDB ID skip the fallback movie search. Use **Local only** on a file or folder when you always want the filename or embedded metadata.
 
 Movie and TV lookup prefers TMDB. Wikidata and TVmaze provide fallbacks. Air-date episodes use TVmaze. For music, the card starts with local tags. MusicBrainz checks title, credits, duration and release edition, and Cover Art Archive supplies public artwork when available. An embedded cover stays in mpv. If the music tags are incomplete or inconclusive, the plugin can send a Chromaprint fingerprint and the track duration to AcoustID. The audio file stays on your device.
+
+AniList catalog pages and entries, and TV catalog searches, can be reused across launches. A TV series search can serve several episodes while each file still resolves its own episode. The default catalog cache keeps successful responses for 24 hours and empty searches for five minutes. Expired data is fetched again. Use **Refresh match** to request fresh metadata, or **Saved data → Saved caches** to clear local cache records. Music artwork can arrive after the first Discord card. Switching tracks discards artwork results for the previous track.
 
 To classify a directory, open a file inside it and choose **Recognition & folders → Save for → folder**. Then choose **Media recognition**. The rule also covers its subfolders.
 
@@ -94,6 +104,8 @@ Turn on **Ask before fingerprinting** if you want to approve AcoustID fallback p
 ## Connect AniList
 
 Open **Alt+p → AniList → Connect account**, then approve on AniList in your browser. Check the account name and avatar on the next page and choose **Connect**. The page reports when mpv has saved the connection. Use **Use another account** if the profile is wrong, switch on AniList, and reconnect from mpv. You can cancel from the browser or the AniList panel. **Connect for this session** keeps the credential in memory until the account helper exits.
+
+Select **Account** in the AniList panel to open your profile in the default browser. The row shows your avatar when its image is available.
 
 Windows uses Credential Manager for a saved sign-in. Linux can use Python keyring with Secret Service. If credential storage is unavailable, sign-in lasts for the worker session. **Disconnect** removes the local credential. Use AniList's connected app settings to revoke access remotely.
 
@@ -186,6 +198,8 @@ Edit `script-opts/rich-presence.conf` in your mpv config directory and restart m
 | `menu_key` | `Alt+p` | Shortcut that opens the panel. Use an mpv key name. |
 | `menu_scale` | `1` | Positive size multiplier for the panel and Ask popup. For example, `0.9` is smaller and `1.2` is larger, subject to available window space. |
 | `menu_animations` | `yes` | Enables panel transitions and horizontal scrolling on hover. Set `no` for instant transitions. The tooltip still shows the full value. |
+| `panel_blur` | `yes` | Blurs video behind the main panel on `vo=gpu-next`. Set `no` to keep only translucency. |
+| `catalog_cache_hours` | `24` | Successful AniList and TV catalog disk-cache lifetime, from 0 to 168 hours. Zero disables disk reuse for these catalog responses. The in-memory AniList cache and other provider caches still apply. |
 | `panel_position` | `top-left` | Choose `top-left`, `top-center`, `top-right`, `bottom-left`, `bottom-center` or `bottom-right`. The panel's **Config** option uses this setting. Set the Ask popup position separately in **AniList**. |
 
 ### Account helper and provider access

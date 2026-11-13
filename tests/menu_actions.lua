@@ -4,8 +4,13 @@ local mode=os.getenv("MPVRP_MENU_TEST")
 local actions={"menu","DOWN","DOWN","DOWN","ENTER"}
 if mode=="position" or mode=="inherit-position" then
     actions={"menu","DOWN","DOWN","DOWN","DOWN",mode=="position" and "LEFT" or "RIGHT"}
-elseif mode=="apply" then
+elseif mode=="apply" or mode=="reset-preset" then
+    if mode=="reset-preset" then
+        actions={"menu","DOWN","DOWN","DOWN","RIGHT","LEFT"}
+    end
     actions[#actions+1]="END"; actions[#actions+1]="UP"; actions[#actions+1]="ENTER"
+elseif mode=="custom" then
+    actions={"menu","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","ENTER","END","UP","ENTER"}
 else actions[#actions+1]="ESC" end
 actions[#actions+1]="ESC"
 local index=0

@@ -175,6 +175,50 @@ class PublicSignInTests(unittest.TestCase):
 
 
 class RecognitionTests(unittest.TestCase):
+    def test_background_lookup_cannot_publish_after_a_skip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            worker.db.execute("CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+            previous = dict(session=1, source="auto", allowed=True, video=False, title="First",
+                            artist="Fixture", duration=180)
+            current = dict(previous,session=2,title="Second")
+            entered, release = threading.Event(), threading.Event()
+
+            def candidates(_,title,*args,**kwargs):
+                if title=="First":
+                    entered.set()
+                    release.wait(5)
+                return [dict(id=title, name=title, artist="Fixture", duration_ms=180000)]
+
+            worker.put("player","window",previous)
+            with patch("backend.candidates",side_effect=candidates):
+                old = threading.Thread(target=worker.background_lookup,args=(previous,(0,0),({},{})))
+                old.start()
+                try:
+                    self.assertTrue(entered.wait(3))
+                    worker.put("player","window",current)
+                    worker.background_lookup(current,(0,0),({},{}))
+                    self.assertEqual(worker.get("auto","window").get("session"),2)
+                finally:
+                    release.set()
+                    old.join(6)
+            self.assertEqual(worker.get("auto","window").get("session"),2)
+            worker.db.close()
+
+    def test_tv_catalog_survives_reopening_and_can_be_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "db"
+            request = Mock(return_value=[{"id": 12}])
+            for session, hours in enumerate((24,24,0)):
+                worker = Worker(database,"window",{"catalog_cache_hours":hours})
+                try:
+                    worker.db.execute("CREATE TABLE IF NOT EXISTS records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+                    result = worker.cached_fetch("tv-catalog/search/fixture","results",request,lambda: None,catalog=True)
+                    self.assertEqual(result,[{"id":12}])
+                    self.assertEqual(request.call_count,1 if session<2 else 2)
+                finally:
+                    worker.db.close()
+
     def test_tv_folder_rules_are_opt_in_and_resolve_each_episode(self):
         with tempfile.TemporaryDirectory() as directory:
             worker = Worker(":memory:", "window", {})
@@ -638,7 +682,10 @@ class RecognitionTests(unittest.TestCase):
                         ):
                             worker.recognize(player)
                         self.assertEqual(
-                            [call.args[0] for call in search.call_args_list], calls
+                            [call.args[0] for call in search.call_args_list],
+                            [provider for provider in calls if not (
+                                source=="movie-tv" and provider=="tmdb-tv"
+                            )],
                         )
                         if video:
                             self.assertEqual(

@@ -47,6 +47,8 @@ namespace mpvrp
         uint64_t application_id = 0;
         uint64_t session_start = 0, file_session = 0;
         std::unique_ptr<profile_store> store;
+        std::filesystem::path database_path;
+        std::atomic<int> catalog_cache_hours{24};
         bool store_failed = false, hidden_until_exit = false;
         std::string appearance_scope = "configuration", match_scope = "configuration", source_scope = "configuration";
         int store_version = -1;

@@ -24,6 +24,8 @@ local options = {
     menu_key = "Alt+p",
     menu_scale = 1,
     menu_animations = true,
+    panel_blur = true,
+    catalog_cache_hours = 24,
     panel_position = "top-left",
     anilist_personal_client = false,
     anilist_exchange_url = "",
@@ -72,7 +74,8 @@ function pong()
     mp.commandv("script-message-to", "rich_presence", "folder_list", options.folder_list)
     mp.commandv("script-message-to", "rich_presence", "pause_timeout", tostring(options.pause_timeout))
     panel({action="setup",database=database,legacy_database=legacy_database,
-        preset=options.appearance_preset,source=options.recognition_source})
+        preset=options.appearance_preset,source=options.recognition_source,
+        catalog_cache_hours=math.floor(options.catalog_cache_hours)})
     mp.commandv("script-message-to", "rich_presence", "config_complete")
 end
 
@@ -89,7 +92,8 @@ local function start_worker(instance)
     -- These settings are public. Tokens and provider keys never pass through argv.
     -- mpv does not reliably feed subprocess stdin on Windows.
     local settings = utils.format_json({broker=options.anilist_exchange_url,
-        personal=options.anilist_personal_client,client_id=options.anilist_client_id})
+        personal=options.anilist_personal_client,client_id=options.anilist_client_id,
+        catalog_cache_hours=math.max(0,math.min(168,math.floor(options.catalog_cache_hours)))})
     local args = {interpreter, "-I", utils.join_path(modules,"backend.py"), database, instance, settings, config,
         mp.get_property("pid")}
     local started=mp.get_time()
@@ -134,6 +138,7 @@ options.open_url = function(url)
 end
 local ok
 ok, menu = pcall(function()
+    dofile(utils.join_path(modules,"panel_media.lua"))(options,modules,interpreter,utils)
     local sheet = dofile(utils.join_path(modules,"sheet.lua"))
     local help = dofile(utils.join_path(modules,"menu_help.lua"))
     ask = dofile(utils.join_path(modules,"ask.lua"))(sheet,panel,options,function(id)

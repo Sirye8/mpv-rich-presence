@@ -40,6 +40,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -186,7 +187,44 @@ static void record_anilist_rate_limit(const cpr::Response& response)
         chrono::steady_clock::now() + chrono::seconds(std::clamp(seconds, 1, 300)));
 }
 
-static std::vector<anilist_media> search_anilist_page(const std::string& search, bool& confirmed)
+static nlohmann::json catalog_cached(profile_store* cache, const std::string& key, int hours)
+{
+    if (!cache) return {};
+    try
+    {
+        const auto entry = cache->get("cache", key);
+        const auto expires = entry.value("expires",int64_t{});
+        const auto fetched = entry.value("fetched",int64_t{});
+        if (std::min(expires,fetched+hours*3600)>std::time(nullptr)) return entry.at("catalog");
+    }
+    catch (...) {}
+    return {};
+}
+
+static nlohmann::json catalog_epoch(profile_store*& cache)
+{
+    if (cache)
+    {
+        try { return cache->get("generation","cache"); }
+        catch (...) { cache=nullptr; }
+    }
+    return {};
+}
+
+static void save_catalog(profile_store* cache, const std::string& key, const nlohmann::json& payload,
+    int ttl, const nlohmann::json& epoch)
+{
+    if (!cache || ttl<=0) return;
+    try
+    {
+        if (cache->get("generation","cache")==epoch)
+            cache->put_catalog(key,payload,std::time(nullptr)+ttl,epoch);
+    }
+    catch (...) {}
+}
+
+static std::vector<anilist_media> search_anilist_page(const std::string& search, bool& confirmed,
+    profile_store* cache, int hours, const std::function<bool()>& cancelled)
 {
     if (search.empty() || search.size() > 256 || search.find("://") != std::string::npos ||
         search.starts_with("/") || search.starts_with("\\") || (search.size() > 2 && search[1] == ':' &&
@@ -196,11 +234,16 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
         return {};
     }
     auto generation = cache_generation.load();
+    const auto key = "anilist-page/" + search;
+    const auto epoch = catalog_epoch(cache);
+    std::vector<anilist_media> results;
     {
         std::lock_guard<std::mutex> lock(anilist_cache_mutex);
         auto it = anilist_page_cache.find(search);
         if (it != anilist_page_cache.end() && it->second.expires > chrono::steady_clock::now())
             return it->second.value;
+        if (auto saved = catalog_cached(cache,key,hours); !saved.is_null() && parse_anilist_page_response(saved,results))
+            return results;
         if (anilist_rate_limited_until > chrono::steady_clock::now())
         {
             confirmed = false;
@@ -220,10 +263,11 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
             { "User-Agent", "mpv-rich-presence/1.0" }
         },
         cpr::Body { query.dump() },
-        cpr::Timeout { 3000 });
+        cpr::Timeout { 3000 },
+        cpr::ProgressCallback{[&](auto,auto,auto,auto,auto) { return !cancelled(); }});
 
     record_anilist_rate_limit(r);
-    std::vector<anilist_media> results;
+    if (cancelled()) { confirmed=false; return {}; }
     if (r.status_code == 200)
     {
         try
@@ -238,9 +282,14 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
                     return {};
                 }
                 auto now = chrono::steady_clock::now();
+                const auto ttl = hours>0 ? chrono::hours(hours) : 24h;
                 for (const auto& item : results)
-                    anilist_id_cache[item.id] = {item, now + 24h};
-                anilist_page_cache[search] = {results, now + (results.empty() ? 5min : 24h)};
+                    anilist_id_cache[item.id] = {item, now + ttl};
+                anilist_page_cache[search] = {results, now + (results.empty() ? 5min : ttl)};
+                save_catalog(cache,key,j,results.empty() ? 300 : hours*3600,epoch);
+                for (const auto& media : j.at("data").at("Page").at("media"))
+                    if (media.is_object() && media.contains("id") && media.at("id").is_number_integer())
+                        save_catalog(cache,"anilist-id/"+std::to_string(media.at("id").get<int>()),media,hours*3600,epoch);
                 return results;
             }
         }
@@ -253,14 +302,19 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
     return results;
 }
 
-static std::optional<anilist_media> fetch_anilist_by_id(int id)
+static std::optional<anilist_media> fetch_anilist_by_id(int id, profile_store* cache, int hours,
+    const std::function<bool()>& cancelled)
 {
     auto generation = cache_generation.load();
+    const auto key = "anilist-id/" + std::to_string(id);
+    const auto epoch = catalog_epoch(cache);
     {
         std::lock_guard<std::mutex> lock(anilist_cache_mutex);
         auto it = anilist_id_cache.find(id);
         if (it != anilist_id_cache.end() && it->second.expires > chrono::steady_clock::now())
             return it->second.value;
+        if (auto saved = catalog_cached(cache,key,hours); saved.is_object())
+            if (auto media = parse_anilist_media(saved)) return media;
         if (anilist_rate_limited_until > chrono::steady_clock::now())
             return {};
     }
@@ -277,9 +331,11 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
             { "User-Agent", "mpv-rich-presence/1.0" }
         },
         cpr::Body { query.dump() },
-        cpr::Timeout { 3000 });
+        cpr::Timeout { 3000 },
+        cpr::ProgressCallback{[&](auto,auto,auto,auto,auto) { return !cancelled(); }});
 
     record_anilist_rate_limit(r);
+    if (cancelled()) return {};
     std::optional<anilist_media> result = std::nullopt;
     if (r.status_code == 200)
     {
@@ -294,7 +350,8 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
                 {
                     std::lock_guard<std::mutex> lock(anilist_cache_mutex);
                     if (generation != cache_generation.load()) return {};
-                    anilist_id_cache[result->id] = {*result,chrono::steady_clock::now()+24h};
+                    anilist_id_cache[result->id] = {*result,chrono::steady_clock::now()+(hours>0 ? chrono::hours(hours) : 24h)};
+                    save_catalog(cache,key,j["data"]["Media"],hours*3600,epoch);
                 }
             }
         }
@@ -309,14 +366,18 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
 // Resolve outside the player lock, then publish the result for the current file.
 static void process_anime_lookup(rich_presence_state& state, const std::string& filename,
     const std::string& folder, double duration, const std::string& embedded_title,
-    int load_id, const nlohmann::json& correction, bool& confirmed)
+    int load_id, const nlohmann::json& correction, bool& confirmed, profile_store* cache)
 {
     const auto cancelled = [&] {
         return state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != load_id;
     };
     const auto folder_name = correction.value("automatic", false)
         ? video_name_from_folder(filename, folder, duration, embedded_title) : std::nullopt;
-    auto match = recognize_anime(filename, correction, {search_anilist_page, fetch_anilist_by_id},
+    const auto hours = state.catalog_cache_hours.load();
+    if (hours<=0) cache=nullptr;
+    auto match = recognize_anime(filename, correction, {
+        [&](const std::string& query, bool& ok) { return search_anilist_page(query,ok,cache,hours,cancelled); },
+        [&](int id) { return fetch_anilist_by_id(id,cache,hours,cancelled); }},
         cancelled, confirmed, folder, folder_name);
     if (!match || cancelled()) return;
 
@@ -346,6 +407,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
 // Background worker thread entry
 static void anime_worker_loop(rich_presence_state& state)
 {
+    std::unique_ptr<profile_store> catalog;
     while (true)
     {
         int current_load_id = 0;
@@ -374,6 +436,11 @@ static void anime_worker_loop(rich_presence_state& state)
             duration = state.pending_duration;
             embedded_title = std::move(state.pending_embedded_title);
             state.has_pending_lookup = false;
+            if (!catalog && state.catalog_cache_hours>0 && !state.database_path.empty())
+            {
+                try { catalog = std::make_unique<profile_store>(state.database_path); }
+                catch (...) {}
+            }
         }
 
         for (const auto delay : {0s, 5s, 15s})
@@ -390,7 +457,7 @@ static void anime_worker_loop(rich_presence_state& state)
             bool confirmed = true;
             try
             {
-                process_anime_lookup(state, filename_str, folder, duration, embedded_title, current_load_id, correction, confirmed);
+                process_anime_lookup(state, filename_str, folder, duration, embedded_title, current_load_id, correction, confirmed,catalog.get());
             }
             catch (...)
             {
@@ -514,6 +581,16 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             !((key=="tv_rules" || key=="sidecar_metadata" || key=="confirm_fingerprint") && val.is_boolean())) return false;
         if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
             val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
+        if (category=="panel-theme")
+        {
+            static const std::regex rgb("[0-9A-Fa-f]{6}");
+            if (!((key=="preset" && (val=="glass" || val=="midnight" || val=="graphite" || val=="custom")) ||
+                ((key=="background" || key=="accent") && val.is_string() &&
+                    std::regex_match(val.get_ref<const std::string&>(),rgb)) ||
+                (key=="opacity" && val.is_number_integer() && val>=40 && val<=100) ||
+                (key=="strength" && val.is_number_integer() && val>=2 && val<=12) ||
+                (key=="blur" && val.is_boolean()))) return false;
+        }
         if (category == "match" && !((key == "id" && val.is_number_integer() && val > 0 && val <= INT32_MAX)
             || (key == "offset" && val.is_number_integer() && val >= -9999 && val <= 9999)
             || (key == "episode" && val.is_number_integer() && val > 0 && val <= 9999)
@@ -624,6 +701,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             if (action == "setup")
             {
                 state.config_preset = req.value("preset", std::string("original"));
+                state.catalog_cache_hours = std::clamp(req.value("catalog_cache_hours",24),0,168);
                 const auto source = req.value("source", std::string("auto"));
                 state.config_source = valid_source(source) ? source : "auto";
                 if (state.config_source != source) mpv_print(state.mpv, "Invalid recognition_source. Using Automatic.");
@@ -633,6 +711,10 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     auto path = fs::u8path(req.at("database").get<std::string>());
                     auto legacy = fs::u8path(req.value("legacy_database", std::string{}));
                     state.store = std::make_unique<profile_store>(path, legacy);
+                    {
+                        std::lock_guard lock(state.worker_mutex);
+                        state.database_path = path;
+                    }
                     state.store_failed = false;
                 }
                 read_profiles(state);
@@ -783,6 +865,8 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 clear_anilist_cache();
                 if (state.store)
                 {
+                    state.store->put("generation","cache",{{"id",generate_instance_id()}});
+                    state.store->clear_catalog();
                     state.store->clear("auto",state.instance_id);
                     state.store->put("refresh",state.instance_id,{{"id",generate_instance_id()}});
                 }
@@ -790,7 +874,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             else if ((action == "apply" || action == "clear") && state.store)
             {
                 const auto category = req.at("category").get<std::string>();
-                if (category == "panel" || category == "recognition-options")
+                if (category == "panel" || category == "recognition-options" || category=="panel-theme")
                 {
                     if (action == "clear")
                     {
@@ -804,7 +888,10 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                         else state.store->clear(category,"global");
                     }
                     else if (const auto& values = req.at("values"); valid_settings(category,values))
-                        state.store->save(category,"global",values);
+                    {
+                        if (category=="panel-theme") state.store->put(category,"global",values);
+                        else state.store->save(category,"global",values);
+                    }
                     if (category=="recognition-options")
                     {
                         state.recognition_options = state.store->get(category,"global");
@@ -1274,7 +1361,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
     while (true)
     {
-        auto* event = mpv_wait_event(state.mpv, SLEEP_DURATION.count() * 1e-3);
+        const auto wait = state.publish_pending ? 20ms : SLEEP_DURATION;
+        auto* event = mpv_wait_event(state.mpv, wait.count() * 1e-3);
         bool should_shutdown = false;
         while (event && event->event_id != MPV_EVENT_NONE)
         {
@@ -1739,6 +1827,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"episode_watch",std::move(episode_watch)},{"recognition_options",state.recognition_options},
                 {"fingerprint_available",resolved && candidate.value("fingerprint_available",false)},
                 {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
+                {"panel_theme",state.store ? state.store->get("panel-theme","global") : nlohmann::json::object()},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?
                     state.store->pending() : nlohmann::json::array()},
                 {"sources",state.sources},{"provider",media.anime ? "anilist" :
@@ -1857,8 +1946,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             state.last_sdk = "Publish acknowledgement timed out";
             state.force_update = forced = true;
         }
-        if (state.publish_pending ||
-            (!forced && !retry_ready && !pause_changed && !anime_updated && !buffering_update && !seek_detected && !periodic_update && !first_update && state.presence_wanted))
+        const bool changed = forced || retry_ready || pause_changed || anime_updated || buffering_update ||
+            seek_detected || periodic_update || first_update || !state.presence_wanted;
+        if (state.publish_pending)
+        {
+            state.force_update = changed;
+            continue;
+        }
+        if (!changed)
             continue;
 
         state.force_update = false;

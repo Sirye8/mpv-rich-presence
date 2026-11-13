@@ -24,6 +24,9 @@ namespace mpvrp
         nlohmann::json get(const std::string& category, const std::string& scope) const;
         nlohmann::json episode_watch(int viewer, int media, const std::string& episode) const;
         void put(const std::string& category, const std::string& scope, const nlohmann::json& value);
+        void put_catalog(const std::string& key, const nlohmann::json& value, int64_t expires,
+                         const nlohmann::json& epoch);
+        void clear_catalog();
         nlohmann::json record_counts() const;
         nlohmann::json records(const std::string& category) const;
         nlohmann::json pending() const;

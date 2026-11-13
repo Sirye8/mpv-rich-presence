@@ -22,7 +22,13 @@ local help = {
     ["AniList progress"]="Open the list entry for the current anime.",
     ["Save for"]="Choose where this change is saved.",
     ["Media layout"]="Set the card for all media or just one media type.",
-    ["Preset"]="Original preserves the old layout. Clean removes extra details. Detailed adds context. Private uses a generic card.",
+    ["Preset"]="Choose a starting layout. Selecting a preset resets all appearance overrides in the selected scope and media layout. Editing an appearance field marks it Custom and keeps the selected preset as its base.",
+    ["Panel theme"]="Open the panel's own appearance settings. These apply immediately to this panel across mpv windows and do not change Discord cards.",
+    ["Background color"]="Enter a six-digit RGB hex color such as #030405. This color tints the panel shell and is used to derive its row and hover colors.",
+    ["Accent color"]="Enter a six-digit RGB hex color. It colors links, focus indicators, sliders and active controls. A light accent is easier to read on dark backgrounds.",
+    ["Panel opacity"]="Enter 40 to 100 percent. Lower values let more video through. At 100 percent the panel shell is opaque. Dark glass defaults to 87 percent.",
+    ["Blur strength"]="Enter 2 to 12 pixels. A larger value samples farther from each pixel, softening more of the background while the panel is open.",
+    ["Restore panel theme defaults"]="Remove the saved theme and use Dark glass with the blur preference from rich-presence.conf.",
     ["Title language"]="Choose the anime title language. Missing translations fall back to the original title.",
     ["Episode numbering"]="Show the season-relative number, the original filename number, or both.",
     ["Timer"]="Choose how Discord shows time. AniList watch time uses a separate counter.",
@@ -153,6 +159,16 @@ local help = {
 }
 
 local choices = {
+    ["Panel theme preset"]={
+        glass="Dark glass. Near-black, 87 percent opacity, with a soft live blur.",
+        midnight="Midnight. Deep blue with more visible video and a stronger blur.",
+        graphite="Graphite. An opaque charcoal panel with blur disabled.",
+        custom="Custom. Keep the current colors, opacity and blur settings. Editing any theme field also selects this preset.",
+    },
+    ["Background blur"]={
+        On="Apply live blur beneath this panel on mpv's gpu-next video output. Other outputs keep translucency.",
+        Off="Show the video through the translucent panel without filtering the background.",
+    },
     ["Release idle Discord pin"]={
         On="Release this window's exclusive Discord pin when sharing is blocked, playback ends, or its pause timeout expires. Another eligible mpv window can claim Discord. Pin this window again to restore exclusive ownership.",
         Off="Keep the pin for this window until you unpin it, close the window, or its lease expires. This is the default."},
@@ -172,7 +188,7 @@ local choices = {
     ["Save for"]={global="Apply to all media.",folder="Apply to this folder and its subfolders.",file="Apply only to the current file."},
     ["Media layout"]={all="Every media type.",anime="Matched anime.",audio="Unmatched audio.",video="Unmatched video.",
         movie="Matched movies.",tv="Matched TV episodes or shows.",recording="Matched music.",stream="Matched streams."},
-    ["Preset"]={original="Use the v1.0.10 layout.",clean="Keep the card compact and omit the release group.",
+    ["Preset"]={original="Use the standard Rich Presence layout.",clean="Keep the card compact and omit the release group.",
         detailed="Include more context where available.",private="Use a generic card."},
     ["Title language"]={original="Use the original match title.",english="Prefer the English title.",
         romaji="Prefer the Romanized title.",native="Prefer the native-script title."},

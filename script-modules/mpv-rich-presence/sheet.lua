@@ -2,7 +2,7 @@
 local assdraw = require("mp.assdraw")
 local ok_input, input = pcall(require, "mp.input")
 -- ASS colors are BGR. The video output composites the alpha under the whole sheet.
-local theme = {black="0B0908", rail="080605", row="201C19", hover="40352B", focus="594636",
+local default_theme = {black="050403", rail="050403", row="1B1816", hover="40352B", focus="594636",
     text="F7F3EF", muted="C2B8AD", accent="FFD9AF", ink="1B1008", rim="ABA096",
     switch="5F5348", hint="18130F"}
 local utf8_char = "[%z\1-\127\194-\244][\128-\191]*"
@@ -45,7 +45,7 @@ end
 local function box(ass, x,y,r,b, color, opacity, radius, rim)
     ass:new_event(); ass:an(7); ass:pos(0,0)
     ass:append("{\\shad0\\bord"..(rim and 1 or 0).."\\1c&H"..color.."&\\1a&H"..alpha(opacity).."&"..
-        (rim and "\\3c&H"..theme.rim.."&\\3a&H"..alpha(rim).."&" or "").."}")
+        (rim and "\\3c&H"..default_theme.rim.."&\\3a&H"..alpha(rim).."&" or "").."}")
     ass:draw_start(); ass:round_rect_cw(x,y,r,b,radius or 8); ass:draw_stop()
 end
 
@@ -56,12 +56,14 @@ local function label(ass, x,y, text, size, color, opacity, align, bold, clip)
 end
 
 return function(model)
+    local theme=default_theme
     local row_step, row_height = model.compact and 28 or 32, model.compact and 25 or 29
     local mouse_section = model.compact and "rich-presence-ask" or "rich-presence-panel"
     local ui = {open=false, page="Menu", memory={}, stack={}, hits={}}
     local overlay, layout, refresh_timer, toast_timer, hover_timer, animation_timer
     local last_frame, last_terminal
     local keys, editing, pressed, hovered, tooltip, drag = {}
+    local stop_edit,controls
     local scale = 1
     local motion = {shell=0, page=1, focus=1, hover=0, hint=0, scroll=0}
     local tweens = {}
@@ -121,15 +123,16 @@ return function(model)
     end
 
     local function render()
-        if editing or not layout or motion.shell<=0 then return end
+        if (editing and editing.dialog) or not layout or motion.shell<=0 then return end
         local ass = assdraw.ass_new()
+        theme=model.theme and model.theme() or default_theme
         local left,top,right,bottom,pane = layout.left,layout.top,layout.right,layout.bottom,layout.pane
         local shell = motion.shell
         local content = shell*(.58+.42*motion.page)
         local offset = layout.direction*math.floor(6*(1-motion.page)+.5)
         local rise = math.floor(4*(1-shell)+.5)
         box(ass,left+1,top+4,right+1,bottom+5,theme.rail,.34*shell,16)
-        box(ass,left,top,right,bottom,theme.black,.87*shell,16,.34*shell)
+        box(ass,left,top,right,bottom,theme.black,(theme.opacity or .87)*shell,16,.34*shell)
         if layout.wide then
             box(ass,left+5,top+5,pane-5,bottom-5,theme.rail,.34*shell,12)
             label(ass,left+14,top+13,"Rich Presence",16,theme.accent,shell,nil,true)
@@ -166,7 +169,16 @@ return function(model)
                 box(ass,x+4,y+7,x+7,b-7,theme.accent,focus*content,1.5)
             end
             local color = (item.primary or is_pressed) and theme.ink or (item.disabled and theme.muted or theme.text)
-            if item.stepper then
+            if item.editor and editing then
+                box(ass,x+2,y+2,r-2,b-2,theme.hover,content,7,.65)
+                local value=editing.selected and editing.value or editing.value:sub(1,editing.cursor).."│"..editing.value:sub(editing.cursor+1)
+                local left=x+12
+                local right=r-12
+                local shift=editing.selected and 0 or math.max(0,measure(editing.value:sub(1,editing.cursor),15)-(right-left-18))
+                if editing.selected then box(ass,left-3,y+4,math.min(right,left+measure(value,15)+4),b-4,theme.focus,content,4) end
+                local clip=string.format("\\clip(%d,%d,%d,%d)",math.ceil(left),math.floor(y),math.floor(right),math.ceil(b))
+                label(ass,left-shift,y+5,escape(value),15,theme.text,content,nil,false,clip)
+            elseif item.stepper then
                 label(ass,(x+r)/2,y+5+rise,item.caption.."  "..item.value_text,15,theme.text,content,8,true)
                 for _,button in ipairs(item.stepper) do
                     local active=hovered==button.key and motion.hover or 0
@@ -375,6 +387,9 @@ return function(model)
     function ui.close()
         if not ui.open then return end
         ui.open=false
+        if editing and editing.dialog and input.terminate then input.terminate() end
+        if model.avatar then model.avatar() end
+        if model.backdrop then model.backdrop() end
         clear_hover(true)
         if refresh_timer then refresh_timer:kill(); refresh_timer=nil end
         mp.unobserve_property(ui.draw)
@@ -393,6 +408,7 @@ return function(model)
     end
 
     local function show_page(page, direction)
+        if editing and stop_edit then stop_edit(false) end
         if model.changed then model.changed() end
         if layout then layout.direction=direction end
         ui.page=page
@@ -415,8 +431,19 @@ return function(model)
     end
 
     function ui.draw()
-        if not ui.open or editing then return end
+        if not ui.open or (editing and editing.dialog) then return end
         local rows = model.rows(ui.page)
+        if editing then
+            local found=false
+            for i,row in ipairs(rows) do
+                if row.id==editing.id then
+                    rows[i]={id=row.id,label=editing.prompt,editor=true}
+                    found=true
+                    break
+                end
+            end
+            if not found then rows[#rows+1]={id=editing.id,label=editing.prompt,editor=true} end
+        end
         local mem = ui.memory[ui.page] or {focus=1,top=1}
         ui.memory[ui.page]=mem
         if mem.id then
@@ -426,6 +453,8 @@ return function(model)
         mem.id=rows[mem.focus] and rows[mem.focus].id
         local w,h,factor = dimensions()
         if not w then
+            if model.avatar then model.avatar() end
+            if model.backdrop then model.backdrop() end
             if layout then
                 clear_hover(true)
                 mp.set_mouse_area(0,0,0,0,mouse_section)
@@ -453,6 +482,10 @@ return function(model)
         if position=="center" then top=math.max(min_top,math.min((h-height)/2,max_bottom-height)) end
         local bottom = top+height
         local bounds = {math.floor(left*scale),math.floor(top*scale),math.ceil(right*scale),math.ceil(bottom*scale)}
+        if model.backdrop then
+            theme=model.theme and model.theme() or default_theme
+            model.backdrop(bounds,16*scale,theme.blur,theme.strength)
+        end
         local bounds_key = table.concat(bounds,":")
         if not layout or layout.bounds~=bounds_key then
             mp.set_mouse_area(bounds[1],bounds[2],bounds[3],bounds[4],mouse_section)
@@ -462,7 +495,7 @@ return function(model)
         local previous = layout
         layout = {w=math.floor(w),h=math.floor(h),left=left,top=top,right=right,bottom=bottom,pane=pane,wide=wide,
             min_top=min_top,max_bottom=max_bottom,
-            title=fit(ui.page=="Menu" and "Rich Presence" or ui.page,20,right-pane-(model.compact and 57 or 36)),
+            title=fit(editing and editing.prompt or (ui.page=="Menu" and "Rich Presence" or ui.page),20,right-pane-(model.compact and 57 or 36)),
             page=ui.page,direction=previous and previous.direction or 1,
             bounds=bounds_key,focus=mem.id,nav={},rows={},footer={}}
         ui.hits={}
@@ -507,11 +540,13 @@ return function(model)
                 item=hit(layout.rows,pane+8,y,right-8,y+row_height,i,key,not row.disabled and row.run or nil,row.label,row.tip)
             end
             item.focused,item.disabled,item.primary,item.toggle,item.adjust,item.plain = mem.focus==i,row.disabled,row.primary,row.toggle,row.adjust,row.plain
+            item.editor=row.editor
+            item.avatar=row.avatar
             local title,value=row.label:match("^(.-)   (.+)$")
             item.caption,item.value_text,item.link=title or row.label,value,row.link
             if item.stepper then value=nil end
             local label_left=item.x+(row.plain and 5 or 13)
-            local inset=(row.adjust or row.link or (item.fn and not value)) and 26 or 11
+            local inset=row.avatar and 52 or (row.adjust or row.link or (item.fn and not value)) and 26 or 11
             item.label_right=item.r-inset
             if row.toggle~=nil then
                 item.label_right=item.r-49
@@ -526,7 +561,20 @@ return function(model)
             end
             item.display=display(item.caption,15,item.label_right-label_left-6)
         end
-        if model.compact then
+        if model.avatar then
+            local avatar
+            for _,item in ipairs(layout.rows) do
+                if item.avatar then avatar=item; break end
+            end
+            model.avatar(avatar and avatar.avatar,avatar and math.floor((avatar.r-47)*scale),
+                avatar and math.floor((avatar.y+3)*scale),avatar and math.max(16,math.floor(23*scale)))
+        end
+        if editing then
+            local mid=(pane+right)/2
+            hit(layout.footer,pane+8,bottom-35,mid-3,bottom-7,"cancel","cancel",function() stop_edit(false) end,"Cancel","Discard this edit.")
+            local save=hit(layout.footer,mid+3,bottom-35,right-8,bottom-7,"save","save",function() stop_edit(true) end,"Done","Use the entered value.")
+            save.primary=true
+        elseif model.compact then
             hit(layout.footer,right-38,top+6,right-8,top+34,"close","close",ui.close,"×",
                 "Dismiss this prompt and keep the update for later.")
             hit(layout.footer,pane+8,bottom-35,right-8,bottom-7,"later","later",ui.close,model.footer(),
@@ -593,7 +641,7 @@ return function(model)
     end
 
     local function pointer(event)
-        if not ui.open or editing then return end
+        if not ui.open or (editing and editing.dialog) then return end
         local x,y=mp.get_mouse_pos()
         x,y=x/scale,y/scale
         local bar=layout and layout.scroll
@@ -627,6 +675,7 @@ return function(model)
         for _,item in ipairs(ui.hits) do
             if x>=item.x and x<item.r and y>=item.y and y<item.b then target=item; break end
         end
+        if editing and target and target.key~="save" and target.key~="cancel" then target=nil end
         local key=target and target.key
         if event=="hover" then
             if key==hovered then return end
@@ -678,6 +727,7 @@ return function(model)
         else pointer("hover") end
     end
     local function scroll(delta)
+        if editing then return end
         if tooltip and tooltip.key==hovered and tooltip.max_scroll>0 then
             tooltip.scroll=math.max(0,math.min(tooltip.max_scroll,tooltip.scroll+delta*72))
             render()
@@ -707,7 +757,7 @@ return function(model)
     end
     mp.set_key_bindings(bindings,mouse_section,"force")
 
-    local function controls()
+    controls=function()
         if not model.compact or not dimensions() then
             bind("HOME",function() focus(-100000) end); bind("END",function() focus(100000) end)
             bind("UP",function() focus(-1) end,{repeatable=true})
@@ -719,9 +769,18 @@ return function(model)
         mp.enable_key_bindings(mouse_section,"allow-hide-cursor")
     end
 
+    stop_edit=function(save)
+        local session=editing
+        if not session then return end
+        editing=nil
+        unbind()
+        if ui.open then controls(); ui.draw() end
+        if save then session.done(session.value) end
+    end
+
     function ui.text(prompt, value, done)
-        if not ok_input then model.notice("Text input unavailable. Use the script-message command."); return end
-        local session={}
+        local mem=ui.memory[ui.page]
+        local session={prompt=prompt,value=tostring(value or ""),done=done,id=mem and mem.id}
         editing=session
         clear_hover(true)
         pressed=nil
@@ -729,7 +788,62 @@ return function(model)
         stop_animation()
         motion.shell,motion.page,motion.focus=1,1,1
         unbind()
+        if dimensions() and session.id then
+            session.cursor=#session.value
+            session.selected=true
+            local function insert(value)
+                value=(value or ""):gsub("[%c]"," ")
+                if value=="" then return end
+                if session.selected then session.value,session.cursor,session.selected="",0,false end
+                if #session.value+#value>8192 then return end
+                local i=session.cursor
+                session.value=session.value:sub(1,i)..value..session.value:sub(i+1)
+                session.cursor=i+#value
+                render()
+            end
+            local function boundary(direction)
+                local i=session.cursor
+                repeat i=i+direction until i<=0 or i>=#session.value or
+                    not session.value:sub(i+1,i+1):match("[\128-\191]")
+                return math.max(0,math.min(#session.value,i))
+            end
+            local function move(i)
+                session.cursor,session.selected=i,false
+                render()
+            end
+            local function erase(direction)
+                if session.selected then
+                    session.value,session.cursor,session.selected="",0,false
+                else
+                    local edge=boundary(direction)
+                    local first,last=math.min(edge,session.cursor),math.max(edge,session.cursor)
+                    session.value=session.value:sub(1,first)..session.value:sub(last+1)
+                    session.cursor=first
+                end
+                render()
+            end
+            bind("any_unicode",function(event)
+                if event.event~="up" and event.key_text then insert(event.key_text) end
+            end,{complex=true,repeatable=true})
+            bind("Ctrl+v",function() insert(mp.get_property("clipboard/text","")) end)
+            bind("Shift+Insert",function() insert(mp.get_property("clipboard/text","")) end)
+            bind("Ctrl+a",function() session.selected=true; render() end)
+            bind("LEFT",function() move(session.selected and 0 or boundary(-1)) end,{repeatable=true})
+            bind("RIGHT",function() move(session.selected and #session.value or boundary(1)) end,{repeatable=true})
+            bind("HOME",function() move(0) end)
+            bind("END",function() move(#session.value) end)
+            bind("BS",function() erase(-1) end,{repeatable=true})
+            bind("DEL",function() erase(1) end,{repeatable=true})
+            bind("ENTER",function() stop_edit(true) end)
+            bind("ESC",function() stop_edit(false) end)
+            mp.enable_key_bindings(mouse_section,"allow-hide-cursor")
+            mem.reveal=true
+            ui.draw()
+            return
+        end
+        session.dialog=true
         remove_overlay()
+        if not ok_input then stop_edit(false); model.notice("Text input unavailable."); return end
         input.get({prompt=prompt,default_text=value or "",submit=function(s)
             if editing==session then done(s) end
         end,closed=function()

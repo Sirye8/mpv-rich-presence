@@ -8,6 +8,16 @@ return function(make_sheet, send, options, help)
     }
     local snap, draft, pending, scope = {}, {}, nil, "global"
     local layout, replace = "all", false
+    local themes={
+        glass={background="030405",accent="AFD9FF",opacity=87,blur=true,strength=6},
+        midnight={background="0B1323",accent="A7D0FF",opacity=82,blur=true,strength=8},
+        graphite={background="101113",accent="C9DEDA",opacity=100,blur=false,strength=6},
+    }
+    local theme_names={glass="Dark glass",midnight="Midnight",graphite="Graphite",custom="Custom"}
+    local function appearance_edit(key,value)
+        draft[key]=value
+        draft.custom=true
+    end
     local edit, edit_key, edit_base, list_status
     local status, status_timer, search
     local search_number=0
@@ -17,7 +27,7 @@ return function(make_sheet, send, options, help)
     local record
     local ui
     local saved_groups={
-        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","folder-filter","recognition-options"}},
+        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","panel-theme","folder-filter","recognition-options"}},
         {"Saved matches",{"match","provider","tv-rule"}},
         {"Saved caches",{"cache"}},
         {"Saved AniList data",{"watch","pending","skipped","history","entry"}},
@@ -29,6 +39,7 @@ return function(make_sheet, send, options, help)
         sources={"Recognition rules","Media type or provider choices saved for a file, folder or all files."},
         tracking={"Tracking preferences","AniList mode, threshold and Ask preferences saved for each scope. Watch history has its own category."},
         panel={"Panel settings","The saved panel position and optional Discord pin handoff. Clearing this record uses the default for each."},
+        ["panel-theme"]={"Panel theme","The saved panel palette, opacity and blur. Clearing this record restores Dark glass."},
         ["folder-filter"]={"Folder filter override","The saved folder filter mode or list. Removing it restores both values from rich-presence.conf."},
         ["recognition-options"]={"Optional recognition settings","Clear the switches for conditional TV folder rules and local metadata files. Saved rules and the sidecar files stay available."},
         ["tv-rule"]={"TV folder rules","Saved series identities and approved filename titles for an exact folder. Removing a folder record removes its rules. File-specific matches stay available."},
@@ -66,6 +77,43 @@ return function(make_sheet, send, options, help)
     local ask_positions={"top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"}
     local leave_positions={"center","top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"}
     local function copy(t) local r={}; for k,v in pairs(t or {}) do r[k]=v end; return r end
+    local function theme_settings()
+        local saved=snap.panel_theme or {}
+        local preset=themes[saved.preset] and saved.preset or "glass"
+        local config=copy(themes[preset])
+        if options.panel_blur==false and not saved.preset then config.blur=false end
+        for key,value in pairs(saved) do config[key]=value end
+        return config
+    end
+    local cached_theme, theme_key
+    local function panel_theme()
+        local config=theme_settings()
+        local key=table.concat({config.background,config.accent,config.opacity,tostring(config.blur),config.strength},":")
+        if key==theme_key then return cached_theme end
+        local function bgr(rgb) return rgb:sub(5,6)..rgb:sub(3,4)..rgb:sub(1,2) end
+        local function tint(first,second,fraction)
+            local out={}
+            for i=1,5,2 do
+                local a=tonumber(first:sub(i,i+1),16)
+                local b=tonumber(second:sub(i,i+1),16)
+                out[#out+1]=string.format("%02X",math.floor(a+(b-a)*fraction+.5))
+            end
+            return bgr(table.concat(out))
+        end
+        local background,accent=config.background,config.accent
+        local function light(rgb)
+            return .2126*tonumber(rgb:sub(1,2),16)+.7152*tonumber(rgb:sub(3,4),16)+.0722*tonumber(rgb:sub(5,6),16)>145
+        end
+        local readable=light(background) and "100D09" or "F7F3EF"
+        theme_key=key
+        cached_theme={black=bgr(background),rail=bgr(background),row=tint(background,"FFFFFF",.08),
+            focus=tint(background,accent,.31),hover=tint(background,accent,.18),
+            text=readable,muted=light(background) and "35302C" or "C2B8AD",
+            accent=bgr(accent),ink=light(accent) and "1B1008" or "F7F3EF",rim="ABA096",
+            switch=tint(background,accent,.42),hint=tint(background,"202835",.65),
+            opacity=config.opacity/100,blur=config.blur,strength=config.strength}
+        return cached_theme
+    end
     local function request(action,fields)
         local r=fields or {}; r.action=action; r.session=snap.session; send(r)
     end
@@ -148,7 +196,7 @@ return function(make_sheet, send, options, help)
             if v==nil and layout~="all" then v=(opts[layout.."_layout"] or {})[key] end
             if v==nil then v=opts[key] end
             if v==nil then v=default end
-            switch(label,v,function() draft[key]=not v; refresh() end)
+            switch(label,v,function() appearance_edit(key,not v); refresh() end)
         end
         local account=snap.account or {}
         local answer=snap.service or {}
@@ -271,17 +319,20 @@ return function(make_sheet, send, options, help)
                 link(button.label,button.url,"This button label and URL appear on the Discord card.",nil,"Public button "..i)
             end
         elseif page=="Appearance" then
-            local opts=copy(replace and {} or snap.appearance); for k,v in pairs(opts[layout.."_layout"] or {}) do opts[k]=v end; for k,v in pairs(draft) do opts[k]=v end
+            local opts=copy(replace and {} or snap.appearance)
+            local saved=opts[layout.."_layout"] or {}
+            if saved.preset then opts={} end
+            for k,v in pairs(saved) do opts[k]=v end
+            for k,v in pairs(draft) do opts[k]=v end
             row("Preview   "..(card.name or "mpv").." · "..(card.state or card.details or ""),function() ui.push("Card preview") end)
             scope_row()
             choice("Media layout",{"all","anime","audio","video","movie","tv","recording","stream"},layout,function(v)
                 layout=v; draft={}; replace=false; refresh()
             end)
             choice("Preset",{"original","clean","detailed","private"},opts.preset or "original",function(v)
-                replace=true; draft={preset=v,group=v~="clean",art=v~="private",badge=v~="private",button=v~="private",
-                    timer=v=="private" and "off" or "progress",episode=true,tooltip=true,state=true,details=true,language="original",numbering="relative"}
+                replace=true; draft={preset=v}
                 refresh()
-            end)
+            end,opts.custom and "Custom" or nil)
             local position=snap.panel_position
             if not position or position=="" then position="config" end
             choice("Panel position",panel_positions,position,function(v)
@@ -291,21 +342,28 @@ return function(make_sheet, send, options, help)
             for _,item in ipairs({{"Title language","language",{"original","english","romaji","native"}},
                 {"Episode numbering","numbering",{"relative","original","both"}},{"Timer","timer",{"progress","remaining","session","off"}}}) do
                 local key=item[2]
-                choice(item[1],item[3],opts[key] or item[3][1],function(v) draft[key]=v; refresh() end)
+                local default=key=="timer" and opts.preset=="private" and "off" or item[3][1]
+                choice(item[1],item[3],opts[key] or default,function(v) appearance_edit(key,v); refresh() end)
             end
             for _,item in ipairs({{"Release group","group"},{"Episode","episode"},{"Artwork","art"},{"Badge","badge"},
                 {"Tooltip","tooltip"},{"Provider button","button"},{"Details","details"},{"State","state"}}) do
-                toggle(item[1],item[2],item[2]~="group" or opts.preset~="clean")
+                local key=item[2]
+                local default=not ((key=="group" and opts.preset=="clean") or
+                    ((key=="art" or key=="badge" or key=="button") and opts.preset=="private"))
+                toggle(item[1],key,default)
             end
-            choice("Compact status",{"name","details","state"},opts.compact or "name",function(v) draft.compact=v; refresh() end)
+            choice("Compact status",{"name","details","state"},opts.compact or "name",function(v) appearance_edit("compact",v); refresh() end)
             toggle("Episode titles","spoilers",false)
             for _,item in ipairs({{"Headline","headline"},{"Details template","details_template"},{"State template","state_template"},
                 {"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
                 local label,key=item[1],item[2]
-                row(label,function() ui.text(label,opts[key] or "",function(v) draft[key]=v; refresh() end) end)
+                row(label,function() ui.text(label,opts[key] or "",function(v) appearance_edit(key,v); refresh() end) end)
             end
-            row("Edit public buttons",function() ui.text("Label|https://host/path (separate two buttons with a comma)","",function(v)
-                draft.buttons={}
+            row("Edit public buttons",function()
+                local values={}
+                for _,button in ipairs(opts.buttons or {}) do values[#values+1]=button.label.."|"..button.url end
+                ui.text("Label|https://host/path (separate two buttons with a comma)",table.concat(values,","),function(v)
+                appearance_edit("buttons",{})
                 for label,url in v:gmatch("([^,|]+)|([^,]+)") do
                     if #draft.buttons<2 then draft.buttons[#draft.buttons+1]={label=label,url=url} end
                 end
@@ -316,7 +374,51 @@ return function(make_sheet, send, options, help)
                     request("clear",{category="appearance",scope=scope}); draft={}; replace=false; refresh()
                 end)
             end)
+            row("Panel theme",function() ui.push("Panel theme") end)
             row("Apply",function() apply("appearance",edits()); draft={}; replace=false; ui.back() end,true)
+        elseif page=="Panel theme" then
+            local config=theme_settings()
+            local function save(values,reset)
+                request("apply",{category="panel-theme",values=values,replace=reset})
+                refresh()
+            end
+            local function customize(key,value)
+                config[key]=value
+                config.preset="custom"
+                save(config,true)
+            end
+            local preset=config.preset or "glass"
+            choice("Panel theme preset",{"glass","midnight","graphite","custom"},preset,function(v)
+                if v=="custom" then config.preset=v; save(config,true)
+                else save({preset=v},true) end
+            end,theme_names[preset])
+            for _,field in ipairs({{"Background color","background"},{"Accent color","accent"}}) do
+                local name,key=field[1],field[2]
+                row(name.."   #"..config[key],function()
+                    ui.text(name.." (hex RGB)","#"..config[key],function(value)
+                        local rgb=value:match("^#?(%x%x%x%x%x%x)$")
+                        if not rgb then return notice("Enter six hex digits, for example #030405.") end
+                        customize(key,rgb:upper())
+                    end)
+                end)
+            end
+            local function amount(name,key,low,high,suffix)
+                row(name.."   "..config[key]..suffix,function()
+                    ui.text(name.." ("..low.." to "..high..")",config[key],function(value)
+                        local n=tonumber(value)
+                        if not n or n~=math.floor(n) or n<low or n>high then
+                            return notice("Enter a whole number from "..low.." to "..high..".")
+                        end
+                        customize(key,n)
+                    end)
+                end)
+            end
+            amount("Panel opacity","opacity",40,100,"%")
+            switch("Background blur",config.blur,function() customize("blur",not config.blur) end)
+            if config.blur then amount("Blur strength","strength",2,12," px") end
+            row("Restore panel theme defaults",function()
+                request("clear",{category="panel-theme"}); refresh()
+            end)
             row("Cancel",ui.back)
         elseif page=="Recognition & folders" then
             scope_row()
@@ -534,7 +636,14 @@ return function(make_sheet, send, options, help)
                 entry.tip="Remove this directory from the list after reviewing the full path. In Whitelist mode this removes access. In Blacklist mode it removes a block."
             end
         elseif page=="AniList" then
-            row("Account   "..(account.name or "Not signed in"))
+            if account.name and tonumber(account.id) then
+                local username=account.name:match("^[A-Za-z0-9_-]+$") and account.name or tostring(account.id)
+                link("Account","https://anilist.co/user/"..username,
+                    "Open the connected account's AniList profile.",account.name)
+                list[#list].avatar=account.avatar and account.avatar.medium
+            else
+                row("Account   Not signed in")
+            end
             if account.name then
                 local item=row("Connection   "..(account.persistent and "Saved on this device" or "This session only"))
                 item.tip="Read only. Saved connections use the operating system's credential store. Session-only connections expire when the helper or mpv exits."
@@ -804,6 +913,7 @@ return function(make_sheet, send, options, help)
         return list
     end
     ui=make_sheet({sections=sections,rows=rows,refresh=refresh,notice=notice,scale=options.menu_scale,
+        avatar=options.avatar,backdrop=options.backdrop,theme=panel_theme,
         animate=options.menu_animations,help=help,changed=clear_notice,position=function()
             return snap.panel_position and snap.panel_position~="" and snap.panel_position or config_position
         end,

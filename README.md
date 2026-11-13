@@ -20,6 +20,8 @@ Press **Alt+p** to open the panel. Use the mouse or the arrow keys, Enter and Es
 
 Use **Appearance → Panel position** to move the panel. **Apply** saves card edits. See the [panel controls](docs/user-guide.md#use-the-panel) for keyboard shortcuts and appearance settings.
 
+Use **Appearance → Panel theme** to change the panel's colors, opacity, or live background blur. Dark glass is the default.
+
 ### Sharing and privacy
 
 - Anime cards can show the episode, release group, cover art and AniList link. Movie and TV cards use the matched title and available artwork. Music uses a Listening activity.
@@ -104,7 +106,7 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 
 ## Installation
 
-1. Download a compatible package from [Releases](https://github.com/Sirye8/mpv-rich-presence/releases), or [build from source](#building-from-source) for the features shown here. Close mpv before copying files.
+1. Download a compatible package from [Releases](https://github.com/Sirye8/mpv-rich-presence/releases), or [build from source](#building-from-source). Close mpv before copying files.
 2. Copy the package's `scripts` folder into your mpv config directory. The usual paths are `%APPDATA%/mpv` on Windows and `~/.config/mpv` on Linux.
 3. On a new install, copy `script-opts` as well. On upgrade, keep your existing `rich-presence.conf` and `data.sqlite3`. If present, remove the old `scripts/rich-presence-conf.lua` before restarting.
 4. Open a file with the Discord desktop app running. Press **Alt+p** to open the panel in builds that include it. See [install or upgrade](docs/user-guide.md#install-or-upgrade) for portable installs, Python requirements and database migration.
@@ -114,7 +116,8 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 The bundled config is ready to use. Use the panel for file and folder overrides. For startup defaults, edit `script-opts/rich-presence.conf` in your mpv config directory and restart mpv. See the [full settings reference](docs/user-guide.md#configure-startup-defaults) for every option and its default.
 
 - Use [Recognition & folders](docs/user-guide.md#recognize-media) for conditional TV rules and local metadata files. Both are off by default.
-- [Connect AniList](docs/user-guide.md#connect-anilist) in your browser and confirm the displayed account before mpv saves it.
+- [Connect AniList](docs/user-guide.md#connect-anilist) in your browser. After connecting, select the account row in mpv to open your profile.
+- [Edit settings in the panel](docs/user-guide.md#use-the-panel). Appearance changes use a Custom layout until you choose a preset again.
 
 ### Keybindings & Commands
 

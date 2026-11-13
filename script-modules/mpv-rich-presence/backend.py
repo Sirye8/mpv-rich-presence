@@ -2,6 +2,7 @@
 """Optional off-thread account and metadata worker, one per interested player."""
 
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
@@ -92,6 +93,8 @@ class Worker:
         self.expected = None
         self.data_generation = None
         self.cache_generation = None
+        self.lookup_pool = None
+        self.artwork_pool = None
 
     def get(self, category, scope, default=None):
         row = self.db.execute(
@@ -406,8 +409,13 @@ class Worker:
             )
         time.sleep(max(0, when - now))
 
-    def cached_fetch(self, key, field, request, valid):
+    def cached_fetch(self, key, field, request, valid, *, catalog=False):
+        hours = self.settings.get("catalog_cache_hours", 24)
+        if catalog and hours == 0:
+            valid()
+            return request()
         epoch = self.get("generation", "data")
+        cache_epoch = self.get("generation", "cache")
         owner = secrets.token_hex(16)
         while True:
             valid()
@@ -415,7 +423,10 @@ class Worker:
                 if self.get("generation", "data") != epoch:
                     raise AccountError("Saved data changed. Search again.")
                 cached = self.get("cache", key)
-                if field in cached and cached.get("expires", 0) > time.time():
+                expires = cached.get("expires", 0)
+                if catalog and cached.get(field) and "fetched" in cached:
+                    expires = min(expires,cached["fetched"]+hours*3600)
+                if field in cached and expires > time.time():
                     return cached[field]
                 if self.get("flight", key).get("expires", 0) <= time.time():
                     self.put(
@@ -430,6 +441,7 @@ class Worker:
                 valid()
                 if (
                     epoch != self.get("generation", "data")
+                    or cache_epoch != self.get("generation", "cache")
                     or self.get("flight", key).get("owner") != owner
                 ):
                     raise AccountError("The search was superseded.")
@@ -438,13 +450,14 @@ class Worker:
                     key,
                     {
                         field: result,
-                        "expires": time.time() + (86400 if result else 300),
+                        "expires": time.time() + ((hours * 3600 if catalog else 86400) if result else 300),
+                        "fetched": time.time(),
                     },
                 )
-                if key.startswith("tmdb-series/"):
+                if catalog:
                     self.db.execute(
                         "DELETE FROM records WHERE category='cache' AND scope IN ("
-                        "SELECT scope FROM records WHERE category='cache' AND scope LIKE 'tmdb-series/%' "
+                        "SELECT scope FROM records WHERE category='cache' AND scope GLOB 'tv-catalog/*' "
                         "ORDER BY json_extract(value,'$.expires') DESC LIMIT -1 OFFSET 512)"
                     )
             return result
@@ -647,6 +660,7 @@ class Worker:
                     "provider",
                     "sources",
                     "panel",
+                    "panel-theme",
                     "folder-filter",
                     "recognition-options",
                     "tv-rule",
@@ -831,7 +845,7 @@ class Worker:
         else:
             raise AccountError("Unknown action.")
 
-    def recognize_music(self, p, source, refresh, publish, valid):
+    def recognize_music(self, p, source, refresh, publish, valid, artwork_only=None):
         title = music_title(p.get("track_title") or p["title"])
         artist = p.get("artist", "")
         album = p.get("album", "")
@@ -866,6 +880,23 @@ class Worker:
             return [match_name(part) for part in music_names(name, album=is_album)]
 
         hit = None
+        if artwork_only:
+            hit, include_album, override = artwork_only
+            if override is None:
+                # The same preferred release and album probes as the inline path.
+                sources = music_art_sources(hit)
+                if publish_cover(hit,sources):
+                    return failed
+                if include_album and album and album_artist:
+                    release = cached(
+                        "album", [tagged_name(album, is_album=True), album_artist.casefold(), date],
+                        lambda: musicbrainz_album(album_artist, album, date, self.throttle),
+                    )
+                    if release and (alternate := music_art_sources(release)) != sources:
+                        publish_cover(hit,alternate)
+            else:
+                publish_cover(hit,override)
+            return failed
         if source == "musicbrainz" and re.fullmatch(
             r"[0-9a-fA-F-]{36}", p.get("recording", "")
         ):
@@ -908,6 +939,9 @@ class Worker:
 
         if hit:
             publish(hit)
+            if self.artwork_pool is not None:
+                self.defer_artwork(p, refresh, hit, True)
+                return failed
         sources = music_art_sources(hit or {})
         if hit and publish_cover(hit, sources):
             return False
@@ -923,6 +957,9 @@ class Worker:
                     hit = dict(release, name=title, artist=artist, album=album)
                     publish(hit)
                 alternative = music_art_sources(release)
+                if self.artwork_pool is not None:
+                    self.defer_artwork(p, refresh, hit, False, alternative)
+                    return failed
                 if alternative != sources and publish_cover(hit, alternative):
                     return False
 
@@ -944,6 +981,9 @@ class Worker:
             )
             if hit:
                 publish(hit)
+                if self.artwork_pool is not None:
+                    self.defer_artwork(p, refresh, hit, False)
+                    return failed
                 sources = music_art_sources(hit)
                 if publish_cover(hit, sources):
                     return False
@@ -951,26 +991,22 @@ class Worker:
             publish(None, unavailable=failed)
         return failed
 
-    def video_details(self, provider, row, episode, airdate, valid):
+    def video_details(self, provider, row, episode, airdate, valid, refresh=None):
         def series(identifier):
             def fetch_series():
                 self.throttle(provider)
                 return tmdb_request(f"/tv/{identifier}", self.settings)
 
-            return self.cached_fetch(f"tmdb-series/{identifier}", "series", fetch_series, valid)
+            key = f"tv-catalog/tmdb-series/{identifier}"
+            if refresh:
+                key += "/" + refresh.get("id","")
+            return self.cached_fetch(key, "series", fetch_series, valid, catalog=True)
         settings = dict(self.settings, tmdb_series=series) if provider == "tmdb-tv" else self.settings
         return details(provider, row, settings, self.throttle, episode, airdate)
 
-    def recognize(self, p):
-        profile_source = p.get("source", "original")
-        refresh = self.get("refresh", self.window)
-        if refresh != getattr(self, "last_refresh", None):
-            self.resolved = None
-            self.lookup_retry = 0
-            self.last_refresh = refresh
-
-        def context(sample):
-            return tuple(
+    @staticmethod
+    def recognition_context(sample):
+        return tuple(
                 sample.get(field)
                 for field in (
                     "session",
@@ -988,14 +1024,27 @@ class Worker:
                     "allowed",
                     "recognition_options",
                     "embedded_title",
+                    "filename",
+                    "tmdb",
+                    "recording",
+                    "release",
                     "channel",
                     "page",
                     "live",
                 )
-            )
+        )
+
+    def recognize(self, p, artwork_only=None):
+        profile_source = p.get("source", "original")
+        refresh = self.get("refresh", self.window)
+        if refresh != getattr(self, "last_refresh", None):
+            self.resolved = None
+            self.lookup_retry = 0
+            self.last_refresh = refresh
+        context = self.recognition_context
 
         key = context(p)
-        if key == self.resolved:
+        if not artwork_only and key == self.resolved:
             if not self.lookup_retry or time.monotonic() < self.lookup_retry:
                 return
         else:
@@ -1010,15 +1059,18 @@ class Worker:
         artist = p.get("artist", "")
         album = p.get("album", "")
         generation = self.get("generation", "data")
+        cache_generation = self.get("generation", "cache")
 
         def valid():
             if (
                 refresh != self.get("refresh", self.window)
                 or key != context(self.get("player", self.window))
                 or generation != self.get("generation", "data")
+                or cache_generation != self.get("generation", "cache")
             ):
                 raise AccountError("Playback or privacy settings changed.")
 
+        valid()
         ambiguous = False
 
         def publish(hit, *, unavailable=False, fingerprint_available=False):
@@ -1114,7 +1166,7 @@ class Worker:
                     try:
                         hit = self.cached_fetch(
                             f"tv-rule/{provider}/{selected['id']}/{episode or airdate}", "hit",
-                            lambda: self.video_details(provider, selected, episode, airdate, valid), valid,
+                            lambda: self.video_details(provider, selected, episode, airdate, valid, refresh), valid,
                         )
                         if hit and hit.get("numbering"):
                             publish(hit)
@@ -1161,7 +1213,9 @@ class Worker:
             source = "tmdb-tv"
         if source in ("musicbrainz", "acoustid"):
             if not p["video"] and not p.get("remote"):
-                failed = self.recognize_music(p, source, refresh, publish, valid)
+                failed = self.recognize_music(p, source, refresh, publish, valid, artwork_only)
+                if artwork_only:
+                    return failed
                 if failed and self.music_attempts < len(MUSIC_RETRY_DELAYS):
                     self.lookup_retry = (
                         time.monotonic() + MUSIC_RETRY_DELAYS[self.music_attempts]
@@ -1231,9 +1285,7 @@ class Worker:
                         name=title,
                         title=title,
                     )
-                    return details(
-                        source, chosen, self.settings, self.throttle, episode, airdate
-                    )
+                    return self.video_details(source,chosen,episode,airdate,valid,refresh)
 
                 def matching(provider):
                     nonlocal ambiguous
@@ -1241,14 +1293,13 @@ class Worker:
                     query = title.replace(":", " ")
                     if provider.startswith("tmdb-") and year:
                         query += f" ({year})"
-                    rows = candidates(
-                        provider,
-                        query,
-                        self.settings,
-                        self.throttle,
-                        artist=artist,
-                        album=album,
-                    )
+                    def search():
+                        return candidates(provider,query,self.settings,self.throttle,artist=artist,album=album)
+                    if provider in ("tmdb-tv","tvmaze"):
+                        digest = hashlib.sha256(json.dumps([provider,query,refresh]).encode()).hexdigest()
+                        rows = self.cached_fetch(f"tv-catalog/search/{digest}","results",search,valid,catalog=True)
+                    else:
+                        rows = search()
                     exact = [
                         r
                         for r in rows
@@ -1302,7 +1353,7 @@ class Worker:
 
                 def describe(provider, row):
                     valid()
-                    show = self.video_details(provider, row, episode, airdate, valid)
+                    show = self.video_details(provider, row, episode, airdate, valid,refresh)
                     if episode and provider.startswith(("tmdb-tv", "tvmaze")) and not show.get("numbering"):
                         return None
                     if label := row.get("episode_label"):
@@ -1739,8 +1790,44 @@ class Worker:
         finally:
             counter.db.close()
 
+    def defer_artwork(self,p,refresh,hit,include_album,sources=None):
+        def render():
+            worker = Worker(self.db_path,self.window,self.settings)
+            try:
+                for delay in (0,*MUSIC_RETRY_DELAYS):
+                    until=time.monotonic()+delay
+                    while True:
+                        if (self.lookup_stop.is_set() or refresh!=worker.get("refresh",self.window) or
+                            epoch!=worker.get("generation","cache") or
+                            worker.recognition_context(p)!=worker.recognition_context(worker.get("player",self.window))):
+                            return
+                        remaining=until-time.monotonic()
+                        if remaining<=0:
+                            break
+                        self.lookup_stop.wait(min(.25,remaining))
+                    if not worker.recognize(p,artwork_only=(hit,include_album,sources)):
+                        return
+            except (AccountError,OSError,ValueError,sqlite3.Error):
+                pass
+            finally:
+                worker.db.close()
+        with self.artwork_lock:
+            if self.artwork_context != (self.recognition_context(p), refresh):
+                return
+            if self.artwork_future:
+                self.artwork_future.cancel()
+            epoch=self.artwork_epoch
+            self.artwork_future=self.artwork_pool.submit(render)
+
     def run(self):
         stop = threading.Event()
+        self.lookup_stop=stop
+        self.lookup_pool = ThreadPoolExecutor(max_workers=2,thread_name_prefix="lookup")
+        self.artwork_pool = ThreadPoolExecutor(max_workers=2,thread_name_prefix="artwork")
+        self.artwork_lock=threading.Lock()
+        self.artwork_future=None
+        self.artwork_context=None
+        self.artwork_epoch=None
         sampler = threading.Thread(target=self.credit_loop, args=(stop,), daemon=True)
         sampler.start()
         try:
@@ -1748,9 +1835,15 @@ class Worker:
         finally:
             stop.set()
             sampler.join()
+            self.lookup_pool.shutdown(wait=False,cancel_futures=True)
+            self.artwork_pool.shutdown(wait=False,cancel_futures=True)
             self.db.close()
 
     def operations(self):
+        lookups = []
+        lookup_context = None
+        retry_at = 0
+        attempts = (0,0)
         while True:
             row = None
             job = None
@@ -1799,7 +1892,29 @@ class Worker:
                     self.handle(job)
                 else:
                     p = self.get("player", self.window)
-                    self.recognize(p)
+                    if self.lookup_pool is None:
+                        self.recognize(p)
+                    else:
+                        context = (self.recognition_context(p),self.get("refresh",self.window),cache_epoch)
+                        if context!=lookup_context:
+                            lookup_context,retry_at,attempts=context,0,(0,0)
+                            with self.artwork_lock:
+                                self.artwork_context=context[:2]
+                                self.artwork_epoch=context[2]
+                                if self.artwork_future:
+                                    self.artwork_future.cancel()
+                        for running in lookups[:]:
+                            key, future = running
+                            if future.done():
+                                lookups.remove(running)
+                                if key==context and not future.cancelled():
+                                    retry_at,attempts=future.result()
+                        if p.get("allowed") and p.get("source","original")!="original" and retry_at is not None and (
+                            time.monotonic()>=retry_at and len(lookups)<2 and all(key!=context for key,_ in lookups)
+                        ):
+                            future=self.lookup_pool.submit(self.background_lookup,p,attempts,context[1:])
+                            lookups.append((context,future))
+                            retry_at=None
                     a = self.get("account", "current")
                     self.propose(a, p)
             except AccountError as exc:
@@ -1822,6 +1937,24 @@ class Worker:
                         message="Operation failed. Check the connection and settings."
                     )
             time.sleep(0.25)
+
+    def background_lookup(self,p,attempts,epochs):
+        worker=Worker(self.db_path,self.window,self.settings)
+        worker.artwork_pool=self.artwork_pool
+        worker.defer_artwork=self.defer_artwork
+        try:
+            if (worker.get("refresh",self.window),worker.get("generation","cache"))!=epochs:
+                return None,attempts
+            worker.last_refresh=worker.get("refresh",self.window)
+            worker.resolved=worker.recognition_context(p)
+            worker.music_attempts,worker.video_attempts=attempts
+            worker.lookup_retry=time.monotonic()
+            worker.recognize(p)
+            return worker.lookup_retry or None,(worker.music_attempts,worker.video_attempts)
+        except (AccountError,OSError,ValueError,KeyError,sqlite3.Error):
+            return None,attempts
+        finally:
+            worker.db.close()
 
 
 def watch_owner(pid):

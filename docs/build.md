@@ -47,6 +47,8 @@ The script builds Release, runs CTest and archives a clean install. It writes a 
 
 The [README](../README.md), [user guide](user-guide.md) and screenshots are published in the repository. The packaged config links to the settings guide.
 
+The Windows x64 ZIP is the prebuilt release asset. Linux users can build the same tag using the steps above. The live panel blur requires an mpv build with the `gpu-next` output.
+
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 
 ## License

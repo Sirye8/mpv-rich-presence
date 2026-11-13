@@ -80,10 +80,16 @@ local function verify()
     assert(ui.memory.Test.top>20 and ui.memory.Test.focus==2,"Dragging the scrollbar did not move the viewport")
     local pasted
     ui.text("ID","",function(value) pasted=value end)
-    assert(next(bindings)==nil,"Navigation was left active during text entry")
-    input.submit("123456 日本語")
-    input.closed()
+    assert(not bindings.DOWN and paint:find("Done",1,true),"Inline editor did not retain the panel")
+    bindings.any_unicode({event="press",key_text="123456 日本語"})
+    bindings.BS()
+    bindings.any_unicode({event="press",key_text="語"})
+    bindings.ENTER()
     assert(pasted=="123456 日本語" and bindings.DOWN,"Text entry did not restore controls")
+    ui.text("ID","keep",function() error("Cancelled edit was committed") end)
+    bindings.any_unicode({event="press",key_text="new"})
+    bindings.ESC()
+    assert(bindings.DOWN,"Cancel did not restore controls")
     width,height=480,720
     ui.draw()
     assert(ui.text_columns()>30 and bounds[3]<width,"Narrow sheet exceeded the window")
@@ -229,7 +235,7 @@ local function verify()
         open_url=function(url) opened=url end},help)
     menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",watch_episode=true,
         tracking={mode="manual"},
-        account={id=5,name="Viewer",generation="test"},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
+        account={id=5,name="Viewer",generation="test",avatar={medium="https://s4.anilist.co/avatar.png"}},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
         card={details="Fixture details",state="Fixture state",start=1,["end"]=2,
             buttons={{label="View on AniList",url="https://anilist.co/anime/42"}}},
         service={message="Progress refreshed.",elapsed=999}})
@@ -237,6 +243,15 @@ local function verify()
     local function find(page,id)
         for _,row in ipairs(model.rows(page)) do if row.id==id then return row end end
     end
+    local account=find("AniList","Account")
+    assert(account.link and account.avatar=="https://s4.anilist.co/avatar.png")
+    account.run()
+    assert(opened=="https://anilist.co/user/Viewer")
+    assert(model.theme().opacity==.87 and model.theme().blur)
+    find("Panel theme","Background blur").run()
+    assert(applied.values.preset=="custom" and applied.values.blur==false)
+    find("Panel theme","Panel theme preset").run()
+    assert(applied.values.preset=="midnight" and not applied.values.background)
     assert(find("AniList","Episode watch time").label=="Episode watch time   01:40","Watch time was not read from the current record")
     assert(find("AniList","Watch started") and find("AniList","Last watched"))
     assert(not find("Card preview","start") and not find("Card preview","end"),"Discord timestamps leaked into the preview")

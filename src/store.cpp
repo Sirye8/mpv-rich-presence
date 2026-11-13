@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "mpv_rich_presence/store.hpp"
+#include <ctime>
 #include "mpv_rich_presence/string_utils.hpp"
 #include <memory>
 #include <stdexcept>
@@ -111,7 +112,7 @@ namespace mpvrp
     }
 
     static constexpr auto saved_records = " FROM records WHERE (category IN "
-        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','folder-filter','cache','tv-rule','recognition-options') "
+        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options') "
         "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)="
         "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT))) ";
 
@@ -234,6 +235,24 @@ namespace mpvrp
         execute(db, "INSERT INTO records VALUES(?,?,?) ON CONFLICT(category,scope) "
                     "DO UPDATE SET value=excluded.value WHERE records.value<>excluded.value",
                 {category,scope,value.dump()});
+    }
+
+    void profile_store::put_catalog(const std::string& key, const json& value, int64_t expires, const json& epoch)
+    {
+        execute(db, "INSERT INTO records SELECT 'cache',?,? WHERE "
+                    "json(COALESCE((SELECT value FROM records WHERE category='generation' AND scope='cache'),'{}'))=json(?) "
+                    "ON CONFLICT(category,scope) DO UPDATE SET value=excluded.value",
+                {key,json{{"catalog",value},{"expires",expires},{"fetched",std::time(nullptr)}}.dump(),epoch.dump()});
+        if (key.starts_with("anilist-page/"))
+            execute(db, "DELETE FROM records WHERE category='cache' AND scope IN ("
+                        "SELECT scope FROM records WHERE category='cache' AND scope GLOB 'anilist-*/*' "
+                        "ORDER BY json_extract(value,'$.expires') DESC LIMIT -1 OFFSET 1024)",{});
+    }
+
+    void profile_store::clear_catalog()
+    {
+        execute(db,"DELETE FROM records WHERE category='cache' AND "
+                   "(scope GLOB 'anilist-page/*' OR scope GLOB 'anilist-id/*')",{});
     }
 
     void profile_store::save(const std::string& category, const std::string& scope, const json& patch)
