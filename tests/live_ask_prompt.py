@@ -18,12 +18,14 @@ DRIVER = r"""
 local action=os.getenv("MPVRP_ASK_ACTION")
 local auto_dismiss=os.getenv("MPVRP_ASK_DISMISS")=="yes"
 local signal=os.getenv("MPVRP_ASK_SIGNAL")
+local stop=signal..".stop"
 local trace=os.getenv("MPVRP_ASK_TRACE")
 local capture=os.getenv("MPVRP_ASK_CAPTURE")
 local never=os.getenv("MPVRP_ASK_NEVER")=="yes"
 local revisit=action=="osc-leave" or action=="osc-end"
 local uosc=os.getenv("MPVRP_ASK_UOSC")=="yes"
 local extra=os.getenv("MPVRP_ASK_EXTRA")=="yes"
+local reason=os.getenv("MPVRP_ASK_REASON")
 local function log(event)
     local f=assert(io.open(trace,"a"))
     f:write(event," ",mp.get_time(),"\n")
@@ -48,8 +50,8 @@ end
 mp.observe_property("term-status-msg","string",function(_,text)
     if text and (text:find("AniList update",1,true) or text:find("Review AniList match",1,true)) then
         if extra then
-            assert(text:find("Fractional episode",1,true) and not text:find("Update AniList",1,true),text)
-            if not prompt_seen then log("fractional") end
+            assert(text:find(reason,1,true) and not text:find("Update AniList",1,true),text)
+            if not prompt_seen then log("extra-review") end
         end
         review_seen()
     end
@@ -77,6 +79,9 @@ mp.register_event("file-loaded",function()
     end
 end)
 local utils=require("mp.utils")
+mp.add_periodic_timer(.1,function()
+    if utils.file_info(stop) then mp.commandv("quit") end
+end)
 local timer
 timer=mp.add_periodic_timer(.05,function()
     if action=="wait" or not utils.file_info(signal) then return end
@@ -129,6 +134,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
             ("auto", "q", True, False, True, False),
             ("auto-extra", "q", True, False, True, False),
             ("auto-extra", "eof", True, True, True, False),
+            ("auto-recap", "q", True, False, True, False),
         )
         if not capture
         else (("leave", "eof", True, True, True, True),)
@@ -163,6 +169,8 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
         shutil.copyfile(clip, next_clip)
         fractional = root / "[SubsPlease] Black Clover - 174.5 (1080p).mkv"
         shutil.copyfile(clip, fractional)
+        recap = root / "[SubsPlease] Black Clover - 174 (Recap).mkv"
+        shutil.copyfile(clip, recap)
         for index, (timing, action, dismiss, playlist, expected, never) in enumerate(
             cases
         ):
@@ -186,6 +194,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                     {
                         "mode": "auto" if timing.startswith("auto") else "ask",
                         "ask_timing": timing,
+                        **({"ask_leave_position": "top-right"} if capture else {}),
                         "ask_timeout": 0 if never else 5,
                         "without_sharing": True,
                     },
@@ -206,7 +215,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                     },
                 ),
             ]
-            extra = timing == "auto-extra"
+            extra = timing in ("auto-extra", "auto-recap")
             if extra:
                 records.pop()
             with closing(sqlite3.connect(database)) as db, db:
@@ -228,7 +237,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                 "--vo=gpu-next" if capture else "--vo=null",
                 "--ao=null",
                 f"--script={driver}",
-                str(fractional if extra else clip),
+                str(recap if timing == "auto-recap" else fractional if extra else clip),
             ]
             if playlist:
                 args.append(str(next_clip))
@@ -241,12 +250,15 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                 MPVRP_ASK_NEVER="yes" if never else "no",
                 MPVRP_ASK_UOSC="yes" if uosc else "no",
                 MPVRP_ASK_EXTRA="yes" if extra else "no",
+                MPVRP_ASK_REASON="Recap or special"
+                if timing == "auto-recap"
+                else "Fractional episode",
             )
             if capture:
                 env["MPVRP_ASK_CAPTURE"] = str(capture.resolve())
             process = subprocess.Popen(args, env=env)
             try:
-                deadline = time.monotonic() + 20
+                deadline = time.monotonic() + 30
                 with closing(sqlite3.connect(database)) as db:
                     while time.monotonic() < deadline and process.poll() is None:
                         row = db.execute(
@@ -268,7 +280,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                         f"{timing}/{action}: popup appeared early"
                     )
                     # Let the Lua bridge receive and arm the ready proposal.
-                    time.sleep(0.5)
+                    time.sleep(1.5)
                     signal.touch()
                 assert process.wait(15) == 0
                 events = [
@@ -280,7 +292,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                 ]
                 names = [name for name, _ in events]
                 if extra:
-                    assert "fractional" in names, events
+                    assert "extra-review" in names, events
                 if action.startswith("osc-"):
                     expected_count = 2 if timing == "leave" else 1
                     assert names.count("prompt") == expected_count, events
@@ -337,8 +349,12 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                 )
             finally:
                 if process.poll() is None:
-                    process.terminate()
-                    process.wait()
+                    signal.with_suffix(".stop").touch()
+                    try:
+                        process.wait(10)
+                    except subprocess.TimeoutExpired:
+                        process.terminate()
+                        process.wait()
 
 
 if __name__ == "__main__":

@@ -1422,7 +1422,7 @@ class Worker:
                 status=status,
                 repeat_count=repeat_count,
                 start_rewatch=start_rewatch,
-                needs_review=not can_advance,
+                needs_review=mode == "ask" or not can_advance,
             )
             self.put("pending", key, prop)
 

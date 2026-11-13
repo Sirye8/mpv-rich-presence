@@ -887,6 +887,9 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         else if (std::regex_search(suffix, extra_episode)) state.episode_review = "Recap or special";
         else if (current_resolved_media.format == "SPECIAL" || current_resolved_media.format == "OVA" ||
             current_resolved_media.format == "TV_SHORT") state.episode_review = "Special or short-form entry";
+        else if (elements.count(anitomy::kElementEpisodeNumber) > 1) state.episode_review = "Multiple episode numbers";
+        else if (integer_episode && parsed_ep == 0) state.episode_review = "Episode zero";
+        else if (integer_episode && !unambiguous_numbering) state.episode_review = "Unclear season numbering";
         const bool eligible_episode = integer_episode && parsed_ep > 0 && current_resolved_ep > 0
             && (current_resolved_media.episodes <= 0 || current_resolved_ep <= current_resolved_media.episodes)
             && is_anilist_tracking_series(current_resolved_media);

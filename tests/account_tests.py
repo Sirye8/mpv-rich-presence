@@ -1290,6 +1290,7 @@ class TrackingTests(unittest.TestCase):
         proposal = self.propose()
         self.assertEqual(proposal["episode"], 4)
         self.assertIsNone(proposal["status"])
+        self.assertTrue(proposal["needs_review"])
         self.assertEqual(self.mutations, [])
         self.player["active"] = False
         self.publish()

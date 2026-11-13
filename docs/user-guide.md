@@ -105,7 +105,7 @@ Use the minus and plus buttons around **Episodes watched**, or Left and Right on
 
 Watch tracking uses the matched AniList entry and its resolved season-relative episode number. It needs one identifiable episode. For an entry outside Watching or Rewatching, the first eligible update offers to switch it to Watching or retain the current status. If you keep the status, Automatic mode can advance consecutive episodes until the status changes. A new list entry needs approval.
 
-For a matched fractional episode, recap or special, Auto shows a review before leaving even if the file has no whole episode to time. **Continue** leaves progress as it is. **View AniList entry** opens the matched title for a manual decision. A review with an eligible whole episode can still offer an explicit progress update.
+For a matched fractional episode, recap, special, episode range or unclear season number, Auto shows a review before leaving. **Continue** leaves progress as it is. **View AniList entry** opens the matched title for a manual decision. A review with an eligible whole episode can still offer an explicit progress update.
 
 An entry already marked Rewatching gets its own viewing cycle. Turn on **Rewatch tracking** to offer a new cycle after watching episode 1 of a completed anime. Starting the cycle needs approval because it restarts AniList progress. Reaching the known final episode completes the rewatch and adds one to the repeat count. An unknown total can continue in Rewatching. Use **Start new viewing cycle** to reset local counters and pending updates for the matched entry.
 
