@@ -43,7 +43,7 @@
 
 Run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip` on Windows. On Linux, use `python3 tools/package.py dist/mpv-rich-presence-linux-x64.zip` and name the output for your architecture. Packaging runs on the target platform and supports Windows x64 and Linux x86-64 or ARM64.
 
-The script builds Release, runs CTest and archives a clean install. Each ZIP includes the plugin, the shipped config, runtime files and license notices. Chromaprint comes with its corresponding source and licenses. Windows x64 also includes embeddable Python. Linux uses system Python.
+The script builds Release, runs CTest and archives a clean install. It writes a SHA-256 checksum next to the ZIP. Each ZIP includes the plugin, the shipped config, runtime files and license notices. Chromaprint comes with its corresponding source and licenses. Windows x64 also includes embeddable Python. Linux uses system Python.
 
 The [README](../README.md), [user guide](user-guide.md) and screenshots are published in the repository. The packaged config links to the settings guide.
 

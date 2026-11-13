@@ -37,7 +37,7 @@ The Windows x64 ZIP includes Python and Chromaprint. The Linux ZIP includes Chro
 
 ## Use the panel
 
-Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. Hover over a row for help and the full value. Long values scroll on hover. Use the wheel over a tooltip if its text exceeds the window. Click a row marked ↗ or press Enter to open its link.
+Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. The wheel and touchpad scroll the list independently of keyboard selection. Drag the scrollbar or click its track to move through long lists. Hover over a row for help and the full value. Long values scroll on hover. If a hovered tooltip has more text, the wheel scrolls that tooltip. Click a row marked ↗ or press Enter to open its link.
 
 | Page | Use it to |
 | --- | --- |
@@ -81,11 +81,19 @@ To classify a directory, open a file inside it and choose **Recognition & folder
 
 The effective order is file, nearest matching folder, global panel setting, then `recognition_source` in the conf file. Choose **Inherit recognition source** to remove a rule. Saved match corrections still apply. **Fingerprint this file** runs an explicit AcoustID lookup on local audio.
 
+**TV folder rules** and **Local metadata files** are off by default under **Recognition & folders**. A TV folder rule reuses the selected series only for matching titles in that folder. Each file resolves its own episode. Choose **Dedicated folder** only for a single-series directory if files such as `S02E04.mkv` should use the rule. Conflicting titles use regular recognition. Legacy folder-wide TV cards can be inspected in **Saved data**. Create a new rule to replace one.
+
+With **Local metadata files** enabled, place a file such as `Loki.S02E04.mpv-rp.json` next to `Loki.S02E04.mkv`. Use `{"kind":"tv","tmdb":84958,"season":2,"episode":4}`. For a movie, use `kind` set to `movie` and its numeric TMDB ID. The sidecar guides supplemental recognition. AniList retains priority for confirmed anime, and manual file corrections still take precedence.
+
+If two distinct AniList entries still tie after checking the available title, year, and sequel evidence, mpv uses a local card and asks you to correct the match before AniList tracking resumes. To correct only the episode number, use **Now playing → Correct episode**. Previously recorded time stays with its original episode.
+
 You can override the bundled provider access with `tmdb_key` or `acoustid_key`. See [shared TMDB setup](tmdb-metadata.md) for deployment details.
+
+Turn on **Ask before fingerprinting** if you want to approve AcoustID fallback per track. When tags and MusicBrainz leave a local track unresolved, **Fingerprint this file** appears under **Now playing**. Automatic fingerprinting is the default.
 
 ## Connect AniList
 
-Open **Alt+p → AniList → Connect account**, then approve in your browser. The bundled public sign-in needs only your AniList account. Use **Connect for this session** to keep the credential in memory until the account helper exits.
+Open **Alt+p → AniList → Connect account**, then approve on AniList in your browser. Check the account name and avatar on the next page and choose **Connect**. The page reports when mpv has saved the connection. Use **Use another account** if the profile is wrong, switch on AniList, and reconnect from mpv. You can cancel from the browser or the AniList panel. **Connect for this session** keeps the credential in memory until the account helper exits.
 
 Windows uses Credential Manager for a saved sign-in. Linux can use Python keyring with Secret Service. If credential storage is unavailable, sign-in lasts for the worker session. **Disconnect** removes the local credential. Use AniList's connected app settings to revoke access remotely.
 
@@ -105,6 +113,7 @@ To use a personal app, register a separate client in [AniList developer settings
 - **Threshold** accepts whole minutes from 1 to 1440 and defaults to 15. A minute at 2× counts as one minute. Pauses, buffering, seeks and long observation gaps add no time.
 - **Episode watch time** shows real playback time for the current viewing cycle. **Watch started** and **Last watched** show the first and latest credited playback times on the local clock, when recorded.
 - **Resume unfinished time** is on by default and continues from a saved counter when you reopen an episode. Windows playing the same episode for the same account share that record.
+- **Measure unique footage** is off by default. Turn it on to see how much distinct footage you watched in this cycle. Replaying a scene counts once in this measure. Elapsed watch time and the AniList threshold continue to count real playback time.
 - **Keep offline proposals** is off by default. Turn it on to save eligible updates locally while AniList is unreachable and review them after refreshing the list entry.
 
 Use the minus and plus buttons around **Episodes watched**, or Left and Right on that row, to adjust the proposed count. **Apply progress** opens a confirmation with the account, title and proposed change. The worker rechecks the entry before saving. Ordinary progress edits preserve status, score, notes and repeat count. **Status on Apply** lets you choose a status for a manual edit.

@@ -151,6 +151,12 @@ def package(build, output):
             os.replace(temporary, output)
         finally:
             temporary.unlink(missing_ok=True)
+    with output.open("rb") as archive:
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+            digest.update(chunk)
+    checksum = digest.hexdigest()
+    output.with_suffix(output.suffix + ".sha256").write_text(f"{checksum}  {output.name}\n", encoding="ascii")
 
 
 if __name__ == "__main__":

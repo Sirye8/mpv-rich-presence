@@ -21,7 +21,77 @@ jobs:
             -o "$RUNNER_TEMP/rich-presence-tests"
       - name: Run lease, parser and playback tests
         run: timeout 30 "$RUNNER_TEMP/rich-presence-tests"
+      - uses: actions/checkout@v4
+        with:
+          repository: erengy/anitomy
+          ref: a538eff670cb4666f8395cf66a9a535f2c383
+          path: vendor-anitomy
+      - name: Run the Automatic recognition replay
+        run: |
+          g++-14 -std=c++20 -Iinclude -Ivendor-anitomy tests/recognition_replay.cpp \
+            src/anime_recognition.cpp src/anilist_parser.cpp src/string_utils.cpp \
+            vendor-anitomy/anitomy/*.cpp -o "$RUNNER_TEMP/recognition-replay"
+          python3 -B tests/recognition_suite.py "$RUNNER_TEMP/recognition-replay"
       - name: Run account and multi-process tracking tests
         run: python3 -B tests/account_tests.py
       - name: Test the public AniList handoff
         run: node --test tests/cloudflare.test.mjs
+      - name: Exercise the Lua panel in mpv
+        run: |
+          sudo apt-get install -y mpv
+          MPVRP_MODULES="$PWD/script-modules/mpv-rich-presence" mpv --no-config --load-scripts=no --idle=yes --vo=null --ao=null --script=tests/sheet_tests.lua
+  package:
+    if: ${{ vars.DISCORD_SDK_ARCHIVE_URL != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            triplet: x64-windows-static-md
+          - os: ubuntu-24.04
+            triplet: x64-linux
+    runs-on: ${{ matrix.os }}
+    env:
+      SDK_ARCHIVE_URL: ${{ vars.DISCORD_SDK_ARCHIVE_URL }}
+      SDK_ARCHIVE_SHA256: ${{ vars.DISCORD_SDK_ARCHIVE_SHA256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install the Discord Social SDK
+        shell: python {0}
+        run: |
+          import hashlib, io, os, zipfile
+          from urllib.request import urlopen
+          with urlopen(os.environ["SDK_ARCHIVE_URL"], timeout=60) as response:
+              data = response.read()
+          if hashlib.sha256(data).hexdigest() != os.environ["SDK_ARCHIVE_SHA256"]:
+              raise SystemExit("Unexpected Discord SDK checksum")
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              archive.extractall("thirdparty/discord_social_sdk")
+      - name: Bootstrap vcpkg on Windows
+        if: runner.os == 'Windows'
+        run: .\thirdparty\vcpkg\bootstrap-vcpkg.bat
+      - name: Bootstrap vcpkg on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 mpv
+          thirdparty/vcpkg/bootstrap-vcpkg.sh
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+      - name: Configure and package
+        run: |
+          cmake --preset default -DCMAKE_BUILD_TYPE=Release -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          python tools/package.py build/test-package.zip
+          python -m zipfile -e build/test-package.zip build/test-package
+      - name: Test installed plugin on Linux
+        if: runner.os == 'Linux'
+        run: python -B tests/package_tests.py build/test-package /usr/bin/mpv
+      - name: Test installed plugin on Windows
+        if: runner.os == 'Windows'
+        run: |
+          choco install mpv -y --no-progress
+          python -B tests/package_tests.py build/test-package (Get-Command mpv.exe -ErrorAction Stop).Source

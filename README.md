@@ -113,6 +113,9 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 
 The bundled config is ready to use. Use the panel for file and folder overrides. For startup defaults, edit `script-opts/rich-presence.conf` in your mpv config directory and restart mpv. See the [full settings reference](docs/user-guide.md#configure-startup-defaults) for every option and its default.
 
+- Use [Recognition & folders](docs/user-guide.md#recognize-media) for conditional TV rules and local metadata files. Both are off by default.
+- [Connect AniList](docs/user-guide.md#connect-anilist) in your browser and confirm the displayed account before mpv saves it.
+
 ### Keybindings & Commands
 
 Add this to `input.conf` to toggle Discord presence with **D**.
