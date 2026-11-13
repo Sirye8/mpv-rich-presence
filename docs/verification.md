@@ -24,6 +24,19 @@ The in-player interface and tracking build on [`v1.0.10`](https://github.com/Sir
 - `python -B tests/live_ask_prompt.py <package.zip> <mpv-executable> <ffmpeg-executable>`: exercise timed and untimed reviews, quit, window close, Next, and natural playlist advance with a saved local proposal. Add `--capture <file.jpg>` to check the graphical EOF prompt and capture it in mpv.
 - Add `--uosc <uosc-script-directory>` to the Ask check to exercise Next and Previous through a local uosc install, including review at natural EOF after returning to an episode.
 
+### Automatic recognition replay
+
+The `automatic-recognition` CTest uses the same native anime resolver, provider routing, and Python matcher as mpv. Provider responses are controlled fixtures. It covers the Black Clover 170/171 boundary, explicit and absolute episode numbers, named cours, fractional and multi-episode files, alternate TV titles, movies, music, and offline fallback.
+
+To replay a private inventory, prepare cases from an audit CSV and its provider journals, then pass them to the runner. The optional catalog JSON maps exact AniList search strings to their saved media rows. Keep inventory and result files under the ignored build directory.
+
+```powershell
+python -B tests/make_recognition_inventory.py build/recognition-audit/file-results.csv build/library-audit-v2 build/recognition-audit/inventory-suite.jsonl
+python -B tests/recognition_suite.py build/Release/recognition-replay.exe --cases build/recognition-audit/inventory-suite.jsonl --output build/recognition-audit/inventory-results.csv
+```
+
+The CSV includes the expected result, evidence, actual match, and provider queries for each row. Rows without a reference result are marked unverified. Use the packaged live checks to verify provider availability and what mpv publishes.
+
 The public sign-in check passed on Windows on 6 November 2026. Windows and Linux builds, regression suites and packaged menu checks have passed. Captures have been inspected over bright footage in wide and narrow windows. Tests use disposable data rather than the user's installed mpv configuration.
 
 On 11 November 2026, the extracted Windows ZIP matched Interstellar and Severance S01E02 through the shared TMDB service, Sousou no Frieren through AniList, and a tagged Bohemian Rhapsody fixture through MusicBrainz. The test used the bundled Python with the system interpreter off PATH and Discord sharing disabled. A 720p capture showed the compact panel and its hover help above the visible OSC.

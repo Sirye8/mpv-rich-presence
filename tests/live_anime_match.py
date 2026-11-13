@@ -124,6 +124,23 @@ def verify(package, mpv, ffmpeg):
         player_samples(config, anime, mpv, os.environ, season_two, 25)
         print("Youjo Senki II, episode 8 is eligible for watch time")
 
+        for name, ident, episode in (
+            ("[Judas] Black Clover - S04E16 (170).mkv", 97940, "170"),
+            ("[SubsPlease] Black Clover - 172 (1080p).mkv", 195604, "2"),
+        ):
+            numbered = root / name
+            shutil.copyfile(anime, numbered)
+
+            def numbered_episode(sample):
+                if not sample.get("media"):
+                    return False
+                assert sample["media"] == ident and sample["episode"] == episode, sample
+                assert sample["watch_episode"], sample
+                return True
+
+            player_samples(config, numbered, mpv, os.environ, numbered_episode, 25)
+        print("Distributor S04E16 (170) stays episode 170 and absolute episode 172 becomes Season 2, episode 2")
+
         black_clover = root / "[SubsPlease] Black Clover - 174 (1080p) [720FB31C].mkv"
         shutil.copyfile(anime, black_clover)
         database = config / "scripts/mpv-rich-presence/data.sqlite3"

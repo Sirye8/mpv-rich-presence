@@ -66,6 +66,7 @@ find_package(CMakeRC CONFIG REQUIRED)
 # Source -----------------------------------------------------------------------
 
 set(mpv-rich-presence_HPP
+    anime_recognition
     anilist_parser
     discord_api
     discord_utils
@@ -75,6 +76,7 @@ set(mpv-rich-presence_HPP
     string_utils)
 
 set(mpv-rich-presence_CPP
+    anime_recognition
     activity
     publish_activity
     store
@@ -233,6 +235,16 @@ if(mpv-rich-presence_BUILD_TESTS)
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(NAME account-and-tracking COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/account_tests.py")
+    endif()
+
+    add_executable(recognition-replay tests/recognition_replay.cpp
+        src/anime_recognition.cpp src/anilist_parser.cpp src/string_utils.cpp)
+    target_compile_features(recognition-replay PRIVATE cxx_std_20)
+    target_include_directories(recognition-replay PRIVATE include)
+    target_link_libraries(recognition-replay PRIVATE anitomy nlohmann_json::nlohmann_json)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME automatic-recognition COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/recognition_suite.py" "$<TARGET_FILE:recognition-replay>")
     endif()
 
     add_library(recording-sdk SHARED tests/recording_sdk.cpp)

@@ -134,7 +134,7 @@ namespace mpvrp
         nlohmann::json pending_correction;
         int pending_load_id = 0;
         std::string pending_filename = "";
-        std::string pending_file_path = "";
+        std::string pending_folder;
         std::atomic<bool> worker_stop{false};
         std::thread worker_thread;
 

@@ -59,6 +59,8 @@ To open a page from the mpv console, use `script-message-to mpv_rich_presence me
 
 **Diagnostics → Recognition status** shows whether lookup is still running, found a match, finished with local metadata, or encountered an unavailable provider. During an AniList outage, an ambiguous video uses its local title.
 
+Some releases include both a distributor season number and a series-wide episode, such as `S02E02 (053)`. Automatic can use the explicit series-wide number and follow AniList's sequel links to resolve it. A folder with a named arc can also help when its name matches an AniList title or alias returned for the series. The folder comparison happens locally.
+
 Common camera and screen recording names stay local in Automatic. Short videos with a bare title and no year, episode marker or TMDB ID skip the fallback movie search. Use **Local only** on a file or folder when you always want the filename or embedded metadata.
 
 Movie and TV lookup prefers TMDB. Wikidata and TVmaze provide fallbacks. Air-date episodes use TVmaze. For music, the card starts with local tags. MusicBrainz checks title, credits, duration and release edition, and Cover Art Archive supplies public artwork when available. An embedded cover stays in mpv. If the music tags are incomplete or inconclusive, the plugin can send a Chromaprint fingerprint and the track duration to AcoustID. The audio file stays on your device.

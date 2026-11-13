@@ -73,7 +73,7 @@ def generic_clip(label):
     return bool(
         re.match(
             r"(?i)^(?:img|vid|dsc|dji|pxl|mov|mvi|gopr|g[hp]0\d)[ _.-]*\d"
-            r"|^(?:screen[ _.-]*(?:recording|capture)|untitled|test[ _.-]*clip)(?:[ _.-]|$)",
+            r"|^(?:screen[ _.-]*(?:recording|capture)|untitled|test[ _.-]*clip|sample)(?:[ _.(\[-]|$)",
             stem,
         )
     )

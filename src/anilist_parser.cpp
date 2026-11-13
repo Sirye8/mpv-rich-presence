@@ -131,7 +131,6 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
         for (auto& edge : media["relations"]["edges"])
         {
             if (edge.is_null() || !edge.contains("relationType") || edge["relationType"].is_null()
-                || edge["relationType"].get<std::string>() != "SEQUEL"
                 || !edge.contains("node") || edge["node"].is_null()
                 || !edge["node"].contains("type") || edge["node"]["type"].is_null()
                 || edge["node"]["type"].get<std::string>() != "ANIME")
@@ -140,6 +139,15 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
             int node_id = edge["node"].value("id", -1);
             std::string node_format = (edge["node"].contains("format") && !edge["node"]["format"].is_null())
                 ? edge["node"]["format"].get<std::string>() : "";
+            const auto relation = edge["relationType"].get<std::string>();
+            if (relation == "PREQUEL" && (node_format == "TV" || node_format == "ONA"))
+            {
+                if (result.prequel_id == -1)
+                    result.prequel_id = node_id;
+                else if (result.prequel_id != node_id)
+                    result.prequel_id = 0;
+            }
+            if (relation != "SEQUEL") continue;
 
             if (any_sequel <= 0)
                 any_sequel = node_id;

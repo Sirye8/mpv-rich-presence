@@ -924,7 +924,7 @@ class Worker:
                 filename[2]
                 or filename[3]
                 or not title
-                or (filename[1] and (verify_movie or not year))
+                or (filename[1] and (verify_movie or not year or year == filename[1]))
             ):
                 title, year, episode, airdate = filename
         if (
