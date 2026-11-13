@@ -61,6 +61,17 @@ def video_query(label):
     )
 
 
+def generic_clip(label):
+    stem = re.sub(r"\.[a-z0-9]{2,5}$", "", label, flags=re.I)
+    return bool(
+        re.match(
+            r"(?i)^(?:img|vid|dsc|dji|pxl|mov|mvi|gopr|g[hp]0\d)[ _.-]*\d"
+            r"|^(?:screen[ _.-]*(?:recording|capture)|untitled|test[ _.-]*clip)(?:[ _.-]|$)",
+            stem,
+        )
+    )
+
+
 def wikidata_movies(query, throttle):
     api = "https://www.wikidata.org/w/api.php"
     data = fetch(
@@ -557,6 +568,7 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
                 kind="tv",
                 name=m["name"],
                 year=(m.get("premiered") or "")[:4],
+                show_type=m.get("type", ""),
                 title="%s (%s, %s, %s)"
                 % (
                     m["name"],
@@ -772,7 +784,10 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
                 "/tv/%d/season/%d/episode/%d" % (hit["id"], season, number), settings
             )
             item["episode_title"] = ep.get("name", "")
-            item["numbering"] = "S%02dE%02d" % (season, number)
+            # Both the direct API and the relay return an episode name only
+            # after a successful lookup of this exact season and episode.
+            if item["episode_title"]:
+                item["numbering"] = "S%02dE%02d" % (season, number)
         if data.get("poster_path"):
             item["cover"] = "https://image.tmdb.org/t/p/w500" + data["poster_path"]
         item["link"] = "https://www.themoviedb.org/%s/%d" % (kind, hit["id"])

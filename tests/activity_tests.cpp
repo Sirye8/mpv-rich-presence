@@ -103,6 +103,12 @@ int main(int argc, char** argv)
         store.put("account","current",{{"persistent",false},{"id",7}});
         store.put("watch","7/18/2/0",{{"elapsed",73.0}});
         store.put("watch","8/18/2/0",{{"elapsed",12.0}});
+        store.put("cache","v3:auto:wikidata/hash",{{"expires",1000}});
+        const auto counts = store.record_counts();
+        if (counts.value("watch",0) != 1 || counts.value("cache",0) != 1) return 1;
+        const auto caches = store.records("cache");
+        if (caches.size() != 1 || caches.at(0).value("label",std::string{}) != "v3:auto:wikidata") return 1;
+        if (store.records("account").size() != 0 || store.records("watch").size() != 1) return 1;
         if (store.episode_watch(7,18,"2").value("elapsed",0.0) != 73.0) return 1;
         if (store.episode_watch(7,18,"3") != nlohmann::json::object()) return 1;
         store.put("cycle","7/18",{{"number",1}});

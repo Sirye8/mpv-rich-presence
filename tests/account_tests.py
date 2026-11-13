@@ -150,6 +150,82 @@ class PublicSignInTests(unittest.TestCase):
 
 
 class RecognitionTests(unittest.TestCase):
+    def test_episode_verification_needs_exact_live_action_episode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                filename = "Loki.S02E04.Heart.of.the.TVA.1080p.DSNP.WEB-DL.mkv"
+                loki = dict(id=84958, kind="tv", name="Loki", year="2021")
+                cases = (
+                    (loki, "Drama, Sci-Fi & Fantasy", "S02E04", True),
+                    (loki, "Animation", "S02E04", False),
+                    (loki, "Drama", "", False),
+                    (
+                        dict(loki, name="Matantei Loki RAGNAROK"),
+                        "Drama",
+                        "S02E04",
+                        False,
+                    ),
+                )
+                for session, (row, genre, numbering, expected) in enumerate(cases, 1):
+                    player = dict(
+                        source="verify-tv",
+                        session=session,
+                        title=filename,
+                        filename=filename,
+                        video=True,
+                        allowed=True,
+                        duration=2891,
+                    )
+                    worker.put("player", "window", player)
+                    worker.put("refresh", "window", {"id": session})
+                    with (
+                        patch("backend.candidates", return_value=[row]) as search,
+                        patch(
+                            "backend.details",
+                            return_value=dict(row, genre=genre, numbering=numbering),
+                        ) as details,
+                    ):
+                        worker.recognize(player)
+                    self.assertEqual(
+                        search.call_args_list[0].args[:2], ("tmdb-tv", "Loki")
+                    )
+                    self.assertEqual(
+                        bool(worker.get("auto", "window")["hit"]), expected
+                    )
+                    if row == loki:
+                        self.assertEqual(
+                            details.call_args_list[0].args[4], ("02", "04")
+                        )
+            finally:
+                worker.db.close()
+
+    def test_automatic_short_video_does_not_search_a_bare_movie_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                player = dict(
+                    source="auto",
+                    session=1,
+                    title="Interstellar",
+                    filename="Interstellar.mp4",
+                    video=True,
+                    allowed=True,
+                    duration=45,
+                )
+                worker.put("player", "window", player)
+                with patch("backend.candidates") as search:
+                    worker.recognize(player)
+                search.assert_not_called()
+            finally:
+                worker.db.close()
+
     def test_fingerprint_fallback_keeps_tied_recordings_unresolved(self):
         rows = [
             dict(id="first", name="Track", artist="One", score=0.99, groups=[]),

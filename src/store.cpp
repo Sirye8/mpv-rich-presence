@@ -15,10 +15,10 @@ namespace
     }
 
     using statement = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
-    statement prepare(sqlite3* db, const char* sql, const std::initializer_list<std::string>& args = {})
+    statement prepare(sqlite3* db, std::string_view sql, const std::initializer_list<std::string>& args = {})
     {
         sqlite3_stmt* raw = nullptr;
-        check(db, sqlite3_prepare_v2(db, sql, -1, &raw, nullptr));
+        check(db, sqlite3_prepare_v2(db, sql.data(), static_cast<int>(sql.size()), &raw, nullptr));
         statement stmt(raw, sqlite3_finalize);
         int i = 0;
         for (const auto& arg : args)
@@ -104,17 +104,38 @@ namespace mpvrp
         return sqlite3_column_int(stmt.get(), 0);
     }
 
-    json profile_store::records() const
+    static constexpr auto saved_records = " FROM records WHERE (category IN "
+        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','folder-filter','cache') "
+        "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)="
+        "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT))) ";
+
+    json profile_store::record_counts() const
+    {
+        auto result = json::object();
+        auto stmt = prepare(db, std::string("SELECT category,count(*)") + saved_records + "GROUP BY category", {});
+        int code;
+        while ((code = sqlite3_step(stmt.get())) == SQLITE_ROW)
+            result[column(stmt.get(),0)] = sqlite3_column_int(stmt.get(),1);
+        if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
+        return result;
+    }
+
+    json profile_store::records(const std::string& category) const
     {
         auto result = json::array();
-        auto stmt = prepare(db, "SELECT category,scope,value FROM records WHERE category IN ('appearance','exclude','privacy','match','tracking','sources','provider','cache') "
-                                "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)= "
-                                "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT)) ORDER BY category,scope");
+        auto stmt = prepare(db, std::string("SELECT category,scope,value") + saved_records + "AND category=? ORDER BY scope", {category});
         int code;
         while ((code = sqlite3_step(stmt.get())) == SQLITE_ROW)
         {
             auto row = json{{"category",column(stmt.get(),0)},{"scope",column(stmt.get(),1)}};
             if (row.at("category") == "match") row["fields"] = json::parse(column(stmt.get(),2));
+            if (row.at("category") == "cache")
+            {
+                const auto entry = json::parse(column(stmt.get(),2));
+                row["expires"] = entry.value("expires",0.0);
+                auto kind = column(stmt.get(),1);
+                row["label"] = kind.substr(0,kind.find('/'));
+            }
             result.push_back(row);
         }
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));

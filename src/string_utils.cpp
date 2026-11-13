@@ -172,7 +172,7 @@ bool passes_folder_filter(const std::string& file_path, const std::string& mode,
     bool in_list = false;
     for (const auto& folder : folders)
     {
-        if (normalized.starts_with(folder + "/") || normalized == folder)
+        if (normalized.starts_with(folder.ends_with('/') ? folder : folder + "/") || normalized == folder)
         {
             in_list = true;
             break;

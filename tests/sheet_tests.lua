@@ -304,12 +304,22 @@ local function verify()
     snapshot.service.entry={media=42,viewer=5,session=8,progress=3,id=9,status="CURRENT"}
     menu.update(snapshot)
     assert(find("AniList","Ask prompt timeout").label=="Ask prompt timeout   Never")
-    local draft=find("AniList","Draft")
-    assert(draft.stepper and draft.label=="Draft   3")
+    local draft=find("AniList","Episodes watched")
+    assert(draft.stepper and draft.label=="Episodes watched   3")
     draft.adjust(1)
-    assert(find("AniList","Draft").label=="Draft   4")
+    assert(find("AniList","Episodes watched").label=="Episodes watched   4")
     draft.adjust(-1)
-    assert(find("AniList","Draft").label=="Draft   3")
+    assert(find("AniList","Episodes watched").label=="Episodes watched   3")
+    snapshot.folder_filter={mode="whitelist",passes=false,current="D:/clips",folders={"D:/anime"}}
+    snapshot.record_counts={cache=8,watch=2,match=1}
+    snapshot.records={{category="cache",scope="v3:auto:wikidata/abcdef",label="v3:auto:wikidata",expires=1}}
+    menu.update(snapshot)
+    assert(find("Folder filters","Current folder access").label=="Current folder access   Blocked by filter")
+    assert(find("Folder filters","Allow this file until it closes"))
+    assert(find("Saved data","Saved caches").label=="Saved caches   8")
+    assert(not find("Saved data","cache:v3:auto:wikidata/abcdef"))
+    assert(find("Saved caches","Metadata cache"))
+    assert(find("Saved: Metadata cache","cache:v3:auto:wikidata/abcdef").label:find("Expired",1,true))
 
     local popup_model,popup_request
     local ask=dofile(modules.."/ask.lua")(function(value)

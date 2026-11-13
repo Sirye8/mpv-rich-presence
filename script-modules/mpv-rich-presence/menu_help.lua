@@ -50,6 +50,10 @@ local help = {
     ["Movies"]="Skip AniList and TV. Use TMDB movies, with Wikidata as a fallback.",
     ["TV"]="Skip AniList and movies. Use TMDB TV, with TVmaze as a fallback. Dated episodes use TVmaze.",
     ["Original"]="Use AniList for anime and mpv's local title or tags for other media.",
+    ["Local only"]="Use the filename, title or tags already available in mpv. An explicitly saved match still takes precedence.",
+    ["Reset progress edit"]="Restore the episode count from the last list entry without saving a change to AniList.",
+    ["No saved records"]="This category has no saved records for the current profile or account.",
+    ["No matching records"]="Clear or change the search to see other records in this category.",
     ["TMDB movies"]="Match movies and posters with the shared TMDB service or your own token.",
     ["TMDB TV"]="Match TV series and episodes with the shared TMDB service or your own token.",
     ["TVmaze"]="Match TV shows and find episodes by season and number or air date.",
@@ -84,7 +88,7 @@ local help = {
     ["Forget local watch history"]="Disconnect and clear this account's local tracking records and cached entries.",
     ["−  One episode"]="Decrease the draft by one, down to zero.",
     ["+  One episode"]="Increase the draft by one, up to the known episode total.",
-    ["Draft"]="Click minus or plus, or use Left and Right on this row, to change the draft by one episode. Apply progress opens a review before saving.",
+    ["Episodes watched"]="Adjust the total number of watched episodes with minus, plus, Left or Right. This edit stays in the panel until you confirm Apply progress.",
     ["Status on Apply"]="Keep the current list status or choose a different status for this edit.",
     ["Apply progress"]="Review the progress and status change before sending it to AniList.",
     ["Reset draft"]="Restore the saved episode count in the draft.",
@@ -103,7 +107,23 @@ local help = {
     ["Resume rewatch and update"]="Review returning this entry to Rewatching with the proposed progress.",
     ["Finish rewatch"]="Review completing the rewatch and recording it in your rewatch count.",
     ["Record completed rewatch"]="Review recording another complete viewing of this one-episode anime.",
-    ["Filter records"]="Enter part of a record category or scope to narrow the list.",
+    ["Filter records"]="Search within this category by record label or key. This only changes the list on screen.",
+    ["Clear search"]="Show every record in this category again.",
+    ["Saved profiles"]="Browse saved appearance, privacy, recognition, tracking and folder preferences by type.",
+    ["Saved matches"]="Review manual title matches and episode corrections saved for a file or folder.",
+    ["Saved caches"]="Browse temporary metadata responses and clear them to refresh provider lookups.",
+    ["Saved AniList data"]="Browse this account's local watch timers, pending proposals, skips, completed updates and cached list entries.",
+    ["Folder filters"]="Review the whitelist or blacklist, edit the folder list, or temporarily allow playback in this window.",
+    ["Filter source"]="Shows whether both settings come from rich-presence.conf or at least one is overridden in the panel.",
+    ["Current folder access"]="Shows whether the configured folder filter allows this file. Private sessions and exclusions are checked separately.",
+    ["Current folder"]="Directory containing the open local file. Use Add current folder to save it in the filter list.",
+    ["Allow this file until it closes"]="Bypass the folder filter for the open file only. Discord and metadata become eligible if other sharing and privacy settings allow them.",
+    ["Bypass the filter in this window"]="Temporarily bypass the whitelist or blacklist for local files in this window. Exclusions and private mode still apply. Other windows keep the saved filter.",
+    ["End temporary exception"]="Restore the saved filter for this window immediately.",
+    ["Add current folder"]="Save the open file's directory and its subfolders in the list. A whitelist allows listed folders. A blacklist blocks them.",
+    ["Listed folders"]="Open the list of folders used by the whitelist or blacklist. Select a folder to review removing it.",
+    ["Add folder path"]="Enter an absolute directory path. The rule also applies to files in subfolders.",
+    ["Restore conf filter"]="Remove the panel's filter mode and folder list overrides, then use both values from rich-presence.conf.",
     ["Reset everything"]="Clear local settings, saved matches, caches and watch history. Disconnect AniList and restore the defaults from rich-presence.conf. This leaves your remote AniList list as it is.",
     ["Fingerprint this file"]="Analyze up to the first two minutes of the local audio and look up the resulting fingerprint on AcoustID. Review the results before saving a match. The package supplies fpcalc and the application key.",
     ["Sharing"]="Why this window is sharing or hidden.",
@@ -122,6 +142,7 @@ local help = {
 }
 
 local choices = {
+    ["Filter mode"]={disabled="Ignore the folder list.",whitelist="Allow only listed folders and their subfolders. An empty whitelist blocks every file.",blacklist="Block listed folders and their subfolders. An empty blacklist blocks no files."},
     ["Save for"]={global="Apply to all media.",folder="Apply to this folder and its subfolders.",file="Apply only to the current file."},
     ["Media layout"]={all="Every media type.",anime="Matched anime.",audio="Unmatched audio.",video="Unmatched video.",
         movie="Matched movies.",tv="Matched TV episodes or shows.",recording="Matched music.",stream="Matched streams."},
@@ -199,7 +220,6 @@ local read_only = {
         ["Episode watch time"]="Real playback time for this episode and viewing cycle. Pauses, buffering, and seeks add no time. At 2×, a real minute still adds one minute.",
         ["Watch started"]="Local clock time of the first credited playback interval in this viewing cycle. Older records may only have elapsed time.",
         ["Last watched"]="Local clock time of the latest credited playback interval in this viewing cycle.",
-        Draft="Proposed episode count. Use the plus and minus controls to change it.",
         ["List entry"]="Most recently confirmed AniList progress and status for this anime.",
         ["List status"]="Whether mpv has a current AniList entry for this anime."},
     ["Recognition & folders"]={["Source rule"]="Scope that supplied the active recognition choice.",
@@ -238,6 +258,8 @@ return function(label, page, action, values, current, key)
         local fields=read_only[page] or {}
         local description=fields[key]
         if key=="Message" then description="Latest status message from mpv or the account helper."
+        elseif page=="Folder filters" then description=help[key]
+        elseif page:match("^Saved") then description=key=="Scope" and "Where this saved rule applies." or help[key]
         elseif page=="Card preview" and key:match("^Public button %d+$") then description=fields["Public button"]
         elseif page=="Pending updates" and key:match("^Proposal ") then description=fields.Proposal
         elseif page=="Diagnostics" then description=help[key]

@@ -3,7 +3,7 @@ return function(make_sheet, send, options, help)
     local sections={"Now playing","AniList","Appearance","Recognition & folders","Privacy & windows","Saved data","Diagnostics"}
     local sources={
         {"auto","Automatic"},{"anime","Anime"},{"movie-tv","Movies & TV"},{"movie","Movies"},{"tv","TV"},
-        {"original","Original"},{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},
+        {"original","Original"},{"local","Local only"},{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},
         {"wikidata","Wikidata"},{"musicbrainz","MusicBrainz"},{"acoustid","AcoustID"},{"stream","Stream metadata"},
     }
     local snap, draft, pending, scope = {}, {}, nil, "global"
@@ -14,6 +14,34 @@ return function(make_sheet, send, options, help)
     local last_read
     local record
     local ui
+    local saved_groups={
+        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","folder-filter"}},
+        {"Saved matches",{"match","provider"}},
+        {"Saved caches",{"cache"}},
+        {"Saved AniList data",{"watch","pending","skipped","history","entry"}},
+    }
+    local saved_categories={
+        appearance={"Appearance profiles","Card appearance saved for all files, a folder, or a file. Removing a profile restores the inherited layout."},
+        privacy={"Sharing profiles","Full, generic, or hidden Discord settings saved for a scope. Removing a restriction keeps currently open files protected."},
+        exclude={"Exclusions","Folders or files blocked from sharing, lookup and tracking. Removing a rule keeps currently open files protected."},
+        sources={"Recognition rules","Media type or provider choices saved for a file, folder or all files."},
+        tracking={"Tracking preferences","AniList mode, threshold and Ask preferences saved for each scope. Watch history has its own category."},
+        panel={"Panel settings","The saved panel position. Clearing this record uses the conf value."},
+        ["folder-filter"]={"Folder filter override","The saved folder filter mode or list. Removing it restores both values from rich-presence.conf."},
+        match={"AniList corrections","Pinned AniList IDs, episode offsets and non-anime flags. Open a record to remove individual fields."},
+        provider={"Other provider matches","Pinned movie, TV and music metadata. Clearing a match returns the scope to automatic lookup or its chosen provider."},
+        cache={"Metadata cache","Temporary provider responses. Clearing them makes the player fetch metadata again when needed."},
+        watch={"Episode timers","Real playback time for each episode and viewing cycle. Clearing a timer also clears its pending and skipped updates."},
+        pending={"Pending proposals","Eligible episode updates waiting for review. Clearing these removes local proposals."},
+        skipped={"Skipped episodes","Local decisions to skip an episode's update. Clearing a skip lets the episode qualify again."},
+        history={"Completed updates","Local records of progress already accounted for. Your remote AniList progress is stored separately."},
+        entry={"Cached list entries","The last local copy of AniList progress and status. The player refreshes it from AniList when needed."},
+    }
+    local function category_for(page)
+        for key,category in pairs(saved_categories) do
+            if page=="Saved: "..category[1] then return key end
+        end
+    end
     local panel_positions={"config","top-left","top-center","top-right","bottom-left","bottom-center","bottom-right"}
     local config_position="top-left"
     for _,position in ipairs(panel_positions) do
@@ -40,7 +68,8 @@ return function(make_sheet, send, options, help)
     end
     local function refresh()
         local preview=ui.page=="Appearance" or ui.page=="Card preview"
-        request("snapshot",{nonce="menu",page=ui.page,replace=preview and replace and layout=="all",draft=preview and edits() or nil})
+        request("snapshot",{nonce="menu",page=ui.page,records=category_for(ui.page),
+            replace=preview and replace and layout=="all",draft=preview and edits() or nil})
     end
     local function service(op,args)
         args=args or {}; args.op=op
@@ -253,6 +282,7 @@ return function(make_sheet, send, options, help)
             row("Cancel",ui.back)
         elseif page=="Recognition & folders" then
             scope_row()
+            row("Folder filters",function() ui.push("Folder filters") end)
             local current=(snap.sources or {}).source or "auto"
             local label=current
             for _,source in ipairs(sources) do if source[1]==current then label=source[2]; break end end
@@ -329,6 +359,7 @@ return function(make_sheet, send, options, help)
             end
         elseif page=="Privacy & windows" then
             scope_row()
+            row("Folder filters",function() ui.push("Folder filters") end)
             choice("Discord",{"full","generic","hidden"},(snap.privacy or {}).mode or "full",function(v)
                 confirm("Set "..scope.." sharing to "..v,function() apply("privacy",{mode=v}) end)
             end)
@@ -356,6 +387,70 @@ return function(make_sheet, send, options, help)
             switch("Track while hidden",tracking.without_sharing==true,function()
                 apply("tracking",{without_sharing=not tracking.without_sharing})
             end)
+        elseif page=="Folder filters" then
+            local settings=snap.folder_filter or {}
+            local folders=settings.folders or {}
+            local modes={disabled="Disabled",whitelist="Whitelist",blacklist="Blacklist"}
+            local function update(fields) request("folder_filter",fields); refresh() end
+            local function set_folders(paths) update({folders=paths}) end
+            local function add(path)
+                path=path:match("^%s*(.-)%s*$"):gsub('^"(.*)"$',"%1")
+                if not (path:match("^%a:[/\\]") or path:match("^%a:$") or path:match("^[/\\][/\\]") or path:sub(1,1)=="/") then
+                    notice("Enter an absolute folder path."); return
+                end
+                local paths=copy(folders)
+                paths[#paths+1]=path
+                set_folders(paths)
+            end
+            local mode=settings.mode or "disabled"
+            row("Filter source   "..(settings.inherited==false and "Saved in panel" or "Configuration"))
+            choice("Filter mode",{"disabled","whitelist","blacklist"},mode,function(v)
+                confirm("Switch the folder filter to "..modes[v].." for all mpv windows?",function() update({mode=v}) end)
+            end,modes[mode])
+            local exception=settings.exception or "off"
+            local access=exception~="off" and "Temporary exception" or settings.passes and "Allowed by filter" or "Blocked by filter"
+            if not settings.current or settings.current=="" then access="Open a local file" end
+            row("Current folder access   "..access)
+            if settings.current and settings.current~="" then
+                row("Current folder   "..settings.current)
+                if exception~="off" then
+                    row("End temporary exception",function() request("folder_exception",{mode="off"}); refresh() end)
+                elseif not settings.passes then
+                    row("Allow this file until it closes",function() request("folder_exception",{mode="file"}); refresh() end)
+                    row("Bypass the filter in this window",function()
+                        confirm("Allow local files outside the folder filter until this mpv window closes?",function()
+                            request("folder_exception",{mode="window"}); refresh()
+                        end)
+                    end)
+                end
+                local listed=false
+                for _,path in ipairs(folders) do if path==settings.current then listed=true; break end end
+                if not listed then
+                    row("Add current folder",function()
+                        confirm("Add "..settings.current.." to the "..(mode=="blacklist" and "block list" or "folder list").."?",function() add(settings.current) end)
+                    end)
+                end
+            end
+            row("Listed folders   "..#folders,function() ui.push("Listed folders") end)
+            row("Add folder path",function() ui.text("Absolute folder path","",add) end)
+            if settings.inherited==false then
+                row("Restore conf filter",function()
+                    confirm("Restore the folder filter mode and list from rich-presence.conf?",function() update({mode="config"}) end)
+                end)
+            end
+        elseif page=="Listed folders" then
+            local folders=(snap.folder_filter or {}).folders or {}
+            if #folders==0 then row("No folders listed") end
+            for i,path in ipairs(folders) do
+                local entry=row("Folder "..i.."   "..path,function()
+                    confirm("Remove "..path.." from the folder filter list?",function()
+                        local paths={}
+                        for _,folder in ipairs(folders) do if folder~=path then paths[#paths+1]=folder end end
+                        request("folder_filter",{folders=paths}); refresh()
+                    end)
+                end)
+                entry.tip="Remove this directory from the list after reviewing the full path. In Whitelist mode this removes access. In Blacklist mode it removes a block."
+            end
         elseif page=="AniList" then
             row("Account   "..(account.name or "Not signed in"))
             row(account.expired and "Reconnect to AniList" or account.name and "Switch or reconnect account" or "Connect account",function() service("connect") end)
@@ -391,7 +486,7 @@ return function(make_sheet, send, options, help)
                 row(entry.id and ("List entry   "..entry.progress.." / "..(snap.total>0 and snap.total or "?")..
                     " · "..(list_status_labels[entry.status] or entry.status or "?")..(answer.offline and " · Offline" or "")) or "List status   Not on your list")
                 local function bump(n) if not edit_base then edit_base=copy(entry) end; edit=math.max(0,(edit or entry.progress)+n); if snap.total>0 then edit=math.min(edit,snap.total) end end
-                local draft_row=row("Draft   "..tostring(edit or entry.progress),nil,false,bump)
+                local draft_row=row("Episodes watched   "..tostring(edit or entry.progress),nil,false,bump)
                 draft_row.stepper,draft_row.disabled=true,false
                 draft_row.tip=help(draft_row.label,page,true)
                 local function submit(target)
@@ -405,7 +500,7 @@ return function(make_sheet, send, options, help)
                 choice("Status on Apply",{"unchanged","CURRENT","COMPLETED","REPEATING","PAUSED","DROPPED","PLANNING"},
                     list_status or "unchanged",function(v) list_status=v~="unchanged" and v or nil end)
                 row("Apply progress",function() submit(edit or entry.progress) end,true)
-                row("Reset draft",function() edit=entry.progress; edit_base=copy(entry) end)
+                row("Reset progress edit",function() edit=entry.progress; edit_base=copy(entry) end)
                 if tonumber(snap.episode) then row("Mark current episode watched",function() submit(tonumber(snap.episode)) end) end
             end
             scope_row()
@@ -495,27 +590,69 @@ return function(make_sheet, send, options, help)
                 end)
             end)
         elseif page=="Saved data" then
-            row("Filter records   "..filter,function() ui.text("Filter by category or scope",filter,function(v) filter=v end) end)
-            local counts={}
-            for _,r in ipairs(snap.records or {}) do counts[r.category]=(counts[r.category] or 0)+1 end
-            for _,r in ipairs(snap.records or {}) do
-                local cat=r.category; local target=r.scope
-                if (cat.." "..target):lower():find(filter:lower(),1,true) then
-                    row(cat.."   "..target,function()
-                        if cat=="match" then record=r; ui.push("Saved match"); return end
-                        confirm("Remove local "..cat.." for "..target,function()
-                            service("clear",{category=cat,scope=target})
-                        end)
-                    end,false,nil,cat..":"..target)
-                end
-            end
-            for _,cat in ipairs({"cache","watch","pending","skipped","history","entry"}) do
-                local category=cat
-                local count=counts[category] or 0
-                local effect=category=="watch" and " Restart the timers and clear their pending and skipped updates." or category=="pending" and " Dismiss these proposals." or ""
-                row("Clear "..cat.." ("..count..")",function() confirm("Remove "..count.." local "..cat.." records."..effect,function() service("clear",{category=category}) end) end)
+            local counts=snap.record_counts or {}
+            for _,group in ipairs(saved_groups) do
+                local name,count=group[1],0
+                for _,category in ipairs(group[2]) do count=count+(counts[category] or 0) end
+                row(name.."   "..count,function() filter=""; ui.push(name) end)
             end
             row("Reset everything",function() confirm("Clear local profiles, matches, caches and watch history, disconnect AniList, and restore the defaults from rich-presence.conf.",function() service("reset") end) end)
+        elseif category_for(page) then
+            local cat=category_for(page)
+            local label,description=saved_categories[cat][1],saved_categories[cat][2]
+            local count=(snap.record_counts or {})[cat] or 0
+            local shown=0
+            local function clear(scope)
+                local suffix=scope and (" ("..scope..")") or " (all "..count..")"
+                confirm("Clear "..label:lower()..suffix.."? "..description,function()
+                    service("clear",{category=cat,scope=scope,notice_page=page})
+                end)
+            end
+            if count>0 then
+                row("Filter records"..(filter~="" and "   "..filter or ""),function()
+                    ui.text("Filter this category",filter,function(v) filter=v end)
+                end)
+                if filter~="" then row("Clear search",function() filter="" end) end
+                if cat=="cache" or cat=="watch" or cat=="pending" or cat=="skipped" or cat=="history" or cat=="entry" then
+                    row("Clear all   "..count,function() clear() end).tip=description.." This applies to every record in this category."
+                end
+            end
+            for _,item in ipairs(snap.records or {}) do
+                if item.category==cat and ((item.label or "").." "..item.scope):lower():find(filter:lower(),1,true) then
+                    shown=shown+1
+                    local title,value=label,item.scope
+                    if cat=="cache" then
+                        local kind=item.label or ""
+                        title=kind:gsub("^v%d+:",""):gsub("^music%-v%d+:","Music · "):gsub(":"," · ")
+                        if title=="" then title="Cached result" end
+                        value=item.expires and item.expires>0 and
+                            (item.expires<os.time() and "Expired" or "Expires "..os.date("%d %b",math.floor(item.expires))) or "Cached"
+                    elseif cat=="watch" or cat=="history" or cat=="pending" or cat=="skipped" or cat=="entry" then
+                        local _,media,episode,cycle=item.scope:match("^(%d+)/(%d+)/(%d+)/(%d+)$")
+                        if media then title,value="AniList "..media,"Episode "..episode.." · Cycle "..(tonumber(cycle)+1)
+                        else
+                            media=item.scope:match("^%d+/(%d+)$")
+                            if media then title,value="AniList "..media,label end
+                        end
+                    end
+                    row(title.."   "..value,function()
+                        if cat=="match" then record=item; ui.push("Saved match")
+                        else clear(item.scope) end
+                    end,false,nil,cat..":"..item.scope).tip=description.." Record key "..item.scope
+                end
+            end
+            if shown==0 then row(count==0 and "No saved records" or filter=="" and "Loading records…" or "No matching records") end
+        elseif page=="Saved profiles" or page=="Saved matches" or page=="Saved caches" or page=="Saved AniList data" then
+            local counts=snap.record_counts or {}
+            for _,group in ipairs(saved_groups) do
+                if group[1]==page then
+                    for _,key in ipairs(group[2]) do
+                        local name,description=saved_categories[key][1],saved_categories[key][2]
+                        row(name.."   "..(counts[key] or 0),function() filter=""; ui.push("Saved: "..name) end).tip=description
+                    end
+                    break
+                end
+            end
         elseif page=="Saved match" and record then
             row("Scope   "..record.scope)
             for _,field in ipairs({{"id","Pinned AniList ID"},{"not_anime","Non-anime flag"},{"offset","Episode offset"}}) do

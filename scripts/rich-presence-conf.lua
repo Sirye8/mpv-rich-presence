@@ -130,8 +130,13 @@ if ok then
         if data then ask.offer(data) end
     end)
     mp.register_script_message("review-before",ask.leave)
+    mp.register_event("playback-restart",ask.playback_restart)
     mp.observe_property("eof-reached","bool",ask.end_changed)
     mp.register_event("end-file",ask.reset)
+    mp.add_timeout(0,function()
+        local ok,err=pcall(dofile(utils.join_path(modules,"osc_navigation.lua")),mp_options.read_options)
+        if not ok then mp_msg.warn("Could not connect OSC playlist controls: "..tostring(err)) end
+    end)
     mp.register_script_message("snapshot",function(raw)
         local data=utils.parse_json(raw)
         if data then menu.update(data) end

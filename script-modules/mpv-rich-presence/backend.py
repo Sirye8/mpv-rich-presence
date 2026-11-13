@@ -39,6 +39,7 @@ from providers import (
     musicbrainz_album,
     musicbrainz_match,
     video_query,
+    generic_clip,
 )
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
@@ -588,6 +589,8 @@ class Worker:
                     "match",
                     "provider",
                     "sources",
+                    "panel",
+                    "folder-filter",
                 ):
                     removed = self.get(category, job["scope"])
                     if category == "match" and job.get("field"):
@@ -870,6 +873,7 @@ class Worker:
         raw = p.get("title", "")
         source = profile_source
         verify_movie = source == "verify-movie"
+        verify_tv = source == "verify-tv"
         video_profile = source in ("movie-tv", "movie", "tv")
         if video_profile and (not p["video"] or p.get("remote")):
             return
@@ -884,6 +888,18 @@ class Worker:
                 or (filename[1] and (verify_movie or not year))
             ):
                 title, year, episode, airdate = filename
+        if (
+            source == "auto"
+            and p["video"]
+            and not p.get("remote")
+            and not p.get("tmdb", "").isdigit()
+        ):
+            # A short clip with a bare title is weak evidence of a feature film.
+            length = p.get("duration", 0)
+            if generic_clip(p.get("filename", "")) or (
+                0 < length < 35 * 60 and not (year or episode or airdate)
+            ):
+                return
         mixed_title = (
             source in ("auto", "movie-tv")
             and p["video"]
@@ -906,6 +922,8 @@ class Worker:
                 source = "wikidata"
         if verify_movie:
             source = "tmdb-movie"
+        elif verify_tv:
+            source = "tmdb-tv"
         artist = p.get("artist", "")
         album = p.get("album", "")
         generation = self.get("generation", "data")
@@ -967,7 +985,7 @@ class Worker:
             ):
                 return
             cache_key = (
-                "v2:"
+                "v3:"
                 + profile_source
                 + ":"
                 + source
@@ -1026,7 +1044,9 @@ class Worker:
                         if match_name(r.get("match", r["name"])) == match_name(title)
                     ]
                     if year and (
-                        provider in ("wikidata", "tvmaze", "tmdb-movie") or verify_movie
+                        provider in ("wikidata", "tvmaze", "tmdb-movie")
+                        or verify_movie
+                        or verify_tv
                     ):
                         exact = [
                             r for r in exact if year in r.get("years", [r.get("year")])
@@ -1054,6 +1074,30 @@ class Worker:
                             return movie
                     except AccountError:
                         pass
+                    return None
+
+                if verify_tv:
+                    if not title or not episode:
+                        return None
+                    for provider in ("tmdb-tv", "tvmaze"):
+                        try:
+                            hits = matching(provider)
+                            if len(hits) != 1:
+                                continue
+                            show = details(
+                                provider, hits[0], self.settings, self.throttle, episode
+                            )
+                            live_action = (
+                                bool(show.get("genre"))
+                                and "animation" not in show["genre"].casefold()
+                                if provider == "tmdb-tv"
+                                else show.get("show_type")
+                                in ("Scripted", "Reality", "Talk Show")
+                            )
+                            if live_action and show.get("numbering"):
+                                return show
+                        except (AccountError, OSError, ValueError):
+                            continue
                     return None
 
                 def preferred_tmdb(fallback):

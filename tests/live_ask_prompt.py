@@ -21,12 +21,15 @@ local signal=os.getenv("MPVRP_ASK_SIGNAL")
 local trace=os.getenv("MPVRP_ASK_TRACE")
 local capture=os.getenv("MPVRP_ASK_CAPTURE")
 local never=os.getenv("MPVRP_ASK_NEVER")=="yes"
+local revisit=action=="osc-leave" or action=="osc-end"
+local uosc=os.getenv("MPVRP_ASK_UOSC")=="yes"
 local function log(event)
     local f=assert(io.open(trace,"a"))
     f:write(event," ",mp.get_time(),"\n")
     f:close()
 end
 local prompt_seen=false
+local loaded=0
 local function review_seen()
     if prompt_seen then return end
     prompt_seen=true
@@ -38,16 +41,33 @@ local function review_seen()
             mp.commandv("keypress","ENTER")
         else mp.commandv("keypress","ESC") end
         if action=="wait" then mp.add_timeout(.2,function() mp.commandv("quit") end) end
+        if revisit and loaded==3 then mp.add_timeout(.4,function() mp.commandv("quit") end) end
     end) end
 end
 mp.observe_property("term-status-msg","string",function(_,text)
     if text and text:find("AniList update",1,true) then review_seen() end
 end)
 mp.register_event("end-file",function() log("end") end)
-local loaded=0
+local function osc(direction)
+    local opts=mp.get_property_native("options/script-opts") or {}
+    local command=opts["osc-playlist_"..direction.."_mbtn_left_command"]
+    if uosc then
+        command=(opts["uosc-controls"] or ""):match('(script%-message%-to mpv_rich_presence review%-before "script%-binding uosc/'..direction..'")')
+    end
+    assert(command and command:find("review-before",1,true),"OSC route is missing")
+    mp.command(command)
+end
 mp.register_event("file-loaded",function()
     loaded=loaded+1
-    if loaded==2 then log("next"); mp.commandv("quit") end
+    prompt_seen=false
+    if loaded==2 then
+        log("next")
+        if revisit then mp.add_timeout(.4,function() osc("prev") end)
+        else mp.commandv("quit") end
+    elseif revisit and loaded==3 then
+        log("returned")
+        mp.add_timeout(1,function() mp.set_property_bool("pause",false) end)
+    end
 end)
 local utils=require("mp.utils")
 local timer
@@ -57,6 +77,7 @@ timer=mp.add_periodic_timer(.05,function()
     log("action")
     if action=="eof" then mp.set_property_bool("pause",false)
     elseif action=="next" then mp.commandv("keypress",">")
+    elseif revisit then osc("next")
     else mp.commandv("keypress",action) end
     if capture then
         mp.add_timeout(1.4,function()
@@ -85,7 +106,7 @@ end)
 """
 
 
-def verify(package, mpv, ffmpeg, capture=None):
+def verify(package, mpv, ffmpeg, capture=None, uosc=None):
     cases = (
         (
             ("threshold", "wait", True, False, True, False),
@@ -96,10 +117,14 @@ def verify(package, mpv, ffmpeg, capture=None):
             ("leave", "next", True, True, True, False),
             ("leave", "eof", False, True, True, False),
             ("leave", "eof", True, True, True, True),
+            ("leave", "osc-leave", True, True, True, False),
+            ("end", "osc-end", True, True, True, False),
         )
         if not capture
         else (("leave", "eof", True, True, True, True),)
     )
+    if uosc:
+        cases = tuple(case for case in cases if case[1].startswith("osc-"))
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         driver = root / "ask-driver.lua"
@@ -132,6 +157,12 @@ def verify(package, mpv, ffmpeg, capture=None):
             config = root / f"mpv-{index}"
             with zipfile.ZipFile(package) as z:
                 z.extractall(config)
+            if uosc:
+                shutil.copytree(uosc, config / "scripts/uosc")
+                (config / "script-opts/uosc.conf").write_text(
+                    "controls=menu,gap,prev,items,next,gap,fullscreen\n",
+                    encoding="utf-8",
+                )
             database = config / "scripts/mpv-rich-presence/data.sqlite3"
             signal, trace = config / "go", config / "trace"
             key = "1/195604/4/0"
@@ -192,6 +223,7 @@ def verify(package, mpv, ffmpeg, capture=None):
                 MPVRP_ASK_SIGNAL=str(signal),
                 MPVRP_ASK_TRACE=str(trace),
                 MPVRP_ASK_NEVER="yes" if never else "no",
+                MPVRP_ASK_UOSC="yes" if uosc else "no",
             )
             if capture:
                 env["MPVRP_ASK_CAPTURE"] = str(capture.resolve())
@@ -226,7 +258,17 @@ def verify(package, mpv, ffmpeg, capture=None):
                     )
                 ]
                 names = [name for name, _ in events]
-                if capture:
+                if action.startswith("osc-"):
+                    expected_count = 2 if timing == "leave" else 1
+                    assert names.count("prompt") == expected_count, events
+                    assert (
+                        names.index("next")
+                        < names.index("returned")
+                        < len(names) - 1 - names[::-1].index("prompt")
+                    ), events
+                    if timing == "leave":
+                        assert names.index("prompt") < names.index("next"), events
+                elif capture:
                     assert "fallback" not in names, events
                     assert names.index("player-input") < names.index("captured"), events
                     assert names.index("captured") < names.index("end"), events
@@ -235,7 +277,7 @@ def verify(package, mpv, ffmpeg, capture=None):
                     )
                 else:
                     assert ("prompt" in names) == expected, (timing, action, events)
-                if expected and not capture:
+                if expected and not capture and not action.startswith("osc-"):
                     assert names.index("prompt") < names.index("end"), events
                     if dismiss:
                         assert names.index("dismiss") < names.index("end"), events
@@ -280,5 +322,6 @@ if __name__ == "__main__":
     parser.add_argument("mpv")
     parser.add_argument("ffmpeg")
     parser.add_argument("--capture", type=Path, help="capture the graphical EOF review")
+    parser.add_argument("--uosc", type=Path, help="test a local uosc installation")
     options = parser.parse_args()
-    verify(options.package, options.mpv, options.ffmpeg, options.capture)
+    verify(options.package, options.mpv, options.ffmpeg, options.capture, options.uosc)

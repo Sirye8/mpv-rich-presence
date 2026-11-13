@@ -23,7 +23,8 @@ namespace mpvrp
         nlohmann::json get(const std::string& category, const std::string& scope) const;
         nlohmann::json episode_watch(int viewer, int media, const std::string& episode) const;
         void put(const std::string& category, const std::string& scope, const nlohmann::json& value);
-        nlohmann::json records() const;
+        nlohmann::json record_counts() const;
+        nlohmann::json records(const std::string& category) const;
         nlohmann::json pending() const;
         nlohmann::json effective(const std::string& category, const std::string& path, std::string* winning_scope = nullptr) const;
         void save(const std::string& category, const std::string& scope, const nlohmann::json& patch);

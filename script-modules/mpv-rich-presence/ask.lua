@@ -12,11 +12,11 @@ return function(make_sheet, send, options)
             if mp.get_property("keep-open")=="always" then
                 commands[#commands+1]="set file-local-options/keep-open "..keep_open
             end
-            if mp.get_property("keep-open-pause")=="no" then
-                commands[#commands+1]="set file-local-options/keep-open-pause "..keep_open_pause
-            end
-            keep_open,keep_open_pause=nil,nil
         end
+        if keep_open_pause and mp.get_property("keep-open-pause")=="no" then
+            commands[#commands+1]="set file-local-options/keep-open-pause "..keep_open_pause
+        end
+        keep_open,keep_open_pause=nil,nil
         if command then commands[#commands+1]=command end
         if #commands>0 then mp.command(table.concat(commands,"; ")) end
     end
@@ -124,7 +124,7 @@ return function(make_sheet, send, options)
     end
 
     local function leave(command)
-        if prompt and prompt.timing=="leave" then
+        if prompt and prompt.timing~="threshold" then
             -- If review already started at EOF, honor the first requested action.
             transition=transition or command
         elseif not (offer and offer.timing=="leave" and show(command)) then
@@ -157,6 +157,16 @@ return function(make_sheet, send, options)
         end
     end
 
+    local function arm_end()
+        local original=mp.get_property("keep-open","no")
+        if original~="always" and mp.set_property("file-local-options/keep-open","always") then
+            keep_open=original
+        end
+        if not keep_open_pause then keep_open_pause=mp.get_property("keep-open-pause","yes") end
+        mp.set_property("file-local-options/keep-open-pause","no")
+        reached_end(nil,mp.get_property_bool("eof-reached",false))
+    end
+
     local function reset()
         transition=nil
         -- mpv has already restored the file-local options.
@@ -183,19 +193,17 @@ return function(make_sheet, send, options)
                 else
                     -- Keep the last frame in the normal playback loop. mpv
                     -- stops drawing overlays once on_unload starts.
-                    local original=mp.get_property("keep-open","no")
-                    local original_pause=mp.get_property("keep-open-pause","yes")
-                    if original~="always" and mp.set_property("file-local-options/keep-open","always") then
-                        keep_open,keep_open_pause=original,original_pause
-                        mp.set_property("file-local-options/keep-open-pause","no")
-                    end
                     if value.timing=="leave" then bind_leave_keys() end
-                    reached_end(nil,mp.get_property_bool("eof-reached",false))
+                    arm_end()
                 end
             else offer=value end
         end,
         end_changed=reached_end,
         reset=reset,
+        playback_restart=function()
+            if offer and offer.timing~="threshold" then arm_end() end
+            send({action="ask_refresh"})
+        end,
         leave=function(command)
             if is_leave_command(command) then leave(command) end
         end,

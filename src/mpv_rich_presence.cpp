@@ -347,12 +347,26 @@ static bool sharing_hidden(const rich_presence_state& state)
         || state.privacy.value("mode", std::string("full")) == "hidden";
 }
 
+static bool passes_configured_folders(const rich_presence_state& state)
+{
+    const auto mode = state.folder_filter.find("mode");
+    const auto& active_mode = mode == state.folder_filter.end() ? state.folder_filter_mode : mode->get_ref<const std::string&>();
+    return passes_folder_filter(state.current_file_path, active_mode,
+        state.folder_filter.contains("folders") ? state.panel_folders : state.folder_list);
+}
+
+static bool folder_exception_active(const rich_presence_state& state)
+{
+    return !state.scope_path.empty() && !state.scope_path.starts_with("stream-") &&
+        (state.folder_session_exception || state.folder_exception == state.scope_path);
+}
+
 static bool local_permission(const rich_presence_state& state)
 {
     return state.config_received && !state.store_failed && !state.private_session
         && !state.hard_block && !state.privacy.value("block_lookup", false)
         && (state.media_has_audio || state.media_has_video)
-        && passes_folder_filter(state.current_file_path, state.folder_filter_mode, state.folder_list);
+        && (folder_exception_active(state) || passes_configured_folders(state));
 }
 
 static bool is_window_eligible(const rich_presence_state& state)
@@ -379,6 +393,8 @@ static void read_profiles(rich_presence_state& state)
         state.provider = state.store->effective("provider", state.scope_path);
         state.sources = state.store->effective("sources", state.scope_path, &state.source_scope);
         state.tracking = state.store->effective("tracking", state.scope_path);
+        state.folder_filter = state.store->get("folder-filter", "global");
+        state.panel_folders = state.folder_filter.value("folders", std::vector<std::string>{});
     }
     if (!state.appearance.contains("preset")) state.appearance["preset"] = state.config_preset;
     if (!state.sources.contains("source")) state.sources["source"] = state.config_source;
@@ -587,6 +603,11 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     if (correction.value("not_anime", false) || filename_str.empty())
         return;
 
+    static const std::regex clip_name(
+        R"(^(?:(?:img|vid|dsc|dji|pxl|mov|mvi|gopr|g[hp]0[0-9])[ _.-]*[0-9]|(?:screen[ _.-]*(?:recording|capture)|untitled|test[ _.-]*clip)(?:[ _.-]|$)))",
+        std::regex::icase);
+    if (correction.value("automatic", false) && !correction.contains("id") && !correction.contains("offset") &&
+        std::regex_search(filename_str, clip_name)) return;
     if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
         return;
 
@@ -817,13 +838,22 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
         return;
 
+    const auto lower_title = to_lower(a_title);
+    const auto exact_title = [&](const anilist_media& media) {
+        return to_lower(media.title) == lower_title ||
+            std::any_of(media.matching_titles.begin(), media.matching_titles.end(),
+                [&](const auto& alias) { return to_lower(alias) == lower_title; });
+    };
+    static const std::regex episode_marker(R"((?:^|[ ._-])(?:S[0-9]{1,2}[ ._-]*E[0-9]{1,3}|[0-9]{1,2}x[0-9]{2,3})(?:$|[^0-9]))", std::regex::icase);
+    const bool fuzzy_episode = !correction.contains("id") && !correction.contains("offset") &&
+        !exact_title(*candidate) && !exact_title(current_resolved_media) &&
+        std::regex_search(filename_str, episode_marker);
     int conflicting_anime_minutes = 0;
     if (!correction.contains("id") && pinfo.episode == 0 && pinfo.season == 0 && pinfo.part == 0 &&
         current_resolved_media.format != "MOVIE" && current_resolved_media.duration_minutes > 0 &&
         current_resolved_media.duration_minutes <= 30 && current_resolved_media.release_year > 0)
     {
         const auto year = ws2s(elements.get(anitomy::kElementAnimeYear));
-        const auto lower_title = to_lower(a_title);
         if (year.size() == 4 && year != std::to_string(current_resolved_media.release_year) &&
             std::none_of(current_resolved_media.matching_titles.begin(), current_resolved_media.matching_titles.end(),
                 [&](const auto& alias) { return to_lower(alias) == lower_title; }))
@@ -852,6 +882,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         state.watch_episode = eligible_episode && unambiguous_numbering;
         state.is_anime = true;
         state.conflicting_anime_minutes = conflicting_anime_minutes;
+        state.fuzzy_episode_match = fuzzy_episode;
         state.anime_title = current_resolved_media.title;
         state.anime_english = current_resolved_media.english;
         state.anime_native = current_resolved_media.native;
@@ -965,6 +996,7 @@ static void on_eligibility_changed(rich_presence_state& state)
                     state.pending_filename = filename_str;
                     state.pending_file_path = state.current_file_path;
                     state.pending_correction = state.correction;
+                    state.pending_correction["automatic"] = state.sources.value("source",std::string("auto")) == "auto";
                     state.has_pending_lookup = true;
                 }
                 state.worker_cv.notify_one();
@@ -977,7 +1009,7 @@ static void on_eligibility_changed(rich_presence_state& state)
 
 static bool valid_source(const nlohmann::json& value)
 {
-    return value == "auto" || value == "anime" || value == "movie-tv" || value == "movie" || value == "tv"
+    return value == "auto" || value == "local" || value == "anime" || value == "movie-tv" || value == "movie" || value == "tv"
         || value == "original" || value == "tmdb-movie" || value == "tmdb-tv" || value == "tvmaze"
         || value == "wikidata" || value == "musicbrainz" || value == "acoustid" || value == "stream";
 }
@@ -1093,6 +1125,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             {
                 state.snapshot_request = req.value("nonce", std::string("menu"));
                 state.panel_page = req.value("page",std::string("Menu"));
+                state.panel_records = req.value("records", std::string{});
                 state.replace_draft = req.value("replace",false);
                 state.preview = req.value("draft", nlohmann::json::object());
                 return;
@@ -1119,6 +1152,15 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             {
                 if (req.value("id", std::string{}) == state.ask_offer)
                     state.dismissed_ask = state.ask_offer;
+                return;
+            }
+            if (action == "ask_refresh")
+            {
+                if (!state.ask_offer.empty())
+                {
+                    state.ask_payload.clear();
+                    publish_ask_offer(state, current_ask_proposal(state));
+                }
                 return;
             }
             if (action == "service" && state.store)
@@ -1161,6 +1203,42 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 }
             }
             else if (action == "hide_file") state.hidden_file = !state.hidden_file;
+            else if (action == "folder_exception")
+            {
+                const auto mode = req.value("mode", std::string{});
+                if (mode != "off" && (state.scope_path.empty() || state.scope_path.starts_with("stream-"))) return;
+                if (mode != "off" && mode != "file" && mode != "window") return;
+                state.folder_exception = mode == "file" ? state.scope_path : "";
+                state.folder_session_exception = mode == "window";
+            }
+            else if (action == "folder_filter" && state.store)
+            {
+                const auto mode = req.value("mode", std::string{});
+                if (mode == "config") state.store->clear("folder-filter", "global");
+                else if (mode == "disabled" || mode == "whitelist" || mode == "blacklist")
+                    state.store->save("folder-filter", "global", {{"mode",mode}});
+                else if (req.contains("folders"))
+                {
+                    const auto& list = req.at("folders");
+                    if (!list.is_array() || list.size() > 256) return;
+                    std::vector<std::string> folders;
+                    for (const auto& item : list)
+                    {
+                        auto path = item.get<std::string>();
+                        if (path.size() == 2 && path.back() == ':') path += '/';
+                        if (path.size() > 4096 || path.find('\0') != std::string::npos ||
+                            !fs::u8path(path).is_absolute()) return;
+                        const auto normalized = normalize_path(path);
+                        const auto folder = normalized.empty() ? "/" : normalized;
+                        if (std::find(folders.begin(), folders.end(), folder) == folders.end()) folders.push_back(folder);
+                    }
+                    state.store->save("folder-filter", "global", {{"folders",folders}});
+                }
+                else return;
+                state.folder_exception.clear();
+                state.folder_session_exception = false;
+                read_profiles(state);
+            }
             else if (action == "hide_hour") state.hide_until = chrono::steady_clock::now() + chrono::hours(1);
             else if (action == "hide_until_exit") state.hidden_until_exit = req.at("enabled").get<bool>();
             else if (action == "hide_minutes")
@@ -1351,6 +1429,7 @@ static std::string get_audio_artist(mpv_handle* mpv)
 static void handle_file_loaded(rich_presence_state& state)
 {
     ++state.file_session;
+    state.folder_exception.clear();
     state.hidden_file = false;
     state.session_start = chrono::duration_cast<chrono::milliseconds>(chrono::system_clock::now().time_since_epoch()).count();
     state.media_has_audio = false;
@@ -1436,6 +1515,7 @@ static void handle_file_loaded(rich_presence_state& state)
         state.pending_filename = filename_str;
         state.pending_file_path = state.current_file_path;
         state.pending_correction = state.correction;
+        state.pending_correction["automatic"] = state.sources.value("source",std::string("auto")) == "auto";
         state.has_pending_lookup = true;
         state.worker_cv.notify_one();
     }
@@ -1681,12 +1761,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 publish_ask_offer(state, {});
                 ++state.file_load_id;
                 ++state.file_session;
+                state.folder_exception.clear();
                 state.media_has_audio = false;
                 state.media_has_video = false;
                 state.media_title.clear();
                 state.track_title.clear();
                 state.media_artist.clear();
                 state.current_file_path.clear();
+                state.scope_path.clear();
                 {
                     std::lock_guard<std::mutex> lock(state.anime_mutex);
                     state.is_anime = false;
@@ -1746,6 +1828,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         media.session_start = state.session_start;
         int completed_anime_lookup;
         int conflicting_anime_minutes = 0;
+        bool fuzzy_episode_match = false;
         bool watch_episode = false;
         {
             std::lock_guard lock(state.anime_mutex);
@@ -1755,6 +1838,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             {
                 watch_episode = state.watch_episode;
                 conflicting_anime_minutes = state.conflicting_anime_minutes;
+                fuzzy_episode_match = state.fuzzy_episode_match;
                 media.anime_title = state.anime_title;
                 media.english = state.anime_english;
                 media.romaji = state.anime_romaji;
@@ -1844,10 +1928,10 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 }
             }
             auto epoch = state.store->get("generation","cache").value("id",std::string{});
-            if (epoch != state.cache_epoch)
+            const bool cache_cleared = epoch != state.cache_epoch;
+            if (cache_cleared)
             {
                 state.cache_epoch = epoch;
-                ++state.file_load_id;
                 clear_anilist_cache();
             }
             auto old = state.correction;
@@ -1856,8 +1940,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             bool old_block = state.hard_block;
             auto old_provider = state.provider;
             auto old_sources = state.sources;
+            auto old_filter = state.folder_filter;
             bool was_allowed = lookup_allowed(state);
             read_profiles(state);
+            if (old_filter != state.folder_filter)
+            {
+                state.folder_exception.clear();
+                state.folder_session_exception = false;
+            }
             if (old_sources != state.sources || old != state.correction)
             {
                 ++state.file_load_id;
@@ -1865,7 +1955,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 state.is_anime = false;
                 state.anime_anilist_id = 0;
             }
-            if (old_sources != state.sources || old != state.correction || was_allowed != lookup_allowed(state)) on_eligibility_changed(state);
+            if (old_sources != state.sources || old != state.correction ||
+                was_allowed != lookup_allowed(state)) on_eligibility_changed(state);
             if (old_block != state.hard_block || old_appearance != state.appearance || old_privacy != state.privacy || old != state.correction || old_provider != state.provider || old_sources != state.sources)
             {
                 state.force_update = true;
@@ -1883,16 +1974,35 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         const bool verify_movie = state.store && source == "auto" && allowed && media.anime &&
             !pinned_anime && completed_anime_lookup == load_id && conflicting_anime_minutes > 0 &&
             duration_estimate >= (std::max)(60, 3 * conflicting_anime_minutes) * 60;
+        const bool verify_tv = state.store && source == "auto" && allowed && media.anime &&
+            !pinned_anime && completed_anime_lookup == load_id && fuzzy_episode_match;
+        const bool verify_video = verify_movie || verify_tv;
         if (verify_movie) source = "verify-movie";
+        else if (verify_tv) source = "verify-tv";
+        else if (source == "local") source = "original";
         else if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
             source = "original";
         const bool extra = source != "original";
-        if (verify_movie) watch_episode = false;
         if (!media.video && !state.scope_path.starts_with("stream-") &&
             (source == "auto" || source == "musicbrainz" || source == "acoustid"))
             media.track_title = state.track_title;
-        const int tracked_media = verify_movie ? 0 : media.anilist_id;
-        const auto tracked_episode = verify_movie ? "" : media.episode;
+        const auto candidate = extra && state.store ? state.store->get("auto",state.instance_id) : nlohmann::json::object();
+        const bool resolved = candidate.value("session",uint64_t{}) == state.file_session &&
+            candidate.value("source",std::string{}) == source && candidate.value("title",std::string{}) == media.title &&
+            candidate.value("track_title",std::string{}) == media.track_title &&
+            candidate.value("artist",std::string{}) == media.artist && candidate.value("album",std::string{}) == media.album;
+        if (resolved) media.provider = candidate.value("hit",nlohmann::json::object());
+        if (verify_video && (!resolved || !media.provider.empty()))
+        {
+            media.anime = false;
+            media.anilist_id = 0;
+            media.episode.clear();
+            media.anime_title.clear();
+            watch_episode = false;
+        }
+        if (candidate != automatic) { state.force_update = true; automatic = candidate; }
+        const int tracked_media = media.anilist_id;
+        const auto tracked_episode = media.episode;
         const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
         if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
             || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
@@ -1908,7 +2018,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"watch_episode",watch_episode},{"total",media.total},{"pos",media.position},{"seek",last_seek},
                 {"scope_path",state.scope_path},{"path",allowed ? state.scope_path : ""},{"speed",media.speed},{"active",advancing},
                 {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
-                {"match_title",verify_movie ? "" : media.anime_title}};
+                {"match_title",media.anime_title}};
             sample["source"] = source;
             if (extra)
             {
@@ -1962,23 +2072,6 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 service_started = true;
             }
         }
-        if (extra && state.store)
-        {
-            const auto candidate = state.store->get("auto",state.instance_id);
-            if (candidate != automatic) { state.force_update = true; automatic = candidate; }
-            const bool resolved = candidate.value("session",uint64_t{}) == state.file_session &&
-                candidate.value("source",std::string{}) == source && candidate.value("title",std::string{}) == media.title &&
-                candidate.value("track_title",std::string{}) == media.track_title &&
-                candidate.value("artist",std::string{}) == media.artist && candidate.value("album",std::string{}) == media.album;
-            if (resolved) media.provider = candidate.value("hit",nlohmann::json::object());
-            if (verify_movie && (!resolved || !media.provider.empty()))
-            {
-                media.anime = false;
-                media.anilist_id = 0;
-                media.episode.clear();
-                media.anime_title.clear();
-            }
-        }
         if (!state.provider.empty() && !media.anime)
         {
             media.provider = state.provider;
@@ -2022,6 +2115,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"appearance_scope",state.appearance_scope},
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
                 {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-")},
+                {"folder_filter", {
+                    {"mode",state.folder_filter.value("mode",state.folder_filter_mode)},
+                    {"folders",state.folder_filter.contains("folders") ? state.panel_folders : state.folder_list},
+                    {"inherited",state.folder_filter.empty()},
+                    {"passes",passes_configured_folders(state)},
+                    {"current",state.scope_path.empty() || state.scope_path.starts_with("stream-") ? "" :
+                        path_utf8(fs::u8path(state.scope_path).parent_path())},
+                    {"exception",state.folder_session_exception ? "window" : folder_exception_active(state) ? "file" : "off"}
+                }},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",std::move(account)},{"watch_episode",watch_episode},
                 {"episode_watch",std::move(episode_watch)},
@@ -2030,10 +2132,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     state.store->pending() : nlohmann::json::array()},
                 {"sources",state.sources},{"provider",media.anime ? "anilist" :
                     media.provider.value("provider",std::string(media.track_title.empty() ? "local" : "local tags"))},
-                {"hard_block",state.hard_block},{"records", state.store && state.panel_page=="Saved data" ? state.store->records() : nlohmann::json::array()},
+                {"hard_block",state.hard_block},
+                {"record_counts",state.store && (state.panel_page.starts_with("Saved ") || !state.panel_records.empty()) ?
+                    state.store->record_counts() : nlohmann::json::object()},
+                {"records",state.store && !state.panel_records.empty() ? state.store->records(state.panel_records) : nlohmann::json::array()},
                 {"reason", !state.config_received ? "Waiting for configuration" : state.store_failed ? "Saved data unavailable" :
                     state.private_session ? "Private session" : !state.is_enabled.value_or(false) ? "Sharing off" :
-                    !state.application_id ? "Set a Discord application ID" : !local_permission(state) ? "No eligible media" :
+                    !state.application_id ? "Set a Discord application ID" :
+                    !state.scope_path.empty() && !folder_exception_active(state) && !passes_configured_folders(state) ? "Blocked by folder filter" :
+                    !local_permission(state) ? "No eligible media" :
                     sharing_hidden(state) ? "Hidden" : state.pinned_elsewhere ? "Another window is pinned" : !currently_active ? "Another window owns Discord" :
                     state.rpc_hidden_by_timeout ? "Pause timeout" : !is_ready ? "Waiting for Discord SDK" : "Sharing"},
                 {"card", format_activity(media, draft)}, {"nonce", state.snapshot_request}

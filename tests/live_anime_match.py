@@ -17,7 +17,17 @@ import zipfile
 
 
 def player_samples(
-    config, media, mpv, environment, check, timeout, *, paused=True, tracking=None
+    config,
+    media,
+    mpv,
+    environment,
+    check,
+    timeout,
+    *,
+    paused=True,
+    tracking=None,
+    extra_options=(),
+    driver="",
 ):
     database = config / "scripts/mpv-rich-presence/data.sqlite3"
     with closing(sqlite3.connect(database)) as db, db:
@@ -36,7 +46,7 @@ def player_samples(
         'local utils = require("mp.utils")\n'
         "mp.add_periodic_timer(.2, function()\n"
         '    if utils.file_info(os.getenv("MPVRP_TEST_DONE")) then mp.commandv("quit") end\n'
-        "end)\n",
+        "end)\n" + driver,
         encoding="utf-8",
     )
     process = subprocess.Popen(
@@ -49,6 +59,7 @@ def player_samples(
             "--pause=yes" if paused else "--pause=no",
             "--vo=null",
             "--ao=null",
+            *extra_options,
             str(media),
         ],
         env=dict(environment, MPVRP_TEST_DONE=str(stop)),
@@ -194,6 +205,94 @@ def verify(package, mpv, ffmpeg):
             db.execute("DELETE FROM records WHERE category='match' AND scope='global'")
         print(
             "A manual AniList match and episode offset also supply the tracked episode"
+        )
+
+        loki = (
+            root / "Loki.S02E04.Heart.of.the.TVA.1080p.DSNP.WEB-DL.DDP5.1.H.264-NTb.mkv"
+        )
+        shutil.copyfile(anime, loki)
+
+        def loki_episode(sample):
+            with closing(sqlite3.connect(database)) as db:
+                row = db.execute(
+                    "SELECT value FROM records WHERE category='auto'"
+                ).fetchone()
+            if not row:
+                return False
+            hit = json.loads(row[0]).get("hit", {})
+            if hit.get("name") != "Loki":
+                return False
+            assert hit["numbering"] == "S02E04", hit
+            assert not sample.get("watch_episode"), sample
+            return True
+
+        player_samples(config, loki, mpv, os.environ, loki_episode, 30)
+        print("Automatic recognition uses Loki S02E04 and leaves AniList tracking off")
+
+        generic = root / "Screen Recording 2026-11-12.mkv"
+        shutil.copyfile(anime, generic)
+        player_samples(
+            config,
+            generic,
+            mpv,
+            os.environ,
+            lambda sample: (
+                sample["allowed"]
+                and not sample.get("media")
+                and sample["source"] == "auto"
+            ),
+            10,
+        )
+        print("A generic screen recording stays local")
+
+        folder_sequence = r"""
+local utils=require("mp.utils")
+local function panel(fields)
+    mp.commandv("script-message-to","rich_presence","panel",utils.format_json(fields))
+end
+mp.register_event("file-loaded",function()
+    mp.add_timeout(.8,function() panel({action="folder_exception",mode="window"}) end)
+    mp.add_timeout(1.8,function() panel({action="private",enabled=true}) end)
+    mp.add_timeout(2.8,function() panel({action="private",enabled=false}) end)
+    mp.add_timeout(3.8,function() panel({action="folder_filter",mode="disabled"}) end)
+end)
+"""
+        folder_states = []
+
+        def folder_filter(sample):
+            value = sample["allowed"]
+            if not folder_states or folder_states[-1] != value:
+                folder_states.append(value)
+            if folder_states != [False, True, False, True]:
+                return False
+            with closing(sqlite3.connect(database)) as db:
+                return (
+                    db.execute(
+                        "SELECT 1 FROM records WHERE category='folder-filter'"
+                    ).fetchone()
+                    is not None
+                )
+
+        player_samples(
+            config,
+            generic,
+            mpv,
+            os.environ,
+            folder_filter,
+            12,
+            extra_options=(
+                "--script-opts-append=rich-presence-folder_filter_mode=whitelist",
+            ),
+            driver=folder_sequence,
+        )
+        with closing(sqlite3.connect(database)) as db, db:
+            saved = db.execute(
+                "SELECT value FROM records WHERE category='folder-filter' AND scope='global'"
+            ).fetchone()
+            assert saved and json.loads(saved[0])["mode"] == "disabled"
+            db.execute("DELETE FROM records WHERE category='folder-filter'")
+        print(
+            "A window exception allows an empty whitelist and still honors private mode"
         )
 
         requests = []

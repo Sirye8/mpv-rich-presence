@@ -62,7 +62,7 @@ namespace mpvrp
         nlohmann::json provider = nlohmann::json::object();
         nlohmann::json correction = nlohmann::json::object(), tracking = nlohmann::json::object();
         nlohmann::json preview = nlohmann::json::object();
-        std::string snapshot_request, panel_page, last_notice;
+        std::string snapshot_request, panel_page, panel_records, last_notice;
         std::string ask_offer, ask_payload, dismissed_ask;
         bool replace_draft = false;
         std::string anime_english, anime_romaji, anime_native;
@@ -81,6 +81,7 @@ namespace mpvrp
 
         bool watch_episode = false;
         int conflicting_anime_minutes = 0;
+        bool fuzzy_episode_match = false;
         bool is_anime = false;
         std::string anime_title = "";
         std::string anime_episode = "";
@@ -105,6 +106,10 @@ namespace mpvrp
 
         std::string folder_filter_mode = "disabled";
         std::vector<std::string> folder_list;
+        std::vector<std::string> panel_folders;
+        nlohmann::json folder_filter = nlohmann::json::object();
+        std::string folder_exception;
+        bool folder_session_exception = false;
 
         std::string current_file_path;
 

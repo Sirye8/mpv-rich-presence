@@ -492,8 +492,8 @@ return function(model)
             local item
             if row.stepper then
                 local buttons={}
-                for _,button in ipairs({{-1,"−","Decrease draft by one episode.",pane+19,pane+60},
-                    {1,"+","Increase draft by one episode.",right-55,right-11}}) do
+                for _,button in ipairs({{-1,"−","Decrease the episode count by one.",pane+19,pane+60},
+                    {1,"+","Increase the episode count by one.",right-55,right-11}}) do
                     hit(buttons,button[4],y,button[5],y+row_height,i,key..button[2],
                         function() row.adjust(button[1]) end,button[2],button[3].." Use Apply progress to review and save.")
                 end
