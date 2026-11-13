@@ -71,6 +71,13 @@ local function verify()
     assert(ui.memory.Test.top==4,"Refresh reset the scroll offset")
     bindings.UP()
     assert(ui.memory.Test.top==2 and ui.memory.Test.focus==2,"Keyboard did not reveal the focused row")
+    local _,top,right,bottom=unpack(bounds)
+    x,y=right-4*height/paint_height,top+60*height/paint_height
+    mouse_bindings[3][3]()
+    y=bottom-46*height/paint_height
+    ui.mouse_moved(nil,{hover=true})
+    mouse_bindings[3][4]()
+    assert(ui.memory.Test.top>20 and ui.memory.Test.focus==2,"Dragging the scrollbar did not move the viewport")
     local pasted
     ui.text("ID","",function(value) pasted=value end)
     assert(next(bindings)==nil,"Navigation was left active during text entry")

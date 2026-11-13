@@ -467,7 +467,8 @@ class Worker:
                     )
                 broker = PUBLIC_EXCHANGE
             def valid():
-                self.context(job)
+                if self.get("account", "current").get("generation") != job.get("account"):
+                    raise AccountError("Account changed. Start sign-in again.")
                 if job.get("attempt") and (
                     self.get("signin-request", self.window).get("id") != job["attempt"] or
                     self.get("signin-cancel", self.window).get("id") == job["attempt"]
@@ -1538,7 +1539,7 @@ class Worker:
         episode = int(p["episode"])
         key = self.cycle(a, p)
         scope = f"{a['id']}/{p['media']}"
-        if intent := self.get("write-intent", scope):
+        if self.get("write-intent", scope):
             if time.monotonic() >= getattr(self, "recovery_retry", 0):
                 self.recovery_retry = time.monotonic() + 15
                 with serialized(self.directory):

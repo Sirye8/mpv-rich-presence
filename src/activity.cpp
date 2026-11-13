@@ -190,6 +190,22 @@ namespace mpvrp
             }
         }
         if (options.contains("compact")) card["compact"] = options.at("compact");
+        if (card.contains("buttons"))
+        {
+            static const std::regex youtube(R"(^https://(?:www\.)?youtube\.com/watch\?v=[A-Za-z0-9_-]{11}$)");
+            const auto kind = m.provider.value("kind",std::string{});
+            auto& buttons = card["buttons"];
+            for (auto it=buttons.begin(); it!=buttons.end();)
+            {
+                const auto& button = *it;
+                const auto url = button.value("url",std::string{});
+                const bool invalid = !public_url(url) &&
+                    !(kind=="stream" && !options.contains("buttons") && std::regex_match(url,youtube));
+                if (invalid) it = buttons.erase(it);
+                else ++it;
+            }
+            if (buttons.empty()) card.erase("buttons");
+        }
         card["name"] = name.empty() ? "mpv" : truncate_utf8_bytes(name, 128);
         if (!details.empty() && options.value("details", true)) card["details"] = details;
         if (!state.empty() && options.value("state", true)) card["state"] = state;

@@ -144,6 +144,7 @@ static void read_profiles(rich_presence_state& state)
         state.sources = state.store->effective("sources", state.scope_path, &state.source_scope);
         state.tracking = state.store->effective("tracking", state.scope_path);
         state.folder_filter = state.store->get("folder-filter", "global");
+        state.yield_idle_pin = state.store->get("panel","global").value("yield_idle_pin",false);
         state.panel_folders = state.folder_filter.value("folders", std::vector<std::string>{});
     }
     if (!state.appearance.contains("preset")) state.appearance["preset"] = state.config_preset;
@@ -641,6 +642,12 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             if (action=="cancel_connect" && state.store)
             {
                 state.store->put("signin-cancel",state.instance_id,{{"id",req.value("id",std::string{})}});
+                return;
+            }
+            if (action=="idle_pin" && state.store)
+            {
+                state.yield_idle_pin = req.value("enabled",false);
+                state.store->save("panel","global",{{"yield_idle_pin",state.yield_idle_pin}});
                 return;
             }
             if (action == "ask_dismiss")
@@ -1430,7 +1437,17 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             const auto expires = pin.value("expires",uint64_t{});
             state.pinned_elsewhere = !owner.empty() && owner != state.instance_id && expires > media.now;
             state.pinned_here = owner == state.instance_id && expires > media.now;
-            if (state.pinned_here && expires < media.now + 4000)
+            const bool timed_out = is_media_paused==1 && state.pause_timeout_seconds>0 &&
+                now_steady-state.pause_start_time>=chrono::seconds(state.pause_timeout_seconds);
+            if (state.pinned_here && state.yield_idle_pin &&
+                (!is_window_eligible(state) || timed_out))
+            {
+                hide_rich_presence();
+                release_active_instance(state.instance_id);
+                state.store->release_pin(state.instance_id);
+                state.pinned_here = false;
+            }
+            else if (state.pinned_here && expires < media.now + 4000)
                 state.store->renew_pin(state.instance_id,media.now+6000);
         }
 
@@ -1505,6 +1522,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 std::lock_guard lock(state.anime_mutex);
                 state.is_anime = false;
                 state.anime_anilist_id = 0;
+                state.episode_review.clear();
             }
             if (old_sources != state.sources || old != state.correction ||
                 was_allowed != lookup_allowed(state)) on_eligibility_changed(state);
@@ -1683,6 +1701,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"session", state.file_session}, {"instance", state.instance_id}, {"allowed", lookup_allowed(state)},
                 {"configured", state.config_received}, {"owner", eligible && currently_active},{"pinned",state.pinned_here},{"pinned_elsewhere",state.pinned_elsewhere}, {"sdk", state.last_sdk},
                 {"last_published",state.last_published_ms},
+                {"yield_idle_pin",state.yield_idle_pin},
                 {"match", media.anilist_id}, {"episode", media.episode}, {"total", media.total}, {"title", media.anime_title},
                 {"appearance", state.appearance}, {"privacy", state.privacy}, {"tracking", state.tracking},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},

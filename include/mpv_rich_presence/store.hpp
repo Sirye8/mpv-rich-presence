@@ -17,6 +17,7 @@ namespace mpvrp
         profile_store(const profile_store&) = delete;
         profile_store& operator=(const profile_store&) = delete;
         void renew_pin(const std::string& owner, uint64_t expiry);
+        void release_pin(const std::string& owner);
         void close_window(const std::string& owner);
         bool blocked(const std::string& path) const;
         int version() const;

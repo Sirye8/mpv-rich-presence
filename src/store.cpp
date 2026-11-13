@@ -88,6 +88,12 @@ namespace mpvrp
                     "AND scope='current' AND json_extract(value,'$.owner')=?", {std::to_string(expiry),owner});
     }
 
+    void profile_store::release_pin(const std::string& owner)
+    {
+        execute(db, "DELETE FROM records WHERE category='pin' AND scope='current' "
+                    "AND json_extract(value,'$.owner')=?", {owner});
+    }
+
     void profile_store::close_window(const std::string& owner)
     {
         execute(db, "DELETE FROM records WHERE (category='pin' AND json_extract(value,'$.owner')=?) OR "
@@ -166,7 +172,10 @@ namespace mpvrp
             auto base = proposal.value("base",json::object());
             rows.push_back({{"key",column(stmt.get(),0)},{"title",proposal.value("title",std::string{})},
                 {"media",proposal.value("media",base.value("media",0))},{"episode",proposal.at("episode")},
-                {"before",proposal.value("before",0)},{"offline",proposal.value("offline",false)}});
+                {"before",proposal.value("before",0)},{"offline",proposal.value("offline",false)},
+                {"base",std::move(base)},{"revision",proposal.value("revision",std::string{})},
+                {"status",proposal.value("status",json(nullptr))},{"repeat_count",proposal.value("repeat_count",json(nullptr))},
+                {"start_rewatch",proposal.value("start_rewatch",false)}});
         }
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
         return rows;

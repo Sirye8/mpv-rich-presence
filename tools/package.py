@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import io
+import json
 import os
 from pathlib import Path
 import platform
@@ -137,6 +138,15 @@ def package(build, output):
         if windows:
             bundle_python(build, root)
         bundle_fpcalc(build, root, windows)
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[1],
+                text=True, stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            commit = None
+        build_info = {"commit": commit, "platform": platform.system(), "architecture": platform.machine()}
+        (root / "build-info.json").write_text(json.dumps(build_info, indent=2) + "\n", encoding="utf-8")
         with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as f:
             temporary = Path(f.name)
         try:

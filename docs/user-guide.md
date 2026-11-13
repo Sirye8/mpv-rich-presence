@@ -157,6 +157,8 @@ Open **Folder filters** from **Privacy & windows** or **Recognition & folders**.
 
 **Saved data** groups profiles, matches, caches and the current account's AniList records. Open a category to search or clear its entries. Metadata cache rows show their provider and expiry rather than the internal key. Hover for the key and the effect of clearing the record.
 
+**Release idle Discord pin** is off by default under **Privacy & windows**. Turn it on to release a window's exclusive pin when playback ends, sharing becomes unavailable, or the pause timeout expires. Pin the window again if you want to reclaim it.
+
 The database lives in `scripts/mpv-rich-presence/data.sqlite3` under your config directory. **Clear watch** resets the affected counters and removes their pending proposals and skips. If you keep watching the same episode, it can qualify again once it earns the threshold. Completed local history and saved AniList progress are kept. **Reset everything** clears the local profiles, matches, caches and history, disconnects the account and restores the conf defaults. It leaves your AniList list as it is.
 
 Close all mpv instances before removing the plugin folder. The current account helper exits with the player, including when the player is forcibly stopped. If an older installation left a Python process behind, close the helper whose command line points to this plugin's `modules/backend.py`, then remove the folder.

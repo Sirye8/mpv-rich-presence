@@ -153,6 +153,9 @@ local help = {
 }
 
 local choices = {
+    ["Release idle Discord pin"]={
+        On="Release this window's exclusive Discord pin when sharing is blocked, playback ends, or its pause timeout expires. Another eligible mpv window can claim Discord. Pin this window again to restore exclusive ownership.",
+        Off="Keep the pin for this window until you unpin it, close the window, or its lease expires. This is the default."},
     ["Ask before fingerprinting"]={
         On="If MusicBrainz cannot identify a local track, show Fingerprint this file in Now playing. Choosing it sends an audio fingerprint and duration to AcoustID. The audio file stays on this device.",
         Off="Keep the default fallback. Automatic can look up a fingerprint when local tags and MusicBrainz cannot identify the track."},

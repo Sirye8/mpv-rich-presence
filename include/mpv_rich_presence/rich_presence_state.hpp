@@ -53,6 +53,7 @@ namespace mpvrp
         std::string cache_epoch, episode_label, scope_path, hidden_reason, last_sdk = "Waiting";
         bool hard_block = false;
         bool pinned_elsewhere = false, pinned_here = false;
+        bool yield_idle_pin = false;
         bool private_session = false, hidden_file = false;
         std::chrono::steady_clock::time_point hide_until{};
         std::string config_preset = "original";

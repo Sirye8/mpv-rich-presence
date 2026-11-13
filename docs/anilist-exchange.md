@@ -25,7 +25,7 @@ For another deployment, update the fixed upstream in `tools/cloudflare/worker.mj
 
 ## Handoff and credentials
 
-On Connect, mpv checks the service, generates a random state and verifier, and sends only the state and verifier challenge to start approval. The authorization state expires after three minutes. The callback returns a 90-second encrypted ticket to the fixed localhost listener. Netlify redeems the enclosed single-use AniList code only for the holder of the original verifier. It returns the access token over HTTPS and keeps no account or token database. The desktop helper checks Viewer before storing credentials.
+On Connect, mpv checks the service, generates a random state and verifier, and sends only the state and verifier challenge to start approval. The authorization state expires after three minutes. The callback returns a 90-second encrypted ticket to the fixed localhost listener. Netlify redeems the enclosed single-use AniList code only for the holder of the original verifier. It returns the access token over HTTPS and keeps no account or token database. The desktop helper checks Viewer and displays the profile on localhost. It saves the connection after the user confirms it.
 
 Neither service logs request bodies or tokens in application code. Do not enable request tracing or add logging of callback URLs, tickets, authorization headers or token responses. Cloudflare necessarily forwards the encrypted ticket and the HTTPS token response. Both hosting providers are part of the trust boundary during sign-in.
 
