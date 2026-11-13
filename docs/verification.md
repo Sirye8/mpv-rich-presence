@@ -6,8 +6,8 @@ The in-player interface and tracking build on [`v1.0.10`](https://github.com/Sir
 
 | Guide area | Implementation |
 | --- | --- |
-| Player panel | Seven sections, nested pages and confirmations, mouse and keyboard navigation, text entry handoff, resizing, private previews and scoped Apply/Cancel. |
-| AniList account | Public authorization-code exchange, verified Viewer identity, OS credential storage or session-only login, manual progress drafts, conflict checks, reconnect and disconnect. Disconnect can separately forget the current account's local history. |
+| Player panel | Seven sections, direct scrolling and draggable scrollbars, inline text editing, resizable layout, glass and solid themes, private previews and scoped Apply/Cancel. |
+| AniList account | Public authorization-code exchange, browser profile confirmation, OS credential storage or session-only login, a profile link and avatar in the panel, progress editing, conflict checks, reconnect and disconnect. Disconnect can separately forget the current account's local history. |
 | Watch tracking | Monotonic elapsed time, independent sampling during network requests, shared ownership across processes, Ask/Automatic policies, gap review, skips, pending proposals and explicit rewatch cycles. |
 | Recognition | Automatic AniList anime matching, Anime, Movies & TV, Movies and TV folder rules, shared TMDB lookups, Wikidata and TVmaze fallback, tagged music and album artwork, manual corrections, and optional AcoustID. Requests are cached, deduplicated and checked against playback changes. |
 | Appearance | Original SDK-call fixtures, optional presets, templates, language and numbering controls, per-media layouts, artwork, timers, buttons and supported links. |
@@ -37,6 +37,8 @@ python -B tests/recognition_suite.py build/Release/recognition-replay.exe --case
 ```
 
 The CSV includes the expected result, evidence, actual match, and provider queries for each row. Rows without a reference result are marked unverified. Use the packaged live checks to verify provider availability and what mpv publishes.
+
+The v1.0.11 replay covered all 4,761 rows in the local inventory. All 2,766 rows with reference results matched, and 1,995 rows lacked enough evidence for a verdict.
 
 The public sign-in check passed on Windows on 6 November 2026. Windows and Linux builds, regression suites and packaged menu checks have passed. Captures have been inspected over bright footage in wide and narrow windows. Tests use disposable data rather than the user's installed mpv configuration.
 

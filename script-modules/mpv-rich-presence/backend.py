@@ -52,6 +52,7 @@ VIDEO_RETRY_DELAYS = (5, 15)
 def tv_rule_matches(rule, titles, year, provider_id, provider):
     if provider_id and (provider != "tmdb-tv" or str(rule["hit"]["id"]) != provider_id):
         return False
+    if year and rule.get("year") and str(rule["year"]) != str(year):
         return False
     return all(title in rule["titles"] for title in titles) if titles else rule.get("dedicated", False)
 
@@ -95,6 +96,7 @@ class Worker:
         self.cache_generation = None
         self.lookup_pool = None
         self.artwork_pool = None
+        self.lookup_valid = None
 
     def get(self, category, scope, default=None):
         row = self.db.execute(
@@ -400,6 +402,8 @@ class Worker:
 
     def throttle(self, provider):
         with self.transaction():
+            if self.lookup_valid:
+                self.lookup_valid()
             now = time.time()
             when = max(now, self.get("rate", provider).get("next", 0))
             self.put(
@@ -408,6 +412,8 @@ class Worker:
                 {"next": when + (1.1 if provider == "musicbrainz" else 0.5)},
             )
         time.sleep(max(0, when - now))
+        if self.lookup_valid:
+            self.lookup_valid()
 
     def cached_fetch(self, key, field, request, valid, *, catalog=False):
         hours = self.settings.get("catalog_cache_hours", 24)
@@ -1035,6 +1041,12 @@ class Worker:
         )
 
     def recognize(self, p, artwork_only=None):
+        try:
+            return self.recognize_current(p, artwork_only)
+        finally:
+            self.lookup_valid = None
+
+    def recognize_current(self, p, artwork_only):
         profile_source = p.get("source", "original")
         refresh = self.get("refresh", self.window)
         if refresh != getattr(self, "last_refresh", None):
@@ -1071,6 +1083,7 @@ class Worker:
                 raise AccountError("Playback or privacy settings changed.")
 
         valid()
+        self.lookup_valid = valid
         ambiguous = False
 
         def publish(hit, *, unavailable=False, fingerprint_available=False):

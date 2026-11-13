@@ -227,7 +227,7 @@ class RecognitionTests(unittest.TestCase):
             folder = Path(directory).as_posix()
             worker.put("tv-rule", f"folder:{folder}", {"tvmaze:8": {
                 "provider":"tvmaze", "hit":{"id":8,"name":"Fixture Show"},
-                "titles":["fixture show"], "dedicated":True,
+                "titles":["fixture show"], "year":"2020", "dedicated":True,
             }})
             for session, name, enabled, embedded, expected in (
                 (1,"Fixture Show.S02E01.mkv",False,"",None),
@@ -235,6 +235,8 @@ class RecognitionTests(unittest.TestCase):
                 (3,"Other Show.S02E02.mkv",True,"",None),
                 (4,"S02E03.mkv",True,"","S02E03"),
                 (5,"Fixture Show.S02E01.mkv",True,"Other Show",None),
+                (6,"Fixture Show (2021) S02E02.mkv",True,"",None),
+                (7,"Fixture Show (2020) S02E02.mkv",True,"","S02E02"),
             ):
                 sample = dict(session=session, source="tv", title=name, filename=name, video=True,
                               allowed=True, path=f"{folder}/{name}", embedded_title=embedded,
