@@ -133,6 +133,7 @@ local help = {
     ["Configuration"]="Whether the plugin received its configuration from Lua.",
     ["Publisher"]="Which mpv window currently owns the Discord card.",
     ["Lookup"]="Whether the active privacy rules permit recognition requests.",
+    ["Recognition status"]="Shows whether recognition is still searching, found a match, fell back to local metadata, or ended because a provider was unavailable.",
     ["Recognition source"]="Provider supplying the metadata for this file.",
     ["Source rule"]="Scope of the active recognition setting.",
     ["Match rule"]="Scope of the active match correction.",

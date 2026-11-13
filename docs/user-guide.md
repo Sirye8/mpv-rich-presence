@@ -55,7 +55,9 @@ To open a page from the mpv console, use `script-message-to mpv_rich_presence me
 
 ## Recognize media
 
-**Automatic** uses the v1.0.10 AniList resolver, including its season and sequel rules. If that search completes without a match, the plugin can try movie or TV lookup. A weak anime match can be overridden by a confirmed live-action TV episode with the same title, season and episode, or by the existing exact title and year check for feature films. Confirmed and manually pinned anime matches keep their priority. If AniList is unavailable, the card uses the local title.
+**Automatic** uses the v1.0.10 AniList season and sequel rules. When AniList returns both a direct series or season match and a fuzzy one, Automatic prefers the direct match before resolving episode numbers. Explicit movie filenames use the film title and any stated year to distinguish entries within a franchise. If AniList completes without a match, the plugin can try movie or TV lookup. A weak anime result can give way to a confirmed live-action episode or to an exact animated TV episode when the file's runtime is much longer than the AniList entry. Movie verification uses the title and year. Confirmed and manually pinned anime matches keep their priority.
+
+**Diagnostics → Recognition status** shows whether lookup is still running, found a match, finished with local metadata, or encountered an unavailable provider. During an AniList outage, an ambiguous video uses its local title.
 
 Common camera and screen recording names stay local in Automatic. Short videos with a bare title and no year, episode marker or TMDB ID skip the fallback movie search. Use **Local only** on a file or folder when you always want the filename or embedded metadata.
 

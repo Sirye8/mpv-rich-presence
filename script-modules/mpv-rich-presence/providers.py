@@ -24,6 +24,13 @@ def match_name(value):
     )
 
 
+VIDEO_RELEASE = (
+    r"(?:\d{3,4}p|4k|uhd|bluray|web(?:[- ]?dl|rip)?|hdtv|remux|hdr|dvdrip|"
+    r"proper|repack\d*|remastered|extended|imax|se|director['’ ]s[ ._-]+cut|"
+    r"theatrical(?:[ ._-]+cut)?|unrated|criterion|special[ ._-]+edition)"
+)
+
+
 def video_query(label):
     """Extract a public title and common episode/year markers from a basename."""
     if not label or re.search(r"[/\\?&#\x00-\x1f]|://", label):
@@ -44,7 +51,7 @@ def video_query(label):
         match = years[-1]
         tail = title[match.end() :].strip(" ()[]{}-")
         if not tail or re.match(
-            r"(?i)(?:\d{3,4}p|4k|uhd|bluray|web|hdr|remux|dvdrip)\b", tail
+            VIDEO_RELEASE + r"\b", tail, re.I
         ):
             title, year = title[: match.start()].strip(" ([{-"), match[1]
     title = re.split(
@@ -204,7 +211,8 @@ def musicbrainz_artist(item):
 
 MUSIC_SUFFIX = re.compile(
     r"\s*(?:[\[(]\s*|\s[-–]\s*|\s+)(?:(?:feat(?:uring)?|ft)\.?\s+.+|"
-    r"(?:\d{4}\s+)?(?:digital\s+)?remaster(?:ed)?(?:\s+(?:in\s+)?\d{4})?(?:\s+version)?)"
+    r"(?:\d{4}\s+)?(?:digital\s+)?remaster(?:ed)?(?:\s+(?:in\s+)?\d{4})?(?:\s+version)?|"
+    r"from\s+(?:the\s+)?(?:series|film|movie|motion picture)\s+[^)\]]+[)\]])"
     r"[\])]?\s*$",
     re.I,
 )
@@ -243,6 +251,19 @@ def music_names(name, *, album=False):
         ):
             variants.append(parts[1])
     if album:
+        edition = re.sub(
+            r"\s*[(\[]\s*(?:bonus|deluxe|expanded)(?: edition| version)?\s*[)\]]\s*$",
+            "",
+            name,
+            flags=re.I,
+        )
+        if edition != name:
+            variants.append(edition.rstrip())
+        # Stores sometimes append the composer's credit to the score title.
+        score = re.sub(r"(\(original (?:score|soundtrack))\s+by\s+[^)]+\)$",
+                       r"\1)", name, flags=re.I)
+        if score != name:
+            variants.append(score)
         wrapped = re.search(r"(?i)(?:album|アルバム)\s*[「『](.+?)[」』]$", name)
         theme = re.search(r"(?i)\s*[(（]\s*TV\s*(?:アニメ|anime\b)", name)
         if wrapped:
@@ -336,10 +357,13 @@ def musicbrainz_album(artist, album, date, throttle):
     if not query:
         return None
     throttle("musicbrainz")
+    credits = music_artists(artist)
+    if not credits:
+        return None
     rows = fetch(
         "https://musicbrainz.org/ws/2/release/",
         {
-            "query": query + " AND " + musicbrainz_terms(artist=artist),
+            "query": query + " AND " + musicbrainz_terms(artist=credits[0]),
             "fmt": "json",
             "limit": 8,
         },
@@ -349,7 +373,10 @@ def musicbrainz_album(artist, album, date, throttle):
         music_edition(r)
         for r in rows
         if same_music_name(r["title"], album, album=True)
-        and match_name(musicbrainz_artist(r)) == match_name(artist)
+        and same_music_credit(
+            artist,
+            dict(artist=musicbrainz_artist(r), artist_names=[c["name"] for c in r.get("artist-credit", [])]),
+        )
     ]
     matches = prefer_music_date(matches, date)
     groups = {r["release_group"] or r["release"] for r in matches}
@@ -590,7 +617,7 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
             terms.append(musicbrainz_terms(artist=credits[0]))
         search = " AND ".join(terms)
         if album_query := music_search_field("release", album):
-            search = f"({search}) OR ({search} AND {album_query})"
+            search = f"({search}) OR ({search} AND {album_query})^4"
         rows = fetch(
             "https://musicbrainz.org/ws/2/recording/",
             {
@@ -601,7 +628,7 @@ def candidates(provider, query, settings, throttle, *, artist="", album=""):
             timeout=4,
         )
         result = []
-        for m in rows["recordings"]:
+        for m in rows.get("recordings", []):
             releases = m.get("releases") or []
             if album:
                 matching = [

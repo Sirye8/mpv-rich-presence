@@ -26,7 +26,7 @@ from account import (
     save_progress,
 )
 from backend import Worker
-from providers import fingerprint_match, music_art, music_art_sources, musicbrainz_match
+from providers import fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
 
 
 class CallbackTests(unittest.TestCase):
@@ -150,6 +150,52 @@ class PublicSignInTests(unittest.TestCase):
 
 
 class RecognitionTests(unittest.TestCase):
+    def test_music_match_accepts_store_score_credit(self):
+        title, artist = "F1", "Hans Zimmer"
+        album = "F1® The Movie (Original Score By Hans Zimmer)"
+        rows = [
+            dict(id="soundtrack", name=title, artist=artist, album="F1® The Movie (Original Score)", duration_ms=193657),
+            dict(id="compilation", name=title, artist=artist, album="F1: The Album", duration_ms=193657),
+        ]
+        self.assertEqual(musicbrainz_match(rows, title, artist, album, 194)["id"], "soundtrack")
+
+    def test_movie_release_markers_keep_the_title_and_year(self):
+        for name, title, year in (
+            ("Top.Gun.1986.SE.PROPER.1080p.BluRay.mp4", "Top Gun", "1986"),
+            ("The.Shawshank.Redemption.1994.REMASTERED.1080p.mkv", "The Shawshank Redemption", "1994"),
+            ("Jack.Reacher.2012.REPACK.1080p.mkv", "Jack Reacher", "2012"),
+            ("Interstellar.2014.PROPER.IMAX.1080p.mkv", "Interstellar", "2014"),
+            ("Daredevil.2003.Director.s.Cut.1080p.mkv", "Daredevil", "2003"),
+            ("Blade.Runner.2049.2017.2160p.mkv", "Blade Runner 2049", "2017"),
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(video_query(name), (title, year, None, None))
+
+    def test_tvmaze_longer_title_requires_the_same_episode_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Worker(Path(directory) / "db", "window", {})
+            try:
+                worker.db.execute(
+                    "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                )
+                for session, episode_title in enumerate(("Paint the Town Blue", "Wrong episode"), 1):
+                    filename = "Arcane S02E04 Paint the Town Blue 1080p.mkv"
+                    sample = dict(source="verify-tv", session=session, title=filename, filename=filename,
+                                  video=True, allowed=True, anime_runtime_conflict=True)
+                    worker.put("player", "window", sample)
+                    worker.put("refresh", "window", {"id": session})
+                    hit = dict(id=1, name="Arcane: League of Legends", year="2021", show_type="Animation")
+                    with (
+                        patch("backend.candidates", side_effect=[OSError("TMDB unavailable"), [hit]]),
+                        patch("backend.details", return_value=dict(hit, episode_title=episode_title, numbering="S02E04")),
+                    ):
+                        worker.recognize(sample)
+                    result = worker.get("auto", "window")
+                    self.assertEqual(bool(result["hit"]), session == 1)
+                    self.assertEqual(result["unavailable"], session == 2)
+            finally:
+                worker.db.close()
+
     def test_episode_verification_needs_exact_live_action_episode(self):
         with tempfile.TemporaryDirectory() as directory:
             worker = Worker(Path(directory) / "db", "window", {})
@@ -519,8 +565,9 @@ class RecognitionTests(unittest.TestCase):
                             patch("backend.candidates", side_effect=lookup) as search,
                             patch(
                                 "backend.details",
-                                side_effect=lambda provider, hit, *_: dict(
-                                    hit, provider=provider
+                                side_effect=lambda provider, hit, _, _throttle, episode, *args: dict(
+                                    hit, provider=provider,
+                                    numbering="S%02dE%02d" % tuple(map(int, episode)) if episode else "",
                                 ),
                             ),
                         ):
@@ -642,8 +689,9 @@ class RecognitionTests(unittest.TestCase):
                         patch("backend.candidates", side_effect=lookup) as search,
                         patch(
                             "backend.details",
-                            side_effect=lambda provider, hit, *_: dict(
-                                hit, provider=provider
+                            side_effect=lambda provider, hit, _, _throttle, episode, *args: dict(
+                                hit, provider=provider,
+                                numbering="S%02dE%02d" % tuple(map(int, episode)) if episode else "",
                             ),
                         ) as detail,
                     ):

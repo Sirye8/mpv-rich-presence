@@ -115,6 +115,10 @@ struct parsed_filename_info
     std::string release_group;
 };
 
+static const std::regex video_episode_marker(
+    R"((?:^|[ ._-])(?:S[0-9]{1,2}[ ._-]*E[0-9]{1,3}|[0-9]{1,2}x[0-9]{2,3})(?:$|[^0-9]))",
+    std::regex::icase);
+
 // Extract season/part and strip tags
 static std::tuple<std::string, int, int> clean_anime_title(const std::string& raw_title)
 {
@@ -403,6 +407,7 @@ static void read_profiles(rich_presence_state& state)
 // AniList API caching
 
 static std::mutex anilist_cache_mutex;
+static chrono::steady_clock::time_point anilist_rate_limited_until;
 template<typename T> struct cache_record
 {
     T value;
@@ -420,6 +425,20 @@ static void clear_anilist_cache()
     anilist_id_cache.clear();
 }
 
+static void record_anilist_rate_limit(const cpr::Response& response)
+{
+    if (response.status_code != 429) return;
+    int seconds = 60;
+    if (auto header = response.header.find("Retry-After"); header != response.header.end())
+    {
+        const auto& value = header->second;
+        std::from_chars(value.data(), value.data() + value.size(), seconds);
+    }
+    std::lock_guard lock(anilist_cache_mutex);
+    anilist_rate_limited_until = (std::max)(anilist_rate_limited_until,
+        chrono::steady_clock::now() + chrono::seconds(std::clamp(seconds, 1, 300)));
+}
+
 static std::vector<anilist_media> search_anilist_page(const std::string& search, bool& confirmed)
 {
     if (search.empty() || search.size() > 256 || search.find("://") != std::string::npos ||
@@ -427,7 +446,6 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
         (search[2] == '/' || search[2] == '\\')) ||
         (search.find('?') != std::string::npos && search.find('=') != std::string::npos))
     {
-        confirmed = false;
         return {};
     }
     auto generation = cache_generation.load();
@@ -436,6 +454,11 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
         auto it = anilist_page_cache.find(search);
         if (it != anilist_page_cache.end() && it->second.expires > chrono::steady_clock::now())
             return it->second.value;
+        if (anilist_rate_limited_until > chrono::steady_clock::now())
+        {
+            confirmed = false;
+            return {};
+        }
     }
 
     nlohmann::json query = {
@@ -452,6 +475,7 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
         cpr::Body { query.dump() },
         cpr::Timeout { 3000 });
 
+    record_anilist_rate_limit(r);
     std::vector<anilist_media> results;
     if (r.status_code == 200)
     {
@@ -490,6 +514,8 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
         auto it = anilist_id_cache.find(id);
         if (it != anilist_id_cache.end() && it->second.expires > chrono::steady_clock::now())
             return it->second.value;
+        if (anilist_rate_limited_until > chrono::steady_clock::now())
+            return {};
     }
 
     nlohmann::json query = {
@@ -506,6 +532,7 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
         cpr::Body { query.dump() },
         cpr::Timeout { 3000 });
 
+    record_anilist_rate_limit(r);
     std::optional<anilist_media> result = std::nullopt;
     if (r.status_code == 200)
     {
@@ -591,6 +618,23 @@ static bool is_media_title_match(const std::string& query, const anilist_media& 
     return false;
 }
 
+static bool exact_series_title(const std::string& query, const anilist_media& media, int season)
+{
+    const auto expected = to_lower(query);
+    static const std::array<std::string_view, 10> roman = {
+        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"};
+    return std::any_of(media.matching_titles.begin(), media.matching_titles.end(),
+        [&](const auto& alias) {
+            const auto title = to_lower(alias);
+            if (season <= 1) return title == expected;
+            const auto number = std::to_string(season);
+            return title == expected + " " + number || title == expected + " s" + number ||
+                title == expected + " season " + number ||
+                title == expected + " " + get_ordinal_string(season) + " season" ||
+                (season <= static_cast<int>(roman.size()) && title == expected + " " + std::string(roman[season - 1]));
+        });
+}
+
 static bool is_anilist_tracking_series(const anilist_media& media)
 {
     return media.format == "TV" || media.format == "ONA";
@@ -635,6 +679,37 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     std::string a_group = pinfo.release_group;
 
     std::vector<std::string> search_queries;
+    const bool automatic = correction.value("automatic", false);
+    static const std::regex film_marker(
+        R"((?:^|[ ._(-])(?:the[ ._-]+movie|(?:movie|film)[ ._-]+\d{1,2})(?=$|[^A-Za-z0-9]))",
+        std::regex::icase);
+    const bool explicit_film = automatic && !correction.contains("id") && !correction.contains("offset") &&
+        std::regex_search(filename_str, film_marker);
+    auto film_year = ws2s(elements.get(anitomy::kElementAnimeYear));
+    if (explicit_film)
+    {
+        // Release names sometimes put the franchise, year and subtitle in
+        // separate fields. Try the full title before a broad franchise search.
+        auto query = filename_str.substr(0, filename_str.find_last_of('.'));
+        static const std::regex release_group(R"(^\[[^\]]+\]\s*)");
+        static const std::regex release_tags(
+            R"(\s*[\[(][^\])]*(?:[0-9]{3,4}p|bluray|bdrip|dual-audio|multi-subs|[a-f0-9]{8})[^\])]*[\])].*$)",
+            std::regex::icase);
+        static const std::regex year_token(R"([\[(]((?:19|20)[0-9]{2})[\])])");
+        std::smatch year_match;
+        if (std::regex_search(query, year_match, year_token))
+            film_year = year_match[1].str();
+        query = std::regex_replace(query, release_group, "");
+        query = std::regex_replace(query, release_tags, "");
+        query = std::regex_replace(query, year_token, " ");
+        for (auto& ch : query) if (ch == '.' || ch == '_') ch = ' ';
+        query = std::regex_replace(query, std::regex(R"(\s+)"), " ");
+        if (const auto last = query.find_last_not_of(" -"); last != std::string::npos)
+        {
+            query.erase(last + 1);
+            if (query != a_title) search_queries.push_back(query);
+        }
+    }
     std::string ord_str = get_ordinal_string(parsed_season);
 
     if (parsed_season > 1)
@@ -670,19 +745,63 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         search_queries.clear();
     }
 
+    const auto valid_film = [&](const anilist_media& media) {
+        return !explicit_film || (media.format == "MOVIE" &&
+            (film_year.size() != 4 || media.release_year <= 0 || film_year == std::to_string(media.release_year)));
+    };
+    // For automatic numbered series, prefer a direct title match within the
+    // same search results before using the original fuzzy/episode ranking.
+    // This keeps absolute numbering anchored at the base series.
+    const bool prefer_exact_series = automatic && !explicit_film && parsed_ep > 0 && parsed_part == 0 &&
+        !correction.contains("id") && !correction.contains("offset");
+    std::unordered_set<std::string> searched;
     for (const auto& q_str : search_queries)
     {
         if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
             return;
 
+        if (!searched.insert(q_str).second) continue;
         auto page = search_anilist_page(q_str, confirmed);
         if (page.empty())
             continue;
 
+        if (prefer_exact_series)
+        {
+            const auto exact = std::find_if(page.begin(), page.end(), [&](const auto& media) {
+                return is_anilist_tracking_series(media) && exact_series_title(a_title, media, parsed_season);
+            });
+            if (exact != page.end())
+            {
+                candidate = *exact;
+                break;
+            }
+            if (parsed_season <= 1)
+            {
+                const auto prefix = to_lower(a_title) + ": ";
+                const auto base = std::find_if(page.begin(), page.end(), [&](const auto& media) {
+                    return is_anilist_tracking_series(media) &&
+                        (to_lower(media.romaji).starts_with(prefix) || to_lower(media.english).starts_with(prefix)) &&
+                        std::any_of(page.begin(), page.end(), [&](const auto& other) {
+                            return other.id == media.sequel_id && is_anilist_tracking_series(other) &&
+                                is_media_title_match(a_title, other);
+                        }) &&
+                        std::none_of(page.begin(), page.end(), [&](const auto& other) {
+                            return other.sequel_id == media.id && is_anilist_tracking_series(other) &&
+                                is_media_title_match(a_title, other);
+                        });
+                });
+                if (base != page.end())
+                {
+                    candidate = *base;
+                    break;
+                }
+            }
+        }
+
         std::optional<anilist_media> best = std::nullopt;
         for (const auto& m : page)
         {
-            if (!is_media_title_match(a_title, m))
+            if (!valid_film(m) || !is_media_title_match(explicit_film ? q_str : a_title, m))
                 continue;
 
             std::string title_lower = to_lower(m.title);
@@ -729,7 +848,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
                     continue;
             }
 
-            if (parsed_ep > 0 && m.episodes > 0 && parsed_ep <= m.episodes)
+            if (explicit_film || (parsed_ep > 0 && m.episodes > 0 && parsed_ep <= m.episodes))
             {
                 best = m;
                 break;
@@ -746,7 +865,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         }
     }
 
-    if (!candidate)
+    if (!candidate && (confirmed || !searched.contains(a_title)))
     {
         if (state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != current_load_id)
             return;
@@ -754,7 +873,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         auto base_page = search_anilist_page(a_title, confirmed);
         for (const auto& m : base_page)
         {
-            if (is_media_title_match(a_title, m))
+            if (valid_film(m) && is_media_title_match(a_title, m))
             {
                 candidate = m;
                 break;
@@ -823,6 +942,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
                     else
                     {
                         // Fetch failed: preserve last consistent media and episode
+                        unambiguous_numbering = false;
                         break;
                     }
                 }
@@ -844,10 +964,9 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
             std::any_of(media.matching_titles.begin(), media.matching_titles.end(),
                 [&](const auto& alias) { return to_lower(alias) == lower_title; });
     };
-    static const std::regex episode_marker(R"((?:^|[ ._-])(?:S[0-9]{1,2}[ ._-]*E[0-9]{1,3}|[0-9]{1,2}x[0-9]{2,3})(?:$|[^0-9]))", std::regex::icase);
     const bool fuzzy_episode = !correction.contains("id") && !correction.contains("offset") &&
         !exact_title(*candidate) && !exact_title(current_resolved_media) &&
-        std::regex_search(filename_str, episode_marker);
+        std::regex_search(filename_str, video_episode_marker);
     int conflicting_anime_minutes = 0;
     if (!correction.contains("id") && pinfo.episode == 0 && pinfo.season == 0 && pinfo.part == 0 &&
         current_resolved_media.format != "MOVIE" && current_resolved_media.duration_minutes > 0 &&
@@ -897,6 +1016,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
         state.is_anime = true;
         state.conflicting_anime_minutes = conflicting_anime_minutes;
         state.fuzzy_episode_match = fuzzy_episode;
+        state.anime_duration_minutes = current_resolved_media.duration_minutes;
         state.anime_title = current_resolved_media.title;
         state.anime_english = current_resolved_media.english;
         state.anime_native = current_resolved_media.native;
@@ -949,8 +1069,10 @@ static void anime_worker_loop(rich_presence_state& state)
         {
             confirmed = false;
         }
-        // A failed search does not establish that the file is non-anime.
-        if (confirmed) state.completed_anime_lookup = current_load_id;
+        // A failed search is terminal for this attempt. Keep it distinct from
+        // a confirmed miss so Automatic can still protect ambiguous anime.
+        if (!confirmed) state.failed_anime_lookup = current_load_id;
+        state.completed_anime_lookup = current_load_id;
     }
 }
 
@@ -1861,6 +1983,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         int completed_anime_lookup;
         int conflicting_anime_minutes = 0;
         bool fuzzy_episode_match = false;
+        int anime_duration_minutes = 0;
         bool watch_episode = false;
         std::string episode_review;
         {
@@ -1873,6 +1996,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 episode_review = state.episode_review;
                 conflicting_anime_minutes = state.conflicting_anime_minutes;
                 fuzzy_episode_match = state.fuzzy_episode_match;
+                anime_duration_minutes = state.anime_duration_minutes;
                 media.anime_title = state.anime_title;
                 media.english = state.anime_english;
                 media.romaji = state.anime_romaji;
@@ -2001,10 +2125,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         bool allowed = lookup_allowed(state);
         auto source = state.sources.value("source",std::string("auto"));
         const auto load_id = state.file_load_id.load();
-        const bool anime_unconfirmed = state.media_has_video && use_anilist(state) &&
-            state.pending_load_id == load_id && completed_anime_lookup != load_id;
+        const bool anime_requested = state.media_has_video && use_anilist(state) &&
+            state.pending_load_id == load_id;
+        const bool anime_pending = anime_requested && completed_anime_lookup != load_id;
+        const bool anime_unavailable = anime_requested && !anime_pending && state.failed_anime_lookup == load_id;
         const bool pinned_anime = state.correction.contains("id") && !state.correction.value("not_anime", false);
         const double duration_estimate = media.position + media.remaining;
+        const bool anime_runtime_conflict = fuzzy_episode_match && anime_duration_minutes > 0 &&
+            duration_estimate >= (std::max)(30, 2 * anime_duration_minutes) * 60;
         const bool verify_movie = state.store && source == "auto" && allowed && media.anime &&
             !pinned_anime && completed_anime_lookup == load_id && conflicting_anime_minutes > 0 &&
             duration_estimate >= (std::max)(60, 3 * conflicting_anime_minutes) * 60;
@@ -2014,7 +2142,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (verify_movie) source = "verify-movie";
         else if (verify_tv) source = "verify-tv";
         else if (source == "local") source = "original";
-        else if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime || anime_unconfirmed)
+        else if (source == "anime" || !state.provider.empty() || !allowed || media.anime || pinned_anime ||
+            anime_pending || anime_unavailable)
             source = "original";
         const bool extra = source != "original";
         if (!media.video && !state.scope_path.starts_with("stream-") &&
@@ -2026,7 +2155,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             candidate.value("track_title",std::string{}) == media.track_title &&
             candidate.value("artist",std::string{}) == media.artist && candidate.value("album",std::string{}) == media.album;
         if (resolved) media.provider = candidate.value("hit",nlohmann::json::object());
-        if (verify_video && (!resolved || !media.provider.empty()))
+        if (verify_video && (!resolved || !media.provider.empty() || verify_movie || anime_runtime_conflict ||
+            candidate.value("unavailable", false)))
         {
             media.anime = false;
             media.anilist_id = 0;
@@ -2074,6 +2204,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 double duration_s = 0;
                 mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
                 sample["duration"] = duration_s;
+                if (verify_tv) sample["anime_runtime_conflict"] = anime_runtime_conflict;
                 sample["recording"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_TRACKID");
                 sample["release"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_ALBUMID");
                 sample["tmdb"] = get_mpv_string(state.mpv,"metadata/by-key/TMDB");
@@ -2162,6 +2293,10 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",std::move(account)},{"watch_episode",watch_episode},
                 {"episode_review",episode_review},
+                {"recognition_status", !allowed ? "Blocked" : anime_pending || (extra && !resolved) ? "Searching" :
+                    media.anime || !media.provider.empty() || !state.provider.empty() ? "Matched" :
+                    anime_unavailable || (resolved && candidate.value("unavailable", false)) ? "Provider unavailable" :
+                    "Local title or tags"},
                 {"episode_watch",std::move(episode_watch)},
                 {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?

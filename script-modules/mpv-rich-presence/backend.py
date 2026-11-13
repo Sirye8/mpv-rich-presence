@@ -740,7 +740,7 @@ class Worker:
         def cached(stage, terms, request):
             nonlocal failed
             key = (
-                "music-v3:"
+                "music-v4:"
                 + stage
                 + "/"
                 + hashlib.sha256(json.dumps([terms, refresh]).encode()).hexdigest()
@@ -751,6 +751,12 @@ class Worker:
                 valid()
                 failed = True
                 return None
+
+        def publish_cover(hit, sources):
+            if sources and (cover := cached("cover", sources, lambda: music_art(sources))):
+                publish(dict(hit, cover=cover))
+                return True
+            return False
 
         def tagged_name(name, *, is_album=False):
             return [match_name(part) for part in music_names(name, album=is_album)]
@@ -799,17 +805,22 @@ class Worker:
         if hit:
             publish(hit)
         sources = music_art_sources(hit or {})
-        if source == "musicbrainz" and album and album_artist and not sources:
+        if hit and publish_cover(hit, sources):
+            return False
+
+        if source == "musicbrainz" and album and album_artist:
             release = cached(
                 "album",
                 [tagged_name(album, is_album=True), album_artist.casefold(), date],
                 lambda: musicbrainz_album(album_artist, album, date, self.throttle),
             )
             if release:
-                sources = music_art_sources(release)
                 if not hit:
                     hit = dict(release, name=title, artist=artist, album=album)
                     publish(hit)
+                alternative = music_art_sources(release)
+                if alternative != sources and publish_cover(hit, alternative):
+                    return False
 
         path = p.get("path", "")
         if not hit and (automatic or source == "acoustid") and os.path.isfile(path):
@@ -827,13 +838,10 @@ class Worker:
             if hit:
                 publish(hit)
                 sources = music_art_sources(hit)
-        if hit and sources:
-            cover = cached("cover", sources, lambda: music_art(sources))
-            if cover:
-                publish(dict(hit, cover=cover))
-                return False
+                if publish_cover(hit, sources):
+                    return False
         if not hit:
-            publish(None)
+            publish(None, unavailable=failed)
         return failed
 
     def recognize(self, p):
@@ -872,10 +880,41 @@ class Worker:
             return
         raw = p.get("title", "")
         source = profile_source
+        artist = p.get("artist", "")
+        album = p.get("album", "")
+        generation = self.get("generation", "data")
+
+        def valid():
+            if (
+                refresh != self.get("refresh", self.window)
+                or key != context(self.get("player", self.window))
+                or generation != self.get("generation", "data")
+            ):
+                raise AccountError("Playback or privacy settings changed.")
+
+        def publish(hit, *, unavailable=False):
+            with self.transaction():
+                valid()
+                self.put(
+                    "auto",
+                    self.window,
+                    dict(
+                        session=p["session"],
+                        source=profile_source,
+                        title=raw,
+                        track_title=p.get("track_title", ""),
+                        artist=artist,
+                        album=album,
+                        hit=hit or {},
+                        unavailable=unavailable,
+                    ),
+                )
+
         verify_movie = source == "verify-movie"
         verify_tv = source == "verify-tv"
         video_profile = source in ("movie-tv", "movie", "tv")
         if video_profile and (not p["video"] or p.get("remote")):
+            publish(None)
             return
         title, year, episode, airdate = raw, "", None, None
         if p["video"] and not p.get("remote"):
@@ -899,6 +938,7 @@ class Worker:
             if generic_clip(p.get("filename", "")) or (
                 0 < length < 35 * 60 and not (year or episode or airdate)
             ):
+                publish(None)
                 return
         mixed_title = (
             source in ("auto", "movie-tv")
@@ -912,6 +952,7 @@ class Worker:
         if source == "auto":
             if p.get("remote"):
                 if not p.get("page") and not p.get("channel"):
+                    publish(None)
                     return
                 source = "stream"
             elif not p["video"]:
@@ -924,35 +965,6 @@ class Worker:
             source = "tmdb-movie"
         elif verify_tv:
             source = "tmdb-tv"
-        artist = p.get("artist", "")
-        album = p.get("album", "")
-        generation = self.get("generation", "data")
-
-        def valid():
-            if (
-                refresh != self.get("refresh", self.window)
-                or key != context(self.get("player", self.window))
-                or generation != self.get("generation", "data")
-            ):
-                raise AccountError("Playback or privacy settings changed.")
-
-        def publish(hit):
-            with self.transaction():
-                valid()
-                self.put(
-                    "auto",
-                    self.window,
-                    dict(
-                        session=p["session"],
-                        source=profile_source,
-                        title=raw,
-                        track_title=p.get("track_title", ""),
-                        artist=artist,
-                        album=album,
-                        hit=hit or {},
-                    ),
-                )
-
         if source in ("musicbrainz", "acoustid"):
             if not p["video"] and not p.get("remote"):
                 failed = self.recognize_music(p, source, refresh, publish, valid)
@@ -961,6 +973,8 @@ class Worker:
                         time.monotonic() + MUSIC_RETRY_DELAYS[self.music_attempts]
                     )
                     self.music_attempts += 1
+            else:
+                publish(None)
             return
 
         hit = None
@@ -983,9 +997,10 @@ class Worker:
             if not verify_movie and (
                 not title or re.search(r"[/\\?&#\x00-\x1f]|://", title)
             ):
+                publish(None)
                 return
             cache_key = (
-                "v3:"
+                "v4:"
                 + profile_source
                 + ":"
                 + source
@@ -1001,8 +1016,7 @@ class Worker:
                             year,
                             episode,
                             airdate,
-                            p.get("duration"),
-                            "",
+                            bool(verify_tv and p.get("anime_runtime_conflict")),
                             refresh,
                         ]
                     ).encode()
@@ -1043,6 +1057,21 @@ class Worker:
                         for r in rows
                         if match_name(r.get("match", r["name"])) == match_name(title)
                     ]
+                    if provider == "tvmaze" and not exact and episode:
+                        # TVmaze sometimes returns a longer official title. Only
+                        # accept it when the requested episode title agrees too.
+                        names = re.split(
+                            r"(?i)(?<!\w)(?:s\d{1,2}[ ._-]*e\d{1,3}|\d{1,2}x\d{2,3})(?!\d)",
+                            p.get("filename", ""),
+                            maxsplit=1,
+                        )
+                        episode_label = match_name(names[-1]) if len(names) == 2 else ""
+                        if episode_label:
+                            exact = [
+                                dict(r, episode_label=episode_label)
+                                for r in rows
+                                if match_name(r["name"]).startswith(match_name(title) + " ")
+                            ]
                     if year and (
                         provider in ("wikidata", "tvmaze", "tmdb-movie")
                         or verify_movie
@@ -1056,51 +1085,74 @@ class Worker:
                 if verify_movie:
                     if not title or not year or episode or airdate:
                         return None
-                    try:
-                        movies = matching("tmdb-movie")
-                        if len(movies) != 1:
-                            return None
-                        valid()
-                        movie = details(
-                            "tmdb-movie", movies[0], self.settings, self.throttle, None
-                        )
-                        genres = movie.get("genre", "").casefold().split(", ")
-                        if (
-                            movie.get("year") == year
-                            and match_name(movie["name"]) == match_name(title)
-                            and genres != [""]
-                            and "animation" not in genres
-                        ):
-                            return movie
-                    except AccountError:
-                        pass
+                    movies = matching("tmdb-movie")
+                    if len(movies) != 1:
+                        return None
+                    valid()
+                    movie = details(
+                        "tmdb-movie", movies[0], self.settings, self.throttle, None
+                    )
+                    genres = movie.get("genre", "").casefold().split(", ")
+                    if (
+                        movie.get("year") == year
+                        and match_name(movie["name"]) == match_name(title)
+                        and genres != [""]
+                        and "animation" not in genres
+                    ):
+                        return movie
                     return None
+
+                def describe(provider, row):
+                    valid()
+                    show = details(provider, row, self.settings, self.throttle, episode, airdate)
+                    if episode and provider.startswith(("tmdb-tv", "tvmaze")) and not show.get("numbering"):
+                        return None
+                    if label := row.get("episode_label"):
+                        name = match_name(show.get("episode_title", ""))
+                        if not name or not (label == name or label.startswith(name + " ")):
+                            return None
+                    return show
+
+                def tv_match(provider, hits, eligible=lambda _: True):
+                    if len(hits) > 3 or (len(hits) != 1 and any(not row.get("episode_label") for row in hits)):
+                        return None
+                    matches = []
+                    for row in hits:
+                        try:
+                            show = describe(provider, row)
+                        except (AccountError, OSError, ValueError):
+                            if not row.get("episode_label"):
+                                raise
+                            continue
+                        if show and eligible(show):
+                            matches.append(show)
+                    return matches[0] if len(matches) == 1 else None
 
                 if verify_tv:
                     if not title or not episode:
                         return None
+                    failure = None
                     for provider in ("tmdb-tv", "tvmaze"):
+                        def eligible(show):
+                            if p.get("anime_runtime_conflict"):
+                                return True
+                            if provider == "tmdb-tv":
+                                return bool(show.get("genre")) and "animation" not in show["genre"].casefold()
+                            return show.get("show_type") in ("Scripted", "Reality", "Talk Show")
+
                         try:
-                            hits = matching(provider)
-                            if len(hits) != 1:
-                                continue
-                            show = details(
-                                provider, hits[0], self.settings, self.throttle, episode
-                            )
-                            live_action = (
-                                bool(show.get("genre"))
-                                and "animation" not in show["genre"].casefold()
-                                if provider == "tmdb-tv"
-                                else show.get("show_type")
-                                in ("Scripted", "Reality", "Talk Show")
-                            )
-                            if live_action and show.get("numbering"):
+                            if show := tv_match(provider, matching(provider), eligible):
                                 return show
-                        except (AccountError, OSError, ValueError):
-                            continue
+                        except (AccountError, OSError, ValueError) as error:
+                            failure = error
+                    if failure:
+                        raise failure
                     return None
 
+                failure = None
+
                 def preferred_tmdb(fallback):
+                    nonlocal failure
                     preferred = "tmdb-movie" if fallback == "wikidata" else "tmdb-tv"
                     if not mixed_title and p.get("tmdb", "").isdigit():
                         tmdb_hits = [
@@ -1113,22 +1165,15 @@ class Worker:
                     else:
                         try:
                             tmdb_hits = matching(preferred)
-                        except AccountError:
+                        except (AccountError, OSError, ValueError) as error:
+                            failure = error
                             tmdb_hits = []
                     if len(tmdb_hits) == 1:
                         valid()
                         try:
-                            return details(
-                                preferred,
-                                tmdb_hits[0],
-                                self.settings,
-                                self.throttle,
-                                episode,
-                                airdate,
-                            )
-                        except AccountError:
-                            # A movie or show may be known even if details are unavailable.
-                            pass
+                            return describe(preferred, tmdb_hits[0])
+                        except (AccountError, OSError, ValueError) as error:
+                            failure = error
                     return None
 
                 if (
@@ -1143,9 +1188,10 @@ class Worker:
                 provider = source
                 try:
                     exact = matching(provider)
-                except (AccountError, OSError, ValueError):
+                except (AccountError, OSError, ValueError) as error:
                     if not mixed_title:
                         raise
+                    failure = error
                     exact = []
                 if not exact and (
                     (profile_source == "auto" and provider == "wikidata") or mixed_title
@@ -1156,30 +1202,23 @@ class Worker:
                         if preferred:
                             return preferred
                     exact = matching(provider)
-                if len(exact) != 1:
-                    return None
-                valid()
-                return details(
-                    provider, exact[0], self.settings, self.throttle, episode, airdate
-                )
+                if provider == "tvmaze" and episode:
+                    if show := tv_match(provider, exact):
+                        return show
+                elif len(exact) == 1:
+                    if hit := describe(provider, exact[0]):
+                        return hit
+                if failure:
+                    raise failure
+                return None
 
-            hit = self.cached_fetch(cache_key, "hit", fetch_hit, valid)
-        with self.transaction():
-            current = self.get("player", self.window)
-            if key != context(current) or generation != self.get("generation", "data"):
+            try:
+                hit = self.cached_fetch(cache_key, "hit", fetch_hit, valid)
+            except (AccountError, OSError, ValueError, KeyError):
+                valid()
+                publish(None, unavailable=True)
                 return
-            self.put(
-                "auto",
-                self.window,
-                dict(
-                    session=p["session"],
-                    source=profile_source,
-                    title=raw,
-                    artist=artist,
-                    album=album,
-                    hit=hit or {},
-                ),
-            )
+        publish(hit)
 
     def sample(self, credit_only=False):
         epoch = self.get("generation", "data")

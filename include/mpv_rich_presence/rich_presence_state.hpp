@@ -78,11 +78,13 @@ namespace mpvrp
         std::mutex anime_mutex;
         std::atomic<int> file_load_id = 0;
         std::atomic<int> completed_anime_lookup = -1;
+        std::atomic<int> failed_anime_lookup = -1;
 
         bool watch_episode = false;
         std::string episode_review;
         int conflicting_anime_minutes = 0;
         bool fuzzy_episode_match = false;
+        int anime_duration_minutes = 0;
         bool is_anime = false;
         std::string anime_title = "";
         std::string anime_episode = "";
