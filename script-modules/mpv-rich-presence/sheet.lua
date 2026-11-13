@@ -85,7 +85,7 @@ return function(model)
         local position = model.position and model.position() or "top-left"
         local left = min_left
         if position:match("%-right$") then left=max_right-width
-        elseif position:match("%-center$") then left=(min_left+max_right-width)/2 end
+        elseif position=="center" or position:match("%-center$") then left=(min_left+max_right-width)/2 end
         return left,left+width,left+(wide and 220 or 0),wide,position,min_top,max_bottom
     end
 
@@ -450,6 +450,7 @@ return function(model)
         local shown = math.max(1,math.min(#rows,available))
         local height = 88+row_step*math.max(shown,wide and #model.sections or 0)
         local top = position:match("^bottom%-") and math.max(min_top,max_bottom-height) or min_top
+        if position=="center" then top=math.max(min_top,math.min((h-height)/2,max_bottom-height)) end
         local bottom = top+height
         local bounds = {math.floor(left*scale),math.floor(top*scale),math.ceil(right*scale),math.ceil(bottom*scale)}
         local bounds_key = table.concat(bounds,":")

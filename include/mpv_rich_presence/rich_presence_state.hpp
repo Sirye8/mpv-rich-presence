@@ -80,6 +80,7 @@ namespace mpvrp
         std::atomic<int> completed_anime_lookup = -1;
 
         bool watch_episode = false;
+        std::string episode_review;
         int conflicting_anime_minutes = 0;
         bool fuzzy_episode_match = false;
         bool is_anime = false;

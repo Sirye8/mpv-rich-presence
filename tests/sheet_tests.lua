@@ -295,6 +295,12 @@ local function verify()
     find("AniList","Ask timing").run()
     assert(applied.values.ask_timing=="end")
     assert(find("AniList","Ask prompt position") and find("AniList","Ask prompt timeout"))
+    assert(find("AniList","Before leaving position").label=="Before leaving position   Center")
+    find("AniList","Before leaving position").run()
+    assert(applied.values.ask_leave_position=="top-right")
+    snapshot.tracking.mode="auto"
+    menu.update(snapshot)
+    assert(find("AniList","Before leaving position") and not find("AniList","Ask timing"))
     find("AniList","Ask prompt timeout").run()
     assert(menu.page=="Ask prompt timeout")
     find(menu.page,"Never").run()
@@ -344,6 +350,13 @@ local function verify()
     assert(popup_row("notice").label=="AniList is offline" and popup_row("update"))
     popup_model.closed()
     assert(popup_request.action=="ask_dismiss" and popup_request.id=="first")
+
+    ask.offer({id="extra",session=8,position="center",seconds=0,timing="threshold",
+        proposal={title="Fixture anime",review_only="Fractional episode 4.5"}})
+    assert(popup_row("reason").label=="Fractional episode 4.5" and not popup_row("update"))
+    assert(popup_model.footer()=="Continue")
+    popup_model.closed()
+    assert(popup_request.action=="ask_dismiss" and popup_request.id=="extra")
     local timer_count=#timers
     ask.offer({id="second",session=8,position="top-right",seconds=0,timing="threshold",proposal=proposal})
     assert(popup_model.footer()=="Later" and #timers==timer_count)
@@ -351,13 +364,17 @@ local function verify()
 
     width,height=1280,720
     local closed_popup=false
-    local compact=sheet({compact=true,sections={},animate=false,position=function() return "top-right" end,
+    local popup_position="top-right"
+    local compact=sheet({compact=true,sections={},animate=false,position=function() return popup_position end,
         rows=function() return {{id="update",label="Update AniList",run=function() end}} end,
         footer=function() return "Later · 30 s" end,refresh=function() end,
         closed=function() closed_popup=true end})
     compact.show("AniList update")
     assert(bounds[1]>width*.65 and bounds[3]<width and bounds[2]<height*.15)
     assert(bounds[5]=="rich-presence-ask" and not bindings.DOWN and not bindings.ENTER)
+    popup_position="center"
+    compact.draw()
+    assert(math.abs(bounds[1]+bounds[3]-width)<=2 and math.abs(bounds[2]+bounds[4]-height)<=2)
     local close
     for _,item in ipairs(compact.hits) do if item.key=="close" then close=item end end
     assert(close and paint:find("Later · 30 s",1,true))

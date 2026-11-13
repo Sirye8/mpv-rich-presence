@@ -116,7 +116,9 @@ local ok
 ok, menu = pcall(function()
     local sheet = dofile(utils.join_path(modules,"sheet.lua"))
     local help = dofile(utils.join_path(modules,"menu_help.lua"))
-    ask = dofile(utils.join_path(modules,"ask.lua"))(sheet,panel,options)
+    ask = dofile(utils.join_path(modules,"ask.lua"))(sheet,panel,options,function(id)
+        options.open_url("https://anilist.co/anime/"..id)
+    end)
     return dofile(utils.join_path(modules,"menu.lua"))(sheet,panel,options,help)
 end)
 if ok then

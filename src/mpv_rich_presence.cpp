@@ -876,10 +876,21 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
             }
         }
         if (integer_episode && parsed_ep==0) state.episode_label="0";
+        state.episode_review.clear();
+        const auto parsed_number = ws2s(elements.get(anitomy::kElementEpisodeNumber));
+        static const std::regex decimal_episode(R"(^[0-9]+\.[0-9]+$)");
+        static const std::regex extra_episode(
+            R"((?:^|[^A-Za-z0-9])(?:recap|special|ova|oad)[ ._-]*[0-9]*(?:[^A-Za-z0-9]|$))", std::regex::icase);
+        const auto title_pos = to_lower(filename_str).find(lower_title);
+        const auto suffix = title_pos == std::string::npos ? filename_str : filename_str.substr(title_pos + a_title.size());
+        if (std::regex_match(parsed_number, decimal_episode)) state.episode_review = "Fractional episode " + parsed_number;
+        else if (std::regex_search(suffix, extra_episode)) state.episode_review = "Recap or special";
+        else if (current_resolved_media.format == "SPECIAL" || current_resolved_media.format == "OVA" ||
+            current_resolved_media.format == "TV_SHORT") state.episode_review = "Special or short-form entry";
         const bool eligible_episode = integer_episode && parsed_ep > 0 && current_resolved_ep > 0
             && (current_resolved_media.episodes <= 0 || current_resolved_ep <= current_resolved_media.episodes)
             && is_anilist_tracking_series(current_resolved_media);
-        state.watch_episode = eligible_episode && unambiguous_numbering;
+        state.watch_episode = eligible_episode && unambiguous_numbering && state.episode_review.empty();
         state.is_anime = true;
         state.conflicting_anime_minutes = conflicting_anime_minutes;
         state.fuzzy_episode_match = fuzzy_episode;
@@ -1051,6 +1062,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             || (key == "ask_timing" && (val == "threshold" || val == "end" || val == "leave"))
             || (key == "ask_position" && (val == "top-left" || val == "top-center" || val == "top-right"
                 || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))
+            || (key == "ask_leave_position" && (val == "center" || val == "top-left" || val == "top-center" || val == "top-right"
+                || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))
             || (key == "ask_timeout" && val.is_number_integer() && (val == 0 || (val >= 5 && val <= 300)))
             || ((key == "without_sharing" || key == "resume" || key == "rewatch" || key == "keep_pending") && val.is_boolean()))) return false;
     }
@@ -1059,21 +1072,26 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
 
 static nlohmann::json current_ask_proposal(rich_presence_state& state)
 {
-    if (!state.store || state.tracking.value("mode", std::string{}) != "ask" || !lookup_allowed(state))
+    const auto mode = state.tracking.value("mode", std::string{});
+    if (!state.store || (mode != "ask" && mode != "auto") || !lookup_allowed(state))
         return {};
     const auto player = state.store->get("player", state.instance_id);
-    if (player.value("session", UINT64_MAX) != state.file_session || !player.value("watch_episode", false))
+    if (player.value("session", UINT64_MAX) != state.file_session)
         return {};
     const auto account = state.store->get("account", "current");
     const int viewer = account.value("id", 0);
     const int media = player.value("media", 0);
     const auto episode = player.value("episode", std::string{});
-    if (viewer <= 0 || media <= 0 || episode.empty() || account.value("expired", false))
+    if (viewer <= 0 || media <= 0 || account.value("expired", false))
         return {};
     {
         std::lock_guard lock(state.anime_mutex);
-        if (!state.is_anime || !state.watch_episode || state.anime_anilist_id != media || state.anime_episode != episode)
+        if (!state.is_anime || state.anime_anilist_id != media || state.anime_episode != episode)
             return {};
+        if (mode == "auto" && !state.episode_review.empty())
+            return {{"key","episode-review"},{"media",media},{"title",state.anime_title},
+                {"account",account.value("generation",std::string{})},{"review_only",state.episode_review}};
+        if (!player.value("watch_episode", false) || !state.watch_episode || episode.empty()) return {};
     }
     const auto scope = std::format("{}/{}", viewer, media);
     const auto cycle = state.store->get("cycle", scope).value("number", 0);
@@ -1081,6 +1099,13 @@ static nlohmann::json current_ask_proposal(rich_presence_state& state)
     if (proposal.empty() || proposal.value("offline", false) || !proposal.contains("status")
         || proposal.value("account", std::string{}) != account.value("generation", std::string{}))
         return {};
+    if (mode == "auto")
+    {
+        const auto base = proposal.value("base",nlohmann::json::object());
+        // Older builds only left proposals pending in Auto when they needed review,
+        // or when a consecutive update failed. In either case let the user decide.
+        if (!proposal.value("needs_review", !base.empty())) return {};
+    }
     return proposal;
 }
 
@@ -1095,10 +1120,13 @@ static void publish_ask_offer(rich_presence_state& state, const nlohmann::json& 
 {
     auto id = ask_prompt_id(state, proposal);
     if (id == state.dismissed_ask) id.clear();
+    const auto timing = state.tracking.value("mode", std::string{}) == "auto" ? "leave" :
+        state.tracking.value("ask_timing",std::string("threshold"));
     auto offer = id.empty() ? nlohmann::json::object() :
         nlohmann::json{{"id",id},{"session",state.file_session},{"proposal",proposal},
-            {"timing",state.tracking.value("ask_timing",std::string("threshold"))},
-            {"position",state.tracking.value("ask_position",std::string("top-right"))},
+            {"timing",timing},
+            {"position",timing == "leave" ? state.tracking.value("ask_leave_position",std::string("center")) :
+                state.tracking.value("ask_position",std::string("top-right"))},
             {"seconds",state.tracking.value("ask_timeout",30)}};
     const auto payload = offer.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     if (payload == state.ask_payload) return;
@@ -1173,6 +1201,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     if ((op != "accept" && op != "skip") || state.ask_offer.empty() ||
                         req.at("ask_prompt") != state.ask_offer ||
                         ask_prompt_id(state, proposal) != state.ask_offer ||
+                        proposal.contains("review_only") ||
                         job.value("proposal", std::string{}) != proposal.value("key", std::string{})) return;
                     job["revision"] = proposal.value("revision", std::string{});
                 }
@@ -1830,6 +1859,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         int conflicting_anime_minutes = 0;
         bool fuzzy_episode_match = false;
         bool watch_episode = false;
+        std::string episode_review;
         {
             std::lock_guard lock(state.anime_mutex);
             completed_anime_lookup = state.completed_anime_lookup;
@@ -1837,6 +1867,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (media.anime)
             {
                 watch_episode = state.watch_episode;
+                episode_review = state.episode_review;
                 conflicting_anime_minutes = state.conflicting_anime_minutes;
                 fuzzy_episode_match = state.fuzzy_episode_match;
                 media.anime_title = state.anime_title;
@@ -1999,6 +2030,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             media.episode.clear();
             media.anime_title.clear();
             watch_episode = false;
+            episode_review.clear();
         }
         if (candidate != automatic) { state.force_update = true; automatic = candidate; }
         const int tracked_media = media.anilist_id;
@@ -2076,7 +2108,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         {
             media.provider = state.provider;
         }
-        if (now_steady >= next_ask_check && (watch_episode || !state.ask_offer.empty()))
+        if (now_steady >= next_ask_check && (watch_episode || !episode_review.empty() || !state.ask_offer.empty()))
         {
             next_ask_check = now_steady + chrono::milliseconds(250);
             publish_ask_offer(state, current_ask_proposal(state));
@@ -2126,6 +2158,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 }},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",std::move(account)},{"watch_episode",watch_episode},
+                {"episode_review",episode_review},
                 {"episode_watch",std::move(episode_watch)},
                 {"panel_position",state.store ? state.store->get("panel","global").value("position",std::string{}) : ""},
                 {"pending",state.store && (state.panel_page=="AniList" || state.panel_page=="Pending updates") ?

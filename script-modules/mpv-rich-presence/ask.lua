@@ -1,5 +1,5 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
-return function(make_sheet, send, options)
+return function(make_sheet, send, options, review_entry)
     local popup, offer, prompt, deadline, busy, notice
     local timer, transition, keep_open, keep_open_pause
     local bindings={}
@@ -53,7 +53,8 @@ return function(make_sheet, send, options)
         refresh=function() popup.draw() end,
         footer=function()
             if busy then return "Later · Saving…" end
-            return deadline and "Later · "..math.max(0,math.ceil(deadline-mp.get_time())).." s" or "Later"
+            local action=prompt and prompt.proposal.review_only and "Continue" or "Later"
+            return deadline and action.." · "..math.max(0,math.ceil(deadline-mp.get_time())).." s" or action
         end,
         closed=function()
             local previous,command=prompt,transition
@@ -71,6 +72,16 @@ return function(make_sheet, send, options)
             local rows={}
             local function row(id,label,tip,action,primary)
                 rows[#rows+1]={id=id,label=label,tip=tip,run=action,disabled=not action,primary=primary}
+            end
+            if p.review_only then
+                row("episode",p.title or "Anime","The AniList entry currently matched to this file.")
+                row("reason",p.review_only,"This file has no confirmed whole episode to send to AniList. Continue to leave without updating, or open the AniList entry to review its progress.")
+                if review_entry then
+                    row("review","View AniList entry","Open the matched entry in your browser. The current mpv action waits for Continue.",function()
+                        review_entry(p.media)
+                    end)
+                end
+                return rows
             end
             local progress=tostring(p.before).." → "..p.episode
             row("episode",(p.title and p.title~="" and p.title or "Anime").."   Episode "..p.episode,
@@ -105,7 +116,7 @@ return function(make_sheet, send, options)
         if not (w and w>0 and h>0) and not mp.get_property_bool("terminal",true) then return false end
         prompt,busy,notice=offer,false,nil
         set_timeout(prompt.seconds)
-        local ok,err=pcall(popup.show,"AniList update")
+        local ok,err=pcall(popup.show,prompt.proposal.review_only and "Review AniList match" or "AniList update")
         if not ok then
             mp.msg.warn("Could not show AniList review: "..tostring(err))
             if popup.open then popup.close() else prompt=nil; set_timeout(0) end

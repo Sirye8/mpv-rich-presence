@@ -23,6 +23,7 @@ local capture=os.getenv("MPVRP_ASK_CAPTURE")
 local never=os.getenv("MPVRP_ASK_NEVER")=="yes"
 local revisit=action=="osc-leave" or action=="osc-end"
 local uosc=os.getenv("MPVRP_ASK_UOSC")=="yes"
+local extra=os.getenv("MPVRP_ASK_EXTRA")=="yes"
 local function log(event)
     local f=assert(io.open(trace,"a"))
     f:write(event," ",mp.get_time(),"\n")
@@ -45,7 +46,13 @@ local function review_seen()
     end) end
 end
 mp.observe_property("term-status-msg","string",function(_,text)
-    if text and text:find("AniList update",1,true) then review_seen() end
+    if text and (text:find("AniList update",1,true) or text:find("Review AniList match",1,true)) then
+        if extra then
+            assert(text:find("Fractional episode",1,true) and not text:find("Update AniList",1,true),text)
+            if not prompt_seen then log("fractional") end
+        end
+        review_seen()
+    end
 end)
 mp.register_event("end-file",function() log("end") end)
 local function osc(direction)
@@ -119,6 +126,9 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
             ("leave", "eof", True, True, True, True),
             ("leave", "osc-leave", True, True, True, False),
             ("end", "osc-end", True, True, True, False),
+            ("auto", "q", True, False, True, False),
+            ("auto-extra", "q", True, False, True, False),
+            ("auto-extra", "eof", True, True, True, False),
         )
         if not capture
         else (("leave", "eof", True, True, True, True),)
@@ -151,6 +161,8 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
         )
         next_clip = root / "Next clip.mkv"
         shutil.copyfile(clip, next_clip)
+        fractional = root / "[SubsPlease] Black Clover - 174.5 (1080p).mkv"
+        shutil.copyfile(clip, fractional)
         for index, (timing, action, dismiss, playlist, expected, never) in enumerate(
             cases
         ):
@@ -172,7 +184,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                     "tracking",
                     "global",
                     {
-                        "mode": "ask",
+                        "mode": "auto" if timing.startswith("auto") else "ask",
                         "ask_timing": timing,
                         "ask_timeout": 0 if never else 5,
                         "without_sharing": True,
@@ -189,10 +201,14 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                         "episode": 4,
                         "before": 3,
                         "status": None,
+                        "needs_review": timing == "auto",
                         "base": {"session": 1, "id": 2, "status": "CURRENT"},
                     },
                 ),
             ]
+            extra = timing == "auto-extra"
+            if extra:
+                records.pop()
             with closing(sqlite3.connect(database)) as db, db:
                 db.execute(
                     "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
@@ -212,7 +228,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                 "--vo=gpu-next" if capture else "--vo=null",
                 "--ao=null",
                 f"--script={driver}",
-                str(clip),
+                str(fractional if extra else clip),
             ]
             if playlist:
                 args.append(str(next_clip))
@@ -224,6 +240,7 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                 MPVRP_ASK_TRACE=str(trace),
                 MPVRP_ASK_NEVER="yes" if never else "no",
                 MPVRP_ASK_UOSC="yes" if uosc else "no",
+                MPVRP_ASK_EXTRA="yes" if extra else "no",
             )
             if capture:
                 env["MPVRP_ASK_CAPTURE"] = str(capture.resolve())
@@ -235,7 +252,11 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                         row = db.execute(
                             "SELECT value FROM records WHERE category='player'"
                         ).fetchone()
-                        if row and json.loads(row[0]).get("watch_episode"):
+                        if (
+                            row
+                            and json.loads(row[0]).get("watch_episode") != extra
+                            and json.loads(row[0]).get("media")
+                        ):
                             break
                         time.sleep(0.05)
                     else:
@@ -258,6 +279,8 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                     )
                 ]
                 names = [name for name, _ in events]
+                if extra:
+                    assert "fractional" in names, events
                 if action.startswith("osc-"):
                     expected_count = 2 if timing == "leave" else 1
                     assert names.count("prompt") == expected_count, events
@@ -304,6 +327,8 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                             "SELECT 1 FROM records WHERE category='skipped' AND scope=?",
                             (key,),
                         ).fetchone()
+                    elif extra:
+                        assert pending is None, events
                     else:
                         assert pending, events
                 print(

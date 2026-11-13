@@ -1402,6 +1402,13 @@ class Worker:
                 status = "CURRENT"
             repeat_count = min(entry["repeat"] + 1, 1000) if finish_rewatch else None
             base = dict(entry, session=p["session"])
+            can_advance = (
+                entry["id"]
+                and active_status
+                and not start_rewatch
+                and not resume_rewatch
+                and entry["progress"] + 1 == episode
+            )
             prop = dict(
                 revision=secrets.token_hex(8),
                 title=p.get("match_title", ""),
@@ -1415,38 +1422,30 @@ class Worker:
                 status=status,
                 repeat_count=repeat_count,
                 start_rewatch=start_rewatch,
+                needs_review=not can_advance,
             )
             self.put("pending", key, prop)
 
-        if (
-            mode == "auto"
-            and entry["id"]
-            and active_status
-            and not start_rewatch
-            and not resume_rewatch
-            and entry["progress"] + 1 == episode
-        ):
-            self.write(
-                dict(
-                    job,
-                    base=base,
-                    target=episode,
-                    automatic=True,
-                    tracked_proposal=prop,
-                    status=status,
-                    repeat_count=repeat_count,
+        if mode == "auto" and can_advance:
+            try:
+                self.write(
+                    dict(
+                        job,
+                        base=base,
+                        target=episode,
+                        automatic=True,
+                        tracked_proposal=prop,
+                        status=status,
+                        repeat_count=repeat_count,
+                    )
                 )
-            )
+            except AccountError:
+                with self.transaction():
+                    if self.get("pending", key) == prop:
+                        self.put("pending", key, dict(prop, needs_review=True))
+                raise
         else:
-            message = (
-                "Switch to Watching? Review the update in the AniList panel."
-                if status == "CURRENT"
-                else "Episode ready to review in the AniList panel."
-            )
-            if mode == "ask":
-                self.reply(proposal=prop)
-            else:
-                self.reply(proposal=prop, message=message)
+            self.reply(proposal=prop)
 
     def credit_loop(self, stop):
         # A separate SQLite connection keeps the monotonic sampler independent

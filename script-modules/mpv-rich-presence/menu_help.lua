@@ -94,6 +94,8 @@ local help = {
     ["Reset draft"]="Restore the saved episode count in the draft.",
     ["Mark current episode watched"]="Review setting your progress to the episode playing now.",
     ["Tracking"]="Choose whether to count watch time and how to send progress to AniList.",
+    ["Before leaving position"]="Move the popup shown before leaving. This setting also applies to Auto reviews.",
+    ["Episode type"]="The matched file needs a decision before it can count as a whole episode. Auto shows a review before leaving.",
     ["Pending updates"]="Open saved progress proposals for episodes that reached the threshold. Play the matching episode to review and apply a proposal. Offline proposals need a fresh AniList read first. Skip suppresses the proposal for that episode in this viewing cycle.",
     ["Start new viewing cycle"]="Start fresh local watch counters for the matched AniList entry and clear its pending updates. Earlier viewing cycles remain in Saved data.",
     ["Threshold"]="Set how many real minutes to watch each episode before Ask or Auto can act. Enter a whole number from 1 to 1440. The default is 15. At 2× speed, one real minute still counts as one minute.",
@@ -162,7 +164,7 @@ local choices = {
     ["Tracking"]={off="Stop counting watch time. Saved time stays available.",
         manual="Count real playback time. Use the AniList panel to apply list changes yourself.",
         ask="Count time and open a progress review according to Ask timing once the threshold is reached.",
-        auto="Count time and advance the next consecutive episode at the threshold. Gaps, new entries, and status changes require review."},
+        auto="Advance confirmed consecutive episodes at the threshold. Gaps, new entries, status changes, and extras such as recaps or fractional episodes open a review before leaving."},
     ["Ask timing"]={
         threshold="Show the popup as soon as the watch threshold is reached and the proposal is ready. Playback continues.",
         ["end"]="Show the ready proposal when the episode reaches its end. Hold automatic playlist advance while you decide.",
@@ -243,12 +245,12 @@ local read_only = {
 return function(label, page, action, values, current, key)
     key=key or label:match("^(.-)   ") or label
     if values then
-        local descriptions=choices[key]
+        local descriptions=key=="Before leaving position" and choices["Ask prompt position"] or choices[key]
         local names=key=="Ask timing" and {threshold="At threshold",["end"]="End of episode",leave="Before leaving"} or {}
         local options={}
         for _,value in ipairs(values) do
             options[#options+1]={label=names[value] or value,selected=value==current,
-                detail=descriptions and descriptions[value] or
+                detail=(key=="Before leaving position" and value=="center" and "Center of the playback area. This is the default for Before leaving and Auto reviews.") or descriptions and descriptions[value] or
                     (value=="On" and (help[key] or "Enable this setting.") or "Leave this off.")}
         end
         return {options=options}
@@ -274,7 +276,7 @@ return function(label, page, action, values, current, key)
             elseif value=="No time recorded yet" then
                 description="Play the matched episode for a few seconds to start counting. Pauses, buffering, and seeks suspend the counter."
             elseif value=="Episode needs review" then
-                description="The counter needs one confirmed whole episode. Use Correct match if the title or numbering is uncertain."
+                description="The counter needs one confirmed whole episode. Auto shows a review for detected fractional episodes, recaps, and specials before leaving. Use Correct match if the title or numbering is uncertain."
             end
         end
         if page=="AniList" and (key=="Watch started" or key=="Last watched") and value then

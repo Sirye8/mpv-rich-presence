@@ -94,7 +94,7 @@ To use a personal app, register a separate client in [AniList developer settings
 | Off | Stop counting. Previously saved time stays available. |
 | Manual | Count real playback time. Edit progress yourself in the panel. |
 | Ask | Count time and open a review when a ready update reaches the configured timing. |
-| Automatic | Advance consecutive episodes at the threshold. Episode gaps, new entries and required status changes go to review. |
+| Automatic | Advance confirmed consecutive episodes at the threshold. Review episode gaps, new entries, required status changes and detected extras before leaving. |
 
 - **Threshold** accepts whole minutes from 1 to 1440 and defaults to 15. A minute at 2× counts as one minute. Pauses, buffering, seeks and long observation gaps add no time.
 - **Episode watch time** shows real playback time for the current viewing cycle. **Watch started** and **Last watched** show the first and latest credited playback times on the local clock, when recorded.
@@ -104,6 +104,8 @@ To use a personal app, register a separate client in [AniList developer settings
 Use the minus and plus buttons around **Episodes watched**, or Left and Right on that row, to adjust the proposed count. **Apply progress** opens a confirmation with the account, title and proposed change. The worker rechecks the entry before saving. Ordinary progress edits preserve status, score, notes and repeat count. **Status on Apply** lets you choose a status for a manual edit.
 
 Watch tracking uses the matched AniList entry and its resolved season-relative episode number. It needs one identifiable episode. For an entry outside Watching or Rewatching, the first eligible update offers to switch it to Watching or retain the current status. If you keep the status, Automatic mode can advance consecutive episodes until the status changes. A new list entry needs approval.
+
+For a matched fractional episode, recap or special, Auto shows a review before leaving even if the file has no whole episode to time. **Continue** leaves progress as it is. **View AniList entry** opens the matched title for a manual decision. A review with an eligible whole episode can still offer an explicit progress update.
 
 An entry already marked Rewatching gets its own viewing cycle. Turn on **Rewatch tracking** to offer a new cycle after watching episode 1 of a completed anime. Starting the cycle needs approval because it restarts AniList progress. Reaching the known final episode completes the rewatch and adds one to the repeat count. An unknown total can continue in Rewatching. Use **Start new viewing cycle** to reset local counters and pending updates for the matched entry.
 
@@ -117,7 +119,9 @@ An entry already marked Rewatching gets its own viewing cycle. Turn on **Rewatch
 
 With **Before leaving**, the player stays responsive while a quit or playlist action waits for your decision. At natural completion, the last frame stays visible so mpv can still draw overlays and process input. After your choice, mpv resumes the requested action. **Later**, **×**, Escape, and a timed dismissal leave the proposal in **Pending updates**. **Skip this episode** clears the proposal for the current cycle.
 
-**Ask prompt position** selects one of six anchors. **Ask prompt timeout** defaults to 30 seconds. Choose a preset, enter a custom 5 to 300 seconds, or select **Never** to wait for a choice.
+- **Ask prompt position** controls **At threshold** and **End of episode**. It defaults to the upper right.
+- **Before leaving position** controls that timing in Ask and all Auto reviews. It defaults to the center, with six other positions available.
+- **Ask prompt timeout** defaults to 30 seconds. Choose a preset, enter a custom 5 to 300 seconds, or select **Never** to wait for a choice.
 
 ![Ask prompt timeout menu showing Never, presets and a custom timeout](../screenshots/panel-timeout.jpg)
 

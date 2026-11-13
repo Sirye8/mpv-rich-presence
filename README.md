@@ -34,8 +34,8 @@ For personal clients and credential storage, see [Connect AniList](docs/user-gui
 
 ### Watch time and list edits
 
-- Tracking starts **Off**. **Manual** counts real playback time. **Ask** offers a review, and **Automatic** advances consecutive episodes when eligible. The default threshold is 15 minutes.
-- In **Ask**, choose **At threshold**, **End of episode** or **Before leaving**. The popup defaults to the upper right for 30 seconds. Select **Never** to leave it open until you make a choice.
+- Tracking starts **Off**. **Manual** counts real playback time. **Ask** offers a review. **Automatic** advances confirmed consecutive episodes and asks before leaving when it needs a decision.
+- In **Ask**, choose **At threshold**, **End of episode** or **Before leaving**. Before leaving and Auto reviews default to the center. Other Ask prompts default to the upper right. Select **Never** to keep the prompt open until you make a choice.
 - Use **−** and **+** around the progress draft, then choose **Apply progress** to review the change. **Later** keeps a proposed update in **Pending updates**.
 - Enable **Rewatch tracking** to get a prompt when starting a completed anime again. See the [tracking guide](docs/user-guide.md#track-episodes-and-rewatches) for timing, gaps and rewatch rules.
 

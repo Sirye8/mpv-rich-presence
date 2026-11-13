@@ -59,6 +59,8 @@ return function(make_sheet, send, options, help)
         COMPLETED="Completed",REPEATING="Rewatching"}
     local tracking_mode_labels={off="Off",manual="Manual",ask="Ask",auto="Auto"}
     local ask_timing_labels={threshold="At threshold",["end"]="End of episode",leave="Before leaving"}
+    local ask_positions={"top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"}
+    local leave_positions={"center","top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"}
     local function copy(t) local r={}; for k,v in pairs(t or {}) do r[k]=v end; return r end
     local function request(action,fields)
         local r=fields or {}; r.action=action; r.session=snap.session; send(r)
@@ -471,11 +473,15 @@ return function(make_sheet, send, options, help)
             elseif mode=="off" then watch_status="Tracking is off"..(elapsed>0 and (" · "..duration(elapsed).." saved") or "")
             elseif not snap.allowed then watch_status="Tracking blocked"
             elseif (snap.match or 0)==0 then watch_status="No anime match"
+            elseif snap.episode_review and snap.episode_review~="" then watch_status="Episode needs review"
             elseif not snap.episode or snap.episode=="" then watch_status="No episode number"
             elseif not snap.watch_episode then watch_status="Episode needs review"
             elseif elapsed<=0 then watch_status="No time recorded yet"
             else watch_status=duration(elapsed) end
             row("Episode watch time   "..watch_status)
+            if snap.episode_review and snap.episode_review~="" then
+                row("Episode type   "..snap.episode_review)
+            end
             if elapsed>0 then
                 row("Watch started   "..clock_time(watch.first_watched))
                 row("Last watched   "..clock_time(watch.last_watched))
@@ -501,7 +507,7 @@ return function(make_sheet, send, options, help)
                     list_status or "unchanged",function(v) list_status=v~="unchanged" and v or nil end)
                 row("Apply progress",function() submit(edit or entry.progress) end,true)
                 row("Reset progress edit",function() edit=entry.progress; edit_base=copy(entry) end)
-                if tonumber(snap.episode) then row("Mark current episode watched",function() submit(tonumber(snap.episode)) end) end
+                if snap.watch_episode and tonumber(snap.episode) then row("Mark current episode watched",function() submit(tonumber(snap.episode)) end) end
             end
             scope_row()
             choice("Tracking",{"off","manual","ask","auto"},mode,function(v) apply("tracking",{mode=v}) end,tracking_mode_labels[mode])
@@ -510,8 +516,13 @@ return function(make_sheet, send, options, help)
                 choice("Ask timing",{"threshold","end","leave"},timing,function(v)
                     apply("tracking",{ask_timing=v})
                 end,ask_timing_labels[timing])
-                choice("Ask prompt position",{"top-right","top-center","top-left","bottom-right","bottom-center","bottom-left"},
+                choice("Ask prompt position",ask_positions,
                     tracking.ask_position or "top-right",function(v) apply("tracking",{ask_position=v}) end)
+            end
+            if mode=="ask" or mode=="auto" then
+                local position=tracking.ask_leave_position or "center"
+                choice("Before leaving position",leave_positions,position,
+                    function(v) apply("tracking",{ask_leave_position=v}) end,position=="center" and "Center" or position)
                 local seconds=tracking.ask_timeout or 30
                 row("Ask prompt timeout   "..(seconds==0 and "Never" or seconds.." seconds"),function()
                     ui.push("Ask prompt timeout")
