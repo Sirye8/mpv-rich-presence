@@ -28,7 +28,7 @@ return function(make_sheet, send, options, help)
         exclude={"Exclusions","Folders or files blocked from sharing, lookup and tracking. Removing a rule keeps currently open files protected."},
         sources={"Recognition rules","Media type or provider choices saved for a file, folder or all files."},
         tracking={"Tracking preferences","AniList mode, threshold and Ask preferences saved for each scope. Watch history has its own category."},
-        panel={"Panel settings","The saved panel position. Clearing this record uses the conf value."},
+        panel={"Panel settings","The saved panel position and optional Discord pin handoff. Clearing this record uses the default for each."},
         ["folder-filter"]={"Folder filter override","The saved folder filter mode or list. Removing it restores both values from rich-presence.conf."},
         ["recognition-options"]={"Optional recognition settings","Clear the switches for conditional TV folder rules and local metadata files. Saved rules and the sidecar files stay available."},
         ["tv-rule"]={"TV folder rules","Saved series identities and approved filename titles for an exact folder. Removing a folder record removes its rules. File-specific matches stay available."},
@@ -285,7 +285,7 @@ return function(make_sheet, send, options, help)
             local position=snap.panel_position
             if not position or position=="" then position="config" end
             choice("Panel position",panel_positions,position,function(v)
-                if v=="config" then request("clear",{category="panel",scope="global"}); refresh()
+                if v=="config" then request("clear",{category="panel",scope="global",field="position"}); refresh()
                 else apply("panel",{position=v},"global") end
             end,position=="config" and "Config · "..config_position or nil)
             for _,item in ipairs({{"Title language","language",{"original","english","romaji","native"}},

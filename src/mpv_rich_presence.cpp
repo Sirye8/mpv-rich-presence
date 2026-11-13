@@ -792,7 +792,17 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 const auto category = req.at("category").get<std::string>();
                 if (category == "panel" || category == "recognition-options")
                 {
-                    if (action == "clear") state.store->clear(category,"global");
+                    if (action == "clear")
+                    {
+                        auto saved = state.store->get(category,"global");
+                        if (category=="panel" && req.value("field",std::string{})=="position")
+                        {
+                            saved.erase("position");
+                            if (saved.empty()) state.store->clear(category,"global");
+                            else state.store->put(category,"global",saved);
+                        }
+                        else state.store->clear(category,"global");
+                    }
                     else if (const auto& values = req.at("values"); valid_settings(category,values))
                         state.store->save(category,"global",values);
                     if (category=="recognition-options")
