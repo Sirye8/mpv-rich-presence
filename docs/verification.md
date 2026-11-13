@@ -38,7 +38,7 @@ python -B tests/recognition_suite.py build/Release/recognition-replay.exe --case
 
 The CSV includes the expected result, evidence, actual match, and provider queries for each row. Rows without a reference result are marked unverified. Use the packaged live checks to verify provider availability and what mpv publishes.
 
-The v1.0.11 replay covered all 4,761 rows in the local inventory. All 2,766 rows with reference results matched, and 1,995 rows lacked enough evidence for a verdict.
+The v2.0.0 replay covered all 4,761 rows in the local inventory. All 2,766 rows with reference results matched, and 1,995 rows lacked enough evidence for a verdict.
 
 The public sign-in check passed on Windows on 6 November 2026. Windows and Linux builds, regression suites and packaged menu checks have passed. Captures have been inspected over bright footage in wide and narrow windows. Tests use disposable data rather than the user's installed mpv configuration.
 
