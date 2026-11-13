@@ -21,13 +21,12 @@ jobs:
             -o "$RUNNER_TEMP/rich-presence-tests"
       - name: Run lease, parser and playback tests
         run: timeout 30 "$RUNNER_TEMP/rich-presence-tests"
-      - uses: actions/checkout@v4
-        with:
-          repository: erengy/anitomy
-          ref: a538eff670cb4666f8395cf66a9a535f2c383
-          path: vendor-anitomy
       - name: Run the Automatic recognition replay
         run: |
+          anitomy_ref="$(awk '/GIT_TAG/ {print $2; exit}' CMakeLists.txt)"
+          git init vendor-anitomy
+          git -C vendor-anitomy fetch --depth=1 https://github.com/erengy/anitomy.git "$anitomy_ref"
+          git -C vendor-anitomy checkout --detach FETCH_HEAD
           g++-14 -std=c++20 -Iinclude -Ivendor-anitomy tests/recognition_replay.cpp \
             src/anime_recognition.cpp src/anilist_parser.cpp src/string_utils.cpp \
             vendor-anitomy/anitomy/*.cpp -o "$RUNNER_TEMP/recognition-replay"
