@@ -51,6 +51,7 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 | **Movies** | TMDB movies, with Wikidata as a fallback. |
 | **TV** | TMDB TV, with TVmaze as a fallback and for air-date episodes. |
 | **Original** | AniList for anime and local titles or tags for other media. |
+| **Local only** | Use mpv's local title or tags. Saved manual matches can still apply. |
 
 - **Automatic**, **Anime** and **Original** use the v1.0.10 anime resolver. A saved file rule takes priority over the nearest folder rule, global panel settings and the conf default.
 - Music starts with the file's tags. MusicBrainz and Cover Art Archive can fill in metadata and artwork. The Windows and Linux packages include `fpcalc` for AcoustID fingerprinting.
@@ -95,7 +96,7 @@ To classify a folder and its subfolders, open a file inside it and choose **Reco
 
 | Now Playing | AniList Progress |
 | :---: | :---: |
-| ![Now playing panel](screenshots/panel-now-playing.jpg) | ![AniList progress draft](screenshots/panel-anilist.jpg) |
+| ![Now playing panel](screenshots/panel-now-playing.jpg) | ![AniList Episodes watched control](screenshots/panel-anilist.jpg) |
 
 | Ask Prompt | Timeout Options |
 | :---: | :---: |

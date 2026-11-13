@@ -55,7 +55,9 @@ To open a page from the mpv console, use `script-message-to mpv_rich_presence me
 
 ## Recognize media
 
-**Automatic** uses the v1.0.10 AniList resolver for video, including its season and sequel rules. It tries movie or TV lookup on a completed anime miss. An exact movie title and year from TMDB can disambiguate a feature-length file that loosely matches a much shorter anime from a different year. If AniList is unavailable, the card uses the local title.
+**Automatic** uses the v1.0.10 AniList resolver, including its season and sequel rules. If that search completes without a match, the plugin can try movie or TV lookup. A weak anime match can be overridden by a confirmed live-action TV episode with the same title, season and episode, or by the existing exact title and year check for feature films. Confirmed and manually pinned anime matches keep their priority. If AniList is unavailable, the card uses the local title.
+
+Common camera and screen recording names stay local in Automatic. Short videos with a bare title and no year, episode marker or TMDB ID skip the fallback movie search. Use **Local only** on a file or folder when you always want the filename or embedded metadata.
 
 Movie and TV lookup prefers TMDB. Wikidata and TVmaze provide fallbacks. Air-date episodes use TVmaze. For music, the card starts with local tags. MusicBrainz checks title, credits, duration and release edition, and Cover Art Archive supplies public artwork when available. An embedded cover stays in mpv. If the music tags are incomplete or inconclusive, the plugin can send a Chromaprint fingerprint and the track duration to AcoustID. The audio file stays on your device.
 
@@ -69,6 +71,7 @@ To classify a directory, open a file inside it and choose **Recognition & folder
 | Movies | TMDB movies with Wikidata fallback. |
 | TV | TMDB TV with TVmaze fallback. |
 | Original | AniList for anime and local titles or tags for other media. |
+| Local only | Use local titles and tags. A saved manual match can still apply. |
 
 The effective order is file, nearest matching folder, global panel setting, then `recognition_source` in the conf file. Choose **Inherit recognition source** to remove a rule. Saved match corrections still apply. **Fingerprint this file** runs an explicit AcoustID lookup on local audio.
 
@@ -98,7 +101,7 @@ To use a personal app, register a separate client in [AniList developer settings
 - **Resume unfinished time** is on by default and continues from a saved counter when you reopen an episode. Windows playing the same episode for the same account share that record.
 - **Keep offline proposals** is off by default. Turn it on to save eligible updates locally while AniList is unreachable and review them after refreshing the list entry.
 
-Use the minus and plus buttons around **Draft**, or Left and Right on that row, to adjust the proposed episode count. **Apply progress** opens a confirmation with the account, title and proposed change. The worker rechecks the entry before saving. Ordinary progress edits preserve status, score, notes and repeat count. **Status on Apply** lets you choose a status for a manual edit.
+Use the minus and plus buttons around **Episodes watched**, or Left and Right on that row, to adjust the proposed count. **Apply progress** opens a confirmation with the account, title and proposed change. The worker rechecks the entry before saving. Ordinary progress edits preserve status, score, notes and repeat count. **Status on Apply** lets you choose a status for a manual edit.
 
 Watch tracking uses the matched AniList entry and its resolved season-relative episode number. It needs one identifiable episode. For an entry outside Watching or Rewatching, the first eligible update offers to switch it to Watching or retain the current status. If you keep the status, Automatic mode can advance consecutive episodes until the status changes. A new list entry needs approval.
 
@@ -118,18 +121,22 @@ With **Before leaving**, the player stays responsive while a quit or playlist ac
 
 ![Ask prompt timeout menu showing Never, presets and a custom timeout](../screenshots/panel-timeout.jpg)
 
-Direct commands from an OSC, another script or IPC can leave the file immediately. In that case the ready proposal stays in **Pending updates**. For a custom Next or Quit control, send the command through the review binding to make it wait in **Before leaving** mode. For example, in `input.conf`:
+The standard left-click Next and Previous buttons in mpv's OSC and the standard `next` and `prev` controls in uosc use the same review route. **End of episode** still waits for natural completion. If you leave before that and return, an eligible pending proposal can appear at the end.
+
+Direct commands from custom OSC controls, other scripts or IPC can leave immediately. The proposal stays in **Pending updates**. Route a custom Next or Quit control through the review binding to make it wait in **Before leaving**. For example, in `input.conf`:
 
 ```ini
 Ctrl+n script-message-to mpv_rich_presence review-before "playlist-next weak"
 Ctrl+q script-message-to mpv_rich_presence review-before "quit-watch-later"
 ```
 
-For uosc, replace the `next` item in `controls` in `script-opts/uosc.conf` with `command:arrow_forward_ios:script-message-to mpv_rich_presence review-before "script-binding uosc/next"?Next` to keep uosc's directory and playlist navigation.
-
 ## Manage privacy and saved data
 
 **Privacy & windows** can hide only the card, switch to a generic card, or start a private session that stops both lookups and tracking. Folder exclusions and private sessions take precedence. **Track while hidden** lets AniList continue when Discord sharing is off and the file is otherwise eligible. A new or resumed file can claim Discord unless another player is pinned.
+
+Open **Folder filters** from **Privacy & windows** or **Recognition & folders**. Review whether the current file passes, choose a filter mode, and add or remove folders. These edits apply across mpv windows and override the conf. **Restore conf filter** returns both settings to their file values. An exception can allow just the open file or all local files in the current window until it closes. Exceptions still honor private sessions and separate exclusions.
+
+**Saved data** groups profiles, matches, caches and the current account's AniList records. Open a category to search or clear its entries. Metadata cache rows show their provider and expiry rather than the internal key. Hover for the key and the effect of clearing the record.
 
 The database lives in `scripts/mpv-rich-presence/data.sqlite3` under your config directory. **Clear watch** resets the affected counters and removes their pending proposals and skips. If you keep watching the same episode, it can qualify again once it earns the threshold. Completed local history and saved AniList progress are kept. **Reset everything** clears the local profiles, matches, caches and history, disconnects the account and restores the conf defaults. It leaves your AniList list as it is.
 
@@ -147,7 +154,7 @@ Edit `script-opts/rich-presence.conf` in your mpv config directory and restart m
 | `on` | `yes` | Starts Discord sharing. Set `no` to start with sharing off. **Track while hidden** can separately permit lookups for eligible AniList tracking. |
 | `folder_filter_mode` | `disabled` | Use `whitelist` to allow only listed folders or `blacklist` to exclude listed folders. The filter covers subfolders, Discord sharing and lookups. An empty whitelist allows no files. An empty blacklist excludes none. |
 | `folder_list` | Empty | Absolute folder paths separated by semicolons. Quotes are optional. For example, `D:\Anime;E:\Videos\Movies`. |
-| `recognition_source` | `auto` | Pick the default recognition mode. Library choices are `auto`, `anime`, `movie-tv`, `movie`, `tv` and `original`. Provider-specific values are `tmdb-movie`, `tmdb-tv`, `tvmaze`, `wikidata`, `musicbrainz`, `acoustid` and `stream`. See [Recognize media](#recognize-media) for the library choices. |
+| `recognition_source` | `auto` | Pick the default recognition mode. Library choices are `auto`, `anime`, `movie-tv`, `movie`, `tv`, `original` and `local`. Provider-specific values are `tmdb-movie`, `tmdb-tv`, `tvmaze`, `wikidata`, `musicbrainz`, `acoustid` and `stream`. See [Recognize media](#recognize-media) for the library choices. |
 | `pause_timeout` | `1800` | Seconds of paused playback before Discord hides the card. Use `0` to disable the timeout. |
 
 ### Appearance and panel

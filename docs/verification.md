@@ -22,6 +22,7 @@ The in-player interface and tracking build on [`v1.0.10`](https://github.com/Sir
 - `python -B tests/live_signin.py <installed-package> <mpv-executable>`: interactive, read-only public sign-in. It verifies Viewer, checks session-only storage, closes mpv and deletes the disposable config. It never edits the list.
 - `python -B tests/live_anime_match.py <package-or-install> <mpv-executable> <ffmpeg-executable>`: verify that the season-two filename resolves to Youjo Senki II episode 8 and an AniList outage keeps movie and TV fallback disabled. The test generates its own footage and disables Discord sharing.
 - `python -B tests/live_ask_prompt.py <package.zip> <mpv-executable> <ffmpeg-executable>`: exercise timed and untimed reviews, quit, window close, Next, and natural playlist advance with a saved local proposal. Add `--capture <file.jpg>` to check the graphical EOF prompt and capture it in mpv.
+- Add `--uosc <uosc-script-directory>` to the Ask check to exercise Next and Previous through a local uosc install, including review at natural EOF after returning to an episode.
 
 The public sign-in check passed on Windows on 6 November 2026. Windows and Linux builds, regression suites and packaged menu checks have passed. Captures have been inspected over bright footage in wide and narrow windows. Tests use disposable data rather than the user's installed mpv configuration.
 
