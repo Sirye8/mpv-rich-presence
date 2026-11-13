@@ -273,6 +273,59 @@ static parsed_filename_info parse_anime_filename(const std::string& raw_filename
     return info;
 }
 
+std::optional<folder_video_name> video_name_from_folder(
+    const std::string& filename, const std::string& folder, double duration,
+    const std::string& embedded_title)
+{
+    const auto stem = filename.substr(0, filename.find_last_of('.'));
+    static const std::regex numbered(R"(^(?:(?:ep(?:isode)?)[ ._-]*)?([0-9]{1,4})(?:v[0-9]+)?$)", std::regex::icase);
+    static const std::regex season_numbered(R"(^s([0-9]{1,2})[ ._-]*e([0-9]{1,3})(?:v[0-9]+)?$)", std::regex::icase);
+    static const std::regex unnamed(R"(^(?:movie|film|video|untitled|feature|main)(?:[ ._-]+[0-9]+)?$)", std::regex::icase);
+    static const std::regex generic_folder(
+        R"(^(?:season[ ._-]*[0-9]+|s[0-9]+|part[ ._-]*[0-9]+|extras?|bonus|downloads?|videos?|movies?|anime|tv|samples?|untitled|media|films?|episodes?)$)",
+        std::regex::icase);
+    static const std::regex year_token(R"(\s*[\[(]((?:18|19|20)[0-9]{2})[\])]\s*$)");
+    if (!embedded_title.empty() && embedded_title != filename && embedded_title != stem &&
+        !std::regex_match(embedded_title, unnamed) && !std::regex_match(embedded_title, numbered) &&
+        !std::regex_match(embedded_title, season_numbered))
+        return std::nullopt;
+    if (folder.empty() || folder.size() > 160 || folder.find_first_of("/\\?&#:") != std::string::npos ||
+        std::any_of(folder.begin(), folder.end(), [](unsigned char ch) { return ch < 32; }))
+        return std::nullopt;
+
+    std::smatch number;
+    folder_video_name result;
+    if (std::regex_match(stem, number, season_numbered))
+    {
+        result.season = std::stoi(number[1].str());
+        result.episode = std::stoi(number[2].str());
+    }
+    else if (std::regex_match(stem, number, numbered))
+    {
+        const int episode = std::stoi(number[1].str());
+        if (episode >= 1800 && episode <= 2099) return std::nullopt;
+        result.episode = episode;
+    }
+    else if (duration < 35 * 60 || !std::regex_match(stem, unnamed))
+        return std::nullopt;
+
+    auto title = folder;
+    std::smatch year;
+    if (std::regex_search(title, year, year_token))
+    {
+        result.year = year[1].str();
+        title.erase(year.position());
+    }
+    auto [cleaned, season, part] = clean_anime_title(title);
+    if (!result.episode) cleaned = std::move(title);
+    if (cleaned.size() < 3 || std::regex_match(cleaned, generic_folder) ||
+        !std::any_of(cleaned.begin(), cleaned.end(), [](unsigned char ch) { return std::isalpha(ch) || ch >= 128; }))
+        return std::nullopt;
+    result.title = std::move(cleaned);
+    if (result.episode && !result.season && season > 0) result.season = season;
+    return result;
+}
+
 // Single title similarity check
 static bool is_single_title_match(const std::string& query, const std::string& candidate_title)
 {
@@ -404,7 +457,8 @@ static std::optional<int> walk_to_season(anilist_media& media, int episode,
 // Anime lookup logic processed in worker thread
 std::optional<anime_match> recognize_anime(const std::string& filename_str,
     const nlohmann::json& correction, const anime_catalog& catalog,
-    const std::function<bool()>& cancelled, bool& confirmed, const std::string& folder)
+    const std::function<bool()>& cancelled, bool& confirmed, const std::string& folder,
+    const std::optional<folder_video_name>& folder_name)
 {
     if (correction.value("not_anime", false) || filename_str.empty())
         return std::nullopt;
@@ -427,11 +481,11 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
         || elements.count(anitomy::kElementAnimeSeason)
         || elements.count(anitomy::kElementReleaseGroup);
 
-    if (!has_anime_indicator && !correction.contains("id"))
+    if (!has_anime_indicator && !correction.contains("id") && !folder_name)
         return std::nullopt;
 
     parsed_filename_info pinfo = parse_anime_filename(filename_str, elements);
-    if (pinfo.title.empty() && !correction.contains("id"))
+    if (pinfo.title.empty() && !correction.contains("id") && !folder_name)
         return std::nullopt;
 
     std::string a_title = pinfo.title;
@@ -443,6 +497,14 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     std::vector<std::string> search_queries;
     const bool automatic = correction.value("automatic", false);
     const bool automatic_match = automatic && !correction.contains("id") && !correction.contains("offset");
+    const bool title_from_folder = automatic_match && folder_name.has_value();
+    if (title_from_folder)
+    {
+        a_title = folder_name->title;
+        parsed_season = folder_name->season.value_or(0);
+        parsed_ep = folder_name->episode.value_or(0);
+        parsed_part = 0;
+    }
     static const std::regex supplementary_video(
         R"((?:^|[ ._(\[\-])(?:nc[ ._-]*(?:op|ed)|(?:op|ed)[ ._-]*[0-9]+|creditless|trailer|sample)(?=$|[ ._()\[\]-]|[0-9])|(?:^|\s-\s)(?:opening|ending)(?:[ ._-]*[0-9]+|(?=\s*[\[(])))",
         std::regex::icase);
@@ -466,7 +528,7 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     static const std::regex named_episode(
         R"(\b(?:episode|ep)[ ._-]+([0-9]{1,4})(?![0-9]|[.-][0-9]))", std::regex::icase);
     std::smatch named_number;
-    const bool has_named_episode = automatic_match && !has_absolute_number &&
+    const bool has_named_episode = automatic_match && !title_from_folder && !has_absolute_number &&
         std::regex_search(filename_str, named_number, named_episode);
     if (has_named_episode)
         parsed_ep = std::stoi(named_number[1].str());
@@ -491,9 +553,10 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     static const std::regex film_marker(
         R"((?:^|[ ._(-])(?:the[ ._-]+movie|(?:movie|film)[ ._-]+\d{1,2})(?=$|[^A-Za-z0-9]))",
         std::regex::icase);
-    const bool explicit_film = automatic_match && std::regex_search(filename_str, film_marker);
-    auto film_year = ws2s(elements.get(anitomy::kElementAnimeYear));
-    if (explicit_film)
+    const bool explicit_film = automatic_match && (std::regex_search(filename_str, film_marker) ||
+        (title_from_folder && !folder_name->episode));
+    auto film_year = title_from_folder ? folder_name->year : ws2s(elements.get(anitomy::kElementAnimeYear));
+    if (explicit_film && !title_from_folder)
     {
         // Release names sometimes put the franchise, year and subtitle in
         // separate fields. Try the full title before a broad franchise search.
@@ -552,7 +615,7 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     // locally. Provider queries still contain only the filename title.
     std::string arc_query;
     std::string arc_search_title;
-    if (automatic_match && parsed_season > 0 && !has_absolute_number && !folder.empty())
+    if (automatic_match && !title_from_folder && parsed_season > 0 && !has_absolute_number && !folder.empty())
     {
         // Cut the filename at its episode marker so a scene episode subtitle
         // cannot become part of the series title used for the arc check.
@@ -697,7 +760,9 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
         std::optional<anilist_media> best = std::nullopt;
         for (const auto& m : page)
         {
-            if (!valid_film(m) || !is_media_title_match(explicit_film ? q_str : a_title, m))
+            if (!valid_film(m) || (title_from_folder
+                ? !exact_series_title(a_title, m, parsed_season)
+                : !is_media_title_match(explicit_film ? q_str : a_title, m)))
                 continue;
 
             std::string title_lower = to_lower(m.title);
@@ -744,7 +809,9 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
                     continue;
             }
 
-            if (explicit_film || (parsed_ep > 0 && m.episodes > 0 && parsed_ep <= m.episodes))
+            if (title_from_folder && best && best->id != m.id)
+                return std::nullopt;
+            if (!title_from_folder && (explicit_film || (parsed_ep > 0 && m.episodes > 0 && parsed_ep <= m.episodes)))
             {
                 best = m;
                 break;
@@ -769,7 +836,8 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
         auto base_page = catalog.search(a_title, confirmed);
         for (const auto& m : base_page)
         {
-            if (valid_film(m) && is_media_title_match(a_title, m))
+            if (valid_film(m) && (title_from_folder
+                ? exact_series_title(a_title, m, parsed_season) : is_media_title_match(a_title, m)))
             {
                 candidate = m;
                 break;
@@ -799,6 +867,8 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
 
     const auto lower_title = to_lower(a_title);
     const auto exact_title = [&](const anilist_media& media) {
+        if (title_from_folder)
+            return exact_series_title(a_title, media, parsed_season);
         return to_lower(media.title) == lower_title ||
             std::any_of(media.matching_titles.begin(), media.matching_titles.end(),
                 [&](const auto& alias) { return to_lower(alias) == lower_title; });
@@ -821,6 +891,7 @@ std::optional<anime_match> recognize_anime(const std::string& filename_str,
     anime_match match;
     static const std::regex whole_episode("[0-9]+");
     const bool integer_episode = has_absolute_number || has_named_episode ||
+        (title_from_folder && folder_name->episode) ||
         (elements.count(anitomy::kElementEpisodeNumber) == 1 &&
             std::regex_match(ws2s(elements.get(anitomy::kElementEpisodeNumber)), whole_episode));
     match.episode_label.clear();

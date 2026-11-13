@@ -864,6 +864,10 @@ class Worker:
                     "album",
                     "album_artist",
                     "release_date",
+                    "folder_title",
+                    "folder_year",
+                    "folder_episode",
+                    "folder_has_episode",
                     "allowed",
                 )
             )
@@ -927,6 +931,22 @@ class Worker:
                 or (filename[1] and (verify_movie or not year or year == filename[1]))
             ):
                 title, year, episode, airdate = filename
+            if source == "auto" and p.get("folder_title") and (
+                not title or match_name(title) == match_name(filename[0])
+            ):
+                # A bare episode needs a season from the filename or folder to
+                # query the TV catalog. AniList already handled absolute numbers.
+                if p.get("folder_has_episode") and not p.get("folder_episode"):
+                    publish(None)
+                    return
+                # A movie folder needs a unique TMDB title. Never fall
+                # through to TV with a bare feature label.
+                if not p.get("folder_has_episode"):
+                    source = "tmdb-movie"
+                title = p["folder_title"]
+                year = p.get("folder_year", "")
+                episode = p.get("folder_episode")
+                airdate = None
         if (
             source == "auto"
             and p["video"]

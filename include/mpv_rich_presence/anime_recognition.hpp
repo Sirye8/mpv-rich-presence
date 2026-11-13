@@ -6,6 +6,18 @@
 
 namespace mpvrp
 {
+    struct folder_video_name
+    {
+        std::string title;
+        std::string year;
+        std::optional<int> season;
+        std::optional<int> episode;
+    };
+
+    std::optional<folder_video_name> video_name_from_folder(
+        const std::string& filename, const std::string& folder, double duration,
+        const std::string& embedded_title = {});
+
     struct anime_match
     {
         anilist_media media;
@@ -25,7 +37,8 @@ namespace mpvrp
 
     std::optional<anime_match> recognize_anime(const std::string& filename,
         const nlohmann::json& correction, const anime_catalog& catalog,
-        const std::function<bool()>& cancelled, bool& confirmed, const std::string& folder = {});
+        const std::function<bool()>& cancelled, bool& confirmed, const std::string& folder = {},
+        const std::optional<folder_video_name>& folder_name = {});
 
     struct recognition_route
     {

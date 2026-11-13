@@ -89,6 +89,29 @@ def fixture_cases():
              watch=True),
         case("Fixture Show S02E02 (014).mkv", ("anilist", 2, 2), page=[first, second],
              entries=[second], watch=True),
+        case("03.mkv", ("anilist", 1, 3), page=[first], folder="Fixture Show", watch=True),
+        case("S02E04.mkv", ("tmdb-tv", "Example Show", "S02E04"), folder="Example Show",
+             hits={"tmdb-tv": [dict(id=1, name="Example Show", kind="tv", numbering="S02E04")]}),
+        case("02.mkv", ("tmdb-tv", "Example Show", "S01E02"), folder="Example Show Season 1",
+             hits={"tmdb-tv": [dict(id=1, name="Example Show", kind="tv", numbering="S01E02")]}),
+        case("movie.mkv", ("tmdb-movie", "Example Film", ""), folder="Example Film (2024)",
+             duration=6500, hits={"tmdb-movie": [dict(id=1, name="Example Film", kind="movie", year="2024")]}),
+        case("movie.mkv", ("tmdb-movie", "Example Film", ""), folder="Example Film",
+             duration=6500, hits={"tmdb-movie": [dict(id=1, name="Example Film", kind="movie", year="2024")]}),
+        case("movie.mkv", ("local", "", ""), folder="Example Film", duration=6500,
+             hits={"tmdb-movie": [dict(id=1, name="Example Film", kind="movie", year="2024"),
+                                  dict(id=2, name="Example Film", kind="movie", year="1994")]}),
+        case("movie.mkv", ("anilist", 106, 0), folder="Example Anime Film (2024)",
+             duration=6500, page=[anime(106, "Example Anime Film", 1, format="MOVIE", year=2024)]),
+        case("movie.mkv", ("local", "", ""), folder="Example Film (2024)", duration=75),
+        case("movie.mkv", ("local", "", ""), folder="Movies", duration=6500),
+        case("04.mkv", ("local", "", ""), folder="Season 2"),
+        case("Screen Recording 2026-11-12.mp4", ("local", "", ""), folder="Example Film (2024)", duration=80),
+        case("Fixture Show - 04.mkv", ("anilist", 1, 4), page=[first],
+             folder="Unrelated Film (2024)", watch=True),
+        case("movie.mkv", ("tmdb-movie", "Actual Film", ""), folder="Unrelated Film (2024)",
+             duration=6500, tags={"title": "Actual Film (2020)"},
+             hits={"tmdb-movie": [dict(id=1, name="Actual Film", kind="movie", year="2020")]}),
     ])
     cases.extend([
         case("[SubsPlease] Youjo Senki S2 - 08 (1080p).mkv", ("anilist", 135865, 8),
@@ -120,8 +143,8 @@ def fixture_cases():
         case("Artist - Song.flac", ("musicbrainz", "Song", ""), video=False, duration=191,
              tags={"title": "Song", "artist": "Artist", "album": "Record"},
              hits={"musicbrainz": [dict(id="song", name="Song", artist="Artist", album="Record", duration_ms=191000)]}),
-            case("Artist - Untagged.flac", ("acoustid", "Untagged", ""), video=False, duration=191,
-                 hits={"acoustid": [dict(id="track", name="Untagged", artist="Artist", score=0.99)]}),
+        case("Artist - Untagged.flac", ("acoustid", "Untagged", ""), video=False, duration=191,
+             hits={"acoustid": [dict(id="track", name="Untagged", artist="Artist", score=0.99)]}),
     ])
     return cases
 
@@ -138,6 +161,8 @@ def sample_for(test, native, index):
         release_date=tags.get("date") or "", recording=tags.get("musicbrainz_trackid") or "",
         release=tags.get("musicbrainz_albumid") or "", tmdb=tags.get("tmdb") or "",
         anime_runtime_conflict=native["runtime_conflict"],
+        **{field: native[field] for field in ("folder_title", "folder_year", "folder_has_episode", "folder_episode")
+           if field in native},
     )
 
 

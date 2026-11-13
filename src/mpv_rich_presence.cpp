@@ -302,13 +302,16 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id)
 
 // Resolve outside the player lock, then publish the result for the current file.
 static void process_anime_lookup(rich_presence_state& state, const std::string& filename,
-    const std::string& folder, int load_id, const nlohmann::json& correction, bool& confirmed)
+    const std::string& folder, double duration, const std::string& embedded_title,
+    int load_id, const nlohmann::json& correction, bool& confirmed)
 {
     const auto cancelled = [&] {
         return state.worker_stop.load(std::memory_order_acquire) || state.file_load_id != load_id;
     };
+    const auto folder_name = correction.value("automatic", false)
+        ? video_name_from_folder(filename, folder, duration, embedded_title) : std::nullopt;
     auto match = recognize_anime(filename, correction, {search_anilist_page, fetch_anilist_by_id},
-        cancelled, confirmed, folder);
+        cancelled, confirmed, folder, folder_name);
     if (!match || cancelled()) return;
 
     std::lock_guard lock(state.anime_mutex);
@@ -343,6 +346,8 @@ static void anime_worker_loop(rich_presence_state& state)
         nlohmann::json correction;
         std::string filename_str;
         std::string folder;
+        double duration;
+        std::string embedded_title;
 
         {
             std::unique_lock<std::mutex> lock(state.worker_mutex);
@@ -360,13 +365,15 @@ static void anime_worker_loop(rich_presence_state& state)
             correction = state.pending_correction;
             filename_str = std::move(state.pending_filename);
             folder = std::move(state.pending_folder);
+            duration = state.pending_duration;
+            embedded_title = std::move(state.pending_embedded_title);
             state.has_pending_lookup = false;
         }
 
         bool confirmed = true;
         try
         {
-            process_anime_lookup(state, filename_str, folder, current_load_id, correction, confirmed);
+            process_anime_lookup(state, filename_str, folder, duration, embedded_title, current_load_id, correction, confirmed);
         }
         catch (...)
         {
@@ -434,6 +441,9 @@ static void on_eligibility_changed(rich_presence_state& state)
                     state.pending_load_id = current_load_id;
                     state.pending_filename = filename_str;
                     state.pending_folder = path_utf8(fs::u8path(state.current_file_path).parent_path().filename());
+                    state.pending_duration = 0;
+                    mpv_get_property(state.mpv, "duration", MPV_FORMAT_DOUBLE, &state.pending_duration);
+                    state.pending_embedded_title = get_mpv_string(state.mpv, "metadata/by-key/title");
                     state.pending_correction = state.correction;
                     state.pending_correction["automatic"] = state.sources.value("source",std::string("auto")) == "auto";
                     state.has_pending_lookup = true;
@@ -971,6 +981,9 @@ static void handle_file_loaded(rich_presence_state& state)
         state.pending_load_id = current_load_id;
         state.pending_filename = filename_str;
         state.pending_folder = path_utf8(fs::u8path(state.current_file_path).parent_path().filename());
+        state.pending_duration = 0;
+        mpv_get_property(state.mpv, "duration", MPV_FORMAT_DOUBLE, &state.pending_duration);
+        state.pending_embedded_title = get_mpv_string(state.mpv, "metadata/by-key/title");
         state.pending_correction = state.correction;
         state.pending_correction["automatic"] = state.sources.value("source",std::string("auto")) == "auto";
         state.has_pending_lookup = true;
@@ -1497,6 +1510,19 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 double duration_s = 0;
                 mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
                 sample["duration"] = duration_s;
+                if (source == "auto" && media.video && !sample["remote"].get<bool>())
+                {
+                    const auto folder = path_utf8(fs::u8path(state.current_file_path).parent_path().filename());
+                    if (const auto fallback = video_name_from_folder(sample["filename"].get<std::string>(), folder,
+                        duration_s, get_mpv_string(state.mpv, "metadata/by-key/title")))
+                    {
+                        sample["folder_title"] = fallback->title;
+                        sample["folder_year"] = fallback->year;
+                        if (fallback->season && fallback->episode)
+                            sample["folder_episode"] = {*fallback->season, *fallback->episode};
+                        sample["folder_has_episode"] = fallback->episode.has_value();
+                    }
+                }
                 if (source == "verify-tv") sample["anime_runtime_conflict"] = route.runtime_conflict;
                 sample["recording"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_TRACKID");
                 sample["release"] = get_mpv_string(state.mpv,"metadata/by-key/MUSICBRAINZ_ALBUMID");

@@ -61,6 +61,8 @@ To open a page from the mpv console, use `script-message-to mpv_rich_presence me
 
 Some releases include both a distributor season number and a series-wide episode, such as `S02E02 (053)`. Automatic can use the explicit series-wide number and follow AniList's sequel links to resolve it. A folder with a named arc can also help when its name matches an AniList title or alias returned for the series. The folder comparison happens locally.
 
+For files with no usable title, Automatic can use the immediate folder name. For example, `Example Show/S02E04.mkv` supplies the show title and a specific episode. A bare number such as `04.mkv` can use AniList's episode numbering. TMDB or TVmaze also needs a season from the filename or folder. A generically named movie needs a feature-length runtime and a unique catalog match. Include the year in the folder name, such as `Example Film (2024)`, to distinguish remakes. Lookups send the inferred title and year when available. They do not send the full path.
+
 Common camera and screen recording names stay local in Automatic. Short videos with a bare title and no year, episode marker or TMDB ID skip the fallback movie search. Use **Local only** on a file or folder when you always want the filename or embedded metadata.
 
 Movie and TV lookup prefers TMDB. Wikidata and TVmaze provide fallbacks. Air-date episodes use TVmaze. For music, the card starts with local tags. MusicBrainz checks title, credits, duration and release edition, and Cover Art Archive supplies public artwork when available. An embedded cover stays in mpv. If the music tags are incomplete or inconclusive, the plugin can send a Chromaprint fingerprint and the track duration to AcoustID. The audio file stays on your device.

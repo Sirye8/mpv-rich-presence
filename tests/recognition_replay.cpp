@@ -34,15 +34,23 @@ static json run(const json& test)
         }
     };
     std::optional<anime_match> anime;
+    std::optional<folder_video_name> folder_name;
+    const auto folder = test.value("folder", std::string{});
+    const auto filename = test.at("filename").get<std::string>();
+    const double duration = test.at("duration");
     if (test.at("video").get<bool>())
-        anime = recognize_anime(test.at("filename").get<std::string>(),
+    {
+        const auto tags = test.value("tags", json::object());
+        folder_name = video_name_from_folder(filename, folder, duration, tags.value("title", std::string{}));
+        anime = recognize_anime(filename,
             test.value("correction", json{{"automatic", true}}),
-            catalog, [] { return false; }, confirmed, test.value("folder", std::string{}));
+            catalog, [] { return false; }, confirmed, folder, folder_name);
+    }
 
     const auto route = route_recognition("auto", true, true, false, false, false, !confirmed,
         bool(anime), true, anime && anime->fuzzy_episode, anime ? anime->media.duration_minutes : 0,
-        anime ? anime->conflicting_anime_minutes : 0, test.at("duration").get<double>());
-    return {
+        anime ? anime->conflicting_anime_minutes : 0, duration);
+    json result = {
         {"source", route.source}, {"runtime_conflict", route.runtime_conflict},
         {"hide_without_provider", route.hides_anime(true, false, false)},
         {"hide_on_provider_failure", route.hides_anime(true, false, true)},
@@ -54,6 +62,15 @@ static json run(const json& test)
         {"review", anime ? anime->episode_review : ""},
         {"confirmed", confirmed}, {"queries", std::move(requests)}
     };
+    if (folder_name && route.source == "auto")
+    {
+        result["folder_title"] = folder_name->title;
+        result["folder_year"] = folder_name->year;
+        result["folder_has_episode"] = folder_name->episode.has_value();
+        if (folder_name->season && folder_name->episode)
+            result["folder_episode"] = {*folder_name->season, *folder_name->episode};
+    }
+    return result;
 }
 
 int main()

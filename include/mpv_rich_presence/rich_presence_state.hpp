@@ -135,6 +135,8 @@ namespace mpvrp
         int pending_load_id = 0;
         std::string pending_filename = "";
         std::string pending_folder;
+        double pending_duration = 0;
+        std::string pending_embedded_title;
         std::atomic<bool> worker_stop{false};
         std::thread worker_thread;
 

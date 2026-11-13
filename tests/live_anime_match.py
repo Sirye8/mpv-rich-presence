@@ -141,6 +141,13 @@ def verify(package, mpv, ffmpeg):
             player_samples(config, numbered, mpv, os.environ, numbered_episode, 25)
         print("Distributor S04E16 (170) stays episode 170 and absolute episode 172 becomes Season 2, episode 2")
 
+        folder = root / "Youjo Senki S2"
+        folder.mkdir()
+        numbered = folder / "08.mkv"
+        shutil.copyfile(anime, numbered)
+        player_samples(config, numbered, mpv, os.environ, season_two, 25)
+        print("Automatic uses the folder title for a bare episode filename")
+
         black_clover = root / "[SubsPlease] Black Clover - 174 (1080p) [720FB31C].mkv"
         shutil.copyfile(anime, black_clover)
         database = config / "scripts/mpv-rich-presence/data.sqlite3"
