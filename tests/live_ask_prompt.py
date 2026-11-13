@@ -18,6 +18,7 @@ DRIVER = r"""
 local action=os.getenv("MPVRP_ASK_ACTION")
 local auto_dismiss=os.getenv("MPVRP_ASK_DISMISS")=="yes"
 local signal=os.getenv("MPVRP_ASK_SIGNAL")
+local resume_signal=signal..".resume"
 local stop=signal..".stop"
 local trace=os.getenv("MPVRP_ASK_TRACE")
 local capture=os.getenv("MPVRP_ASK_CAPTURE")
@@ -75,12 +76,18 @@ mp.register_event("file-loaded",function()
         else mp.commandv("quit") end
     elseif revisit and loaded==3 then
         log("returned")
-        mp.add_timeout(1,function() mp.set_property_bool("pause",false) end)
     end
 end)
 local utils=require("mp.utils")
 mp.add_periodic_timer(.1,function()
     if utils.file_info(stop) then mp.commandv("quit") end
+end)
+local resume_timer
+resume_timer=mp.add_periodic_timer(.05,function()
+    if loaded==3 and utils.file_info(resume_signal) then
+        resume_timer:kill()
+        mp.set_property_bool("pause",false)
+    end
 end)
 local timer
 timer=mp.add_periodic_timer(.05,function()
@@ -282,6 +289,18 @@ def verify(package, mpv, ffmpeg, capture=None, uosc=None):
                     # Let the Lua bridge receive and arm the ready proposal.
                     time.sleep(1.5)
                     signal.touch()
+                if action.startswith("osc-"):
+                    deadline = time.monotonic() + 30
+                    with closing(sqlite3.connect(database)) as db:
+                        while time.monotonic() < deadline and process.poll() is None:
+                            row = db.execute("SELECT value FROM records WHERE category='player'").fetchone()
+                            player = json.loads(row[0]) if row else {}
+                            if player.get("session", 0) > 1 and player.get("watch_episode") and player.get("media") == 195604:
+                                signal.with_suffix(".resume").touch()
+                                break
+                            time.sleep(0.05)
+                        else:
+                            raise AssertionError(f"{timing}/{action}: returning episode was not recognized")
                 assert process.wait(15) == 0
                 events = [
                     (name, float(when))
