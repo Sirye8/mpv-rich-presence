@@ -870,6 +870,11 @@ return function(make_sheet, send, options, help)
                     service("sweep-watch")
                 end)
             end)
+            row("Reset all watch data",function()
+                confirm("Clear local watch timers, viewing cycles, progress history and pending updates for every account on this install? Saved settings and your AniList list entries stay as they are.",function()
+                    service("reset-watch",{notice_page="Saved data"})
+                end)
+            end)
             row("Reset everything",function() confirm("Clear local profiles, matches, caches and watch history, disconnect AniList, and restore the defaults from rich-presence.conf.",function()
                 scopes={}; service("reset")
             end) end)
@@ -986,7 +991,8 @@ return function(make_sheet, send, options, help)
         if not ui.open then return end
         local key=tostring(value.session).."/"..tostring(value.match).."/"..tostring((value.account or {}).generation)
         if key~=edit_key then edit=nil; edit_base=nil; list_status=nil; pending=nil; draft={}; edit_key=key end
-        if snap.session~=value.session and ui.dismiss_choices then ui.dismiss_choices(false) end
+        if (snap.session~=value.session or (snap.account or {}).generation~=(value.account or {}).generation)
+            and ui.dismiss_choices then ui.dismiss_choices(false) end
         snap=value
         for page,scope in pairs(scopes) do
             if (snap.save_scopes or {})[page]==scope then scopes[page]=nil end

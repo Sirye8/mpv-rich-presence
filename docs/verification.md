@@ -15,7 +15,7 @@ The in-player interface and tracking build on [`v1.0.10`](https://github.com/Sir
 
 ## Repeatable checks
 
-- The account and tracking regressions cover settings transfers through a v2.0.0 database, preservation of newer fields, per-cycle retention, final-episode completion cleanup, and rewatch confirmation.
+- The account and tracking regressions cover settings transfers through a v2.0.0 database, hidden tracking preferences, provider match metadata, per-cycle retention, final-episode completion cleanup, and the all-account watch reset. The panel checks verify that dropdowns keep surrounding settings in place and support keyboard, pointer, scroll, and hover-away dismissal.
 
 - `ctest --test-dir build -C Release --output-on-failure`: native regressions, account/tracking tests and Original SDK-call fixtures. Account tests cover two-process credit/write deduplication, stale responses, scoped deletion, disconnect races and sampling during a blocked account operation.
 - `node --test tests/cloudflare.test.mjs`: encrypted ticket handoff, verifier checks, expiry, the registered public callback, and credential isolation and route restrictions for the TMDB relay.

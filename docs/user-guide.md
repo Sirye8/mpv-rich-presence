@@ -59,7 +59,7 @@ Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the 
 
 Choosing a preset restores its appearance defaults for the selected save scope and media layout. Choosing a preset for **All media** also resets media-specific overrides saved at that scope. Changing an appearance field marks the layout **Custom** and keeps the selected preset as its base. Use **Apply** to save.
 
-Click a dropdown row or press Enter to open its choices. Use the mouse or Up and Down to choose a value, then select it. Escape closes the list. The current value has a check mark, and longer lists use the panel's scrollbar. Each page remembers its **Save for** setting across navigation and restarts. If a file or folder scope is unavailable, open suitable media or explicitly choose another scope before saving.
+Click a dropdown row or press Enter to open a popup beside it. The settings and scrollbar for the page stay in place. The current choice has a check mark. Use the mouse or Up and Down to move through the choices, and Enter to select. Long lists have their own scrollbar and respond to the wheel or touchpad. Press Escape, click the same setting again, or click elsewhere in the panel to dismiss the popup. When you open it with the mouse, it also closes shortly after the pointer leaves both the setting and the popup. Each page remembers its **Save for** scope across navigation and restarts. If a file or folder scope is unavailable, open suitable media or explicitly choose another scope before saving.
 
 To open a page from the mpv console, use `script-message-to mpv_rich_presence menu Appearance`.
 
@@ -177,7 +177,7 @@ Open **Folder filters** from **Privacy & windows** or **Recognition & folders**.
 
 **Release idle Discord pin** is off by default under **Privacy & windows**. Turn it on to release a window's exclusive pin when playback ends, sharing becomes unavailable, or the pause timeout expires. Pin the window again if you want to reclaim it.
 
-The database lives in `scripts/mpv-rich-presence/data.sqlite3` under your config directory. **Clear watch** resets the affected counters and removes their pending proposals and skips. If you keep watching the same episode, it can qualify again once it earns the threshold. Completed local history and saved AniList progress are kept. **Reset everything** clears the local profiles, matches, caches and history, disconnects the account and restores the conf defaults. It leaves your AniList list as it is.
+The database lives in `scripts/mpv-rich-presence/data.sqlite3` under your config directory. **Clear watch** resets the affected counters and removes their pending proposals and skips. **Reset all watch data** clears watch timers, viewing cycles, cached list entries, local history, pending updates, and skips for every account on the install. Your saved settings, match rules, metadata cache, and AniList sign-in remain available. AniList keeps any progress already saved to your remote list. If playback continues with tracking enabled, new watch time starts from zero. **Reset everything** also clears settings, matches, and caches, disconnects AniList, and restores the conf defaults.
 
 ## Transfer panel settings
 

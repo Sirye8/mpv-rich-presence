@@ -102,9 +102,25 @@ local function verify()
     assert(updates==before,"Closed menu redrew")
     local picked
     ui.show("Test")
+    bindings.HOME()
+    local function find_hit(key)
+        for _,hit in ipairs(ui.hits) do if hit.key==key then return hit end end
+    end
+    local function at(hit)
+        local factor=math.min(math.max(.76,math.min(height/740,2.4)),width/300,height/380)
+        x,y=(hit.x+4)*factor,(hit.y+4)*factor
+    end
+    local function click()
+        mouse_bindings[3][3]()
+        mouse_bindings[3][4]()
+    end
+    local original_anchor, original_back=find_hit("row:a"),find_hit("back")
     ui.choose("a",{{label="First choice",value=1,selected=true},{label="Second choice",value=2}},
         function(value) picked=value end)
     assert(paint:find("First choice",1,true) and paint:find("Second choice",1,true))
+    assert(paint:find("Added asynchronously",1,true))
+    assert(find_hit("row:a").y==original_anchor.y and find_hit("back").y==original_back.y,
+        "Opening a dropdown moved the settings or footer")
     bindings.DOWN()
     bindings.ESC()
     assert(picked==nil and not paint:find("Second choice",1,true))
@@ -112,6 +128,36 @@ local function verify()
         function(value) picked=value end)
     bindings.ENTER()
     assert(picked==2 and ui.open and not paint:find("First choice",1,true))
+    local entries={}
+    for i=1,15 do entries[i]={label="Option "..i,value=i,selected=i==1} end
+    for _,row in ipairs(rows) do
+        if row.id=="a" then row.run=function() ui.choose("a",entries,function(value) picked=value end) end end
+    end
+    ui.draw()
+    at(find_hit("row:a")); click()
+    assert(find_hit("choice:1") and not find_hit("choice:15"))
+    at(find_hit("row:a")); click()
+    assert(not find_hit("choice:1"))
+    at(find_hit("row:a")); click()
+    x,y=0,0
+    ui.mouse_moved(nil,{hover=false})
+    local away=timers[#timers]
+    assert(away.seconds==.32 and not away.killed)
+    at(find_hit("choice:1"))
+    ui.mouse_moved(nil,{hover=true})
+    assert(away.killed,"Entering the dropdown did not cancel hover-away dismissal")
+    mouse_bindings[2][2]()
+    assert(find_hit("choice:4") and not find_hit("choice:1"),"Dropdown wheel moved the page instead of the options")
+    for _=1,5 do mouse_bindings[2][2]() end
+    at(find_hit("choice:15")); click()
+    assert(picked==15 and not find_hit("choice:15"))
+    at(find_hit("row:a")); click()
+    x,y=0,0
+    ui.mouse_moved(nil,{hover=false})
+    away=timers[#timers]
+    away.killed=true
+    away.fn()
+    assert(not find_hit("choice:1") and ui.open,"Moving away should close only the dropdown")
     ui.close()
 
     width,height=1280,720
@@ -262,6 +308,9 @@ local function verify()
     assert(account.link and account.avatar=="https://s4.anilist.co/avatar.png")
     account.run()
     assert(opened=="https://anilist.co/user/Viewer")
+    find("Saved data","Reset all watch data").run()
+    find("Confirm","Confirm").run()
+    assert(job.op=="reset-watch" and job.notice_page=="Saved data")
     assert(model.theme().opacity==.87 and model.theme().blur)
     find("Panel theme","Background blur").run()
     assert(applied.values.preset=="custom" and applied.values.blur==false)

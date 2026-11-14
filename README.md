@@ -22,7 +22,7 @@ Use **Appearance → Panel position** to move the panel. **Apply** saves card ed
 
 Use **Appearance → Panel theme** to change the panel's colors, opacity, or live background blur. Dark glass is the default.
 
-Click a setting with a dropdown arrow to pick a value directly. Each settings page remembers its **Save for** scope. Use **Saved data → Settings transfer** to move your settings between installs. [Settings transfer guide](docs/user-guide.md#transfer-panel-settings)
+Click a setting with a dropdown arrow to open its choices over the current page. Each settings page remembers its **Save for** scope. **Saved data** has controls to transfer settings and reset local watch data separately. [User guide](docs/user-guide.md#manage-privacy-and-saved-data)
 
 ### Sharing and privacy
 

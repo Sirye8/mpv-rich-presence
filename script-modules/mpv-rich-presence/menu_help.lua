@@ -145,6 +145,7 @@ local help = {
     ["Add folder path"]="Enter an absolute directory path. The rule also applies to files in subfolders.",
     ["Restore conf filter"]="Remove the panel's filter mode and folder list overrides, then use both values from rich-presence.conf.",
     ["Reset everything"]="Clear local settings, saved matches, caches and watch history. Disconnect AniList and restore the defaults from rich-presence.conf. This leaves your remote AniList list as it is.",
+    ["Reset all watch data"]="Clear timers, viewing cycles, local progress and watch history, cached list entries, pending proposals, and skips for every account on this install. Your panel settings, saved matches, metadata caches, AniList sign-in and remote list stay as they are. Tracking can start counting again during playback.",
     ["Fingerprint this file"]="Analyze up to the first two minutes of the local audio and look up the resulting fingerprint on AcoustID. Review the results before saving a match. The package supplies fpcalc and the application key.",
     ["Sharing"]="Why this window is sharing or hidden.",
     ["SDK"]="Latest result from the Discord SDK.",
