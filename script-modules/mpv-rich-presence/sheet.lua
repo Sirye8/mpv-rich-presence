@@ -62,7 +62,7 @@ return function(model)
     local ui = {open=false, page="Menu", memory={}, stack={}, hits={}}
     local overlay, layout, refresh_timer, toast_timer, hover_timer, animation_timer
     local last_frame, last_terminal
-    local keys, editing, pressed, hovered, tooltip, drag = {}
+    local keys, editing, pressed, hovered, tooltip, drag, dropdown = {}
     local stop_edit,controls
     local scale = 1
     local motion = {shell=0, page=1, focus=1, hover=0, hint=0, scroll=0}
@@ -193,8 +193,8 @@ return function(model)
                 local color = item.primary and theme.ink or (item.disabled and theme.muted or theme.accent)
                 draw_cell(ass,item,item.value,item.label_right+12,y+6+rise,item.value_right,14,color,content,true)
             end
-            if item.fn and item.toggle==nil and (item.adjust or not item.value or item.link) and not item.primary then
-                label(ass,r-10,y+4+rise,item.link and "↗" or "›",16,theme.accent,.8*content,9)
+            if item.fn and item.toggle==nil and (item.adjust or item.dropdown or not item.value or item.link) and not item.primary then
+                label(ass,r-10,y+4+rise,item.link and "↗" or item.dropdown and "⌄" or "›",16,theme.accent,.8*content,9)
             end
             if item.toggle~=nil then
                 local sx = r-46
@@ -395,7 +395,7 @@ return function(model)
         mp.unobserve_property(ui.draw)
         mp.unobserve_property(ui.mouse_moved)
         unbind()
-        ui.stack,ui.hits,pressed,editing,drag = {},{},nil,nil,nil
+        ui.stack,ui.hits,pressed,editing,drag,dropdown = {},{},nil,nil,nil,nil
         model.closed()
         tweens={}
         if layout and overlay then animate("shell",motion.shell,0,.14) end
@@ -408,6 +408,7 @@ return function(model)
     end
 
     local function show_page(page, direction)
+        dropdown=nil
         if editing and stop_edit then stop_edit(false) end
         if model.changed then model.changed() end
         if layout then layout.direction=direction end
@@ -425,14 +426,61 @@ return function(model)
     end
 
     function ui.back()
+        if dropdown then ui.dismiss_choices(); return end
         if model.leaving then model.leaving(ui.page) end
         local page = table.remove(ui.stack)
         if page then show_page(page,-1) else ui.close() end
     end
 
+    local function displayed_rows()
+        local rows = model.rows(ui.page)
+        if not dropdown then return rows end
+        local expanded={}
+        for _,row in ipairs(rows) do
+            if row.id==dropdown.id then
+                expanded[#expanded+1]={id=row.id,label=row.label,tip="Close this list without changing the setting.",
+                    dropdown=true,run=ui.dismiss_choices}
+                for _,option in ipairs(dropdown.rows) do expanded[#expanded+1]=option end
+                return expanded
+            end
+        end
+        dropdown=nil
+        return rows
+    end
+
+    function ui.dismiss_choices(redraw)
+        if not dropdown then return end
+        local mem=ui.memory[ui.page]
+        mem.id,mem.focus,mem.top,mem.reveal=dropdown.id,dropdown.focus,dropdown.top,true
+        dropdown=nil
+        pressed,drag=nil,nil
+        clear_hover(true)
+        if redraw~=false then ui.draw() end
+    end
+
+    function ui.choose(id, entries, on_select)
+        local mem=ui.memory[ui.page]
+        dropdown={id=id,rows={},focus=mem.focus,top=mem.top}
+        mem.id=dropdown.id
+        for i,entry in ipairs(entries) do
+            local id="choice:"..i
+            if not entry.disabled and (mem.id==dropdown.id or entry.selected) then mem.id=id end
+            dropdown.rows[i]={id=id,label=(entry.selected and "✓  " or "    ")..entry.label,
+                tip=entry.detail,disabled=entry.disabled,run=function()
+                    ui.dismiss_choices(false)
+                    on_select(entry.value)
+                    ui.draw()
+                end}
+        end
+        mem.reveal=true
+        pressed,drag=nil,nil
+        clear_hover(true)
+        ui.draw()
+    end
+
     function ui.draw()
         if not ui.open or (editing and editing.dialog) then return end
-        local rows = model.rows(ui.page)
+        local rows=displayed_rows()
         if editing then
             local found=false
             for i,row in ipairs(rows) do
@@ -484,7 +532,7 @@ return function(model)
         local bounds = {math.floor(left*scale),math.floor(top*scale),math.ceil(right*scale),math.ceil(bottom*scale)}
         if model.backdrop then
             theme=model.theme and model.theme() or default_theme
-            model.backdrop(bounds,16*scale,theme.blur,theme.strength)
+            model.backdrop(bounds,16*scale,theme.blur,theme.strength,theme.method)
         end
         local bounds_key = table.concat(bounds,":")
         if not layout or layout.bounds~=bounds_key then
@@ -540,13 +588,13 @@ return function(model)
                 item=hit(layout.rows,pane+8,y,right-8,y+row_height,i,key,not row.disabled and row.run or nil,row.label,row.tip)
             end
             item.focused,item.disabled,item.primary,item.toggle,item.adjust,item.plain = mem.focus==i,row.disabled,row.primary,row.toggle,row.adjust,row.plain
-            item.editor=row.editor
+            item.editor,item.dropdown=row.editor,row.dropdown
             item.avatar=row.avatar
             local title,value=row.label:match("^(.-)   (.+)$")
             item.caption,item.value_text,item.link=title or row.label,value,row.link
             if item.stepper then value=nil end
             local label_left=item.x+(row.plain and 5 or 13)
-            local inset=row.avatar and 52 or (row.adjust or row.link or (item.fn and not value)) and 26 or 11
+            local inset=row.avatar and 52 or (row.adjust or row.dropdown or row.link or (item.fn and not value)) and 26 or 11
             item.label_right=item.r-inset
             if row.toggle~=nil then
                 item.label_right=item.r-49
@@ -574,6 +622,9 @@ return function(model)
             hit(layout.footer,pane+8,bottom-35,mid-3,bottom-7,"cancel","cancel",function() stop_edit(false) end,"Cancel","Discard this edit.")
             local save=hit(layout.footer,mid+3,bottom-35,right-8,bottom-7,"save","save",function() stop_edit(true) end,"Done","Use the entered value.")
             save.primary=true
+        elseif dropdown then
+            hit(layout.footer,pane+8,bottom-35,right-8,bottom-7,"cancel-choices","cancel-choices",ui.dismiss_choices,
+                "Cancel","Close this list without changing the setting.")
         elseif model.compact then
             hit(layout.footer,right-38,top+6,right-8,top+34,"close","close",ui.close,"×",
                 "Dismiss this prompt and keep the update for later.")
@@ -624,9 +675,11 @@ return function(model)
     local function activate(delta)
         local mem=ui.memory[ui.page]
         mem.reveal=true
-        local row=model.rows(ui.page)[mem.focus]
+        local row=displayed_rows()[mem.focus]
         if row and not row.disabled then
-            if delta and row.adjust then row.adjust(delta) elseif not delta and row.run then row.run() end
+            if delta and row.adjust then row.adjust(delta)
+            elseif delta==-1 and dropdown then ui.dismiss_choices()
+            elseif row.run and (not delta or (delta==1 and (row.dropdown or dropdown))) then row.run() end
             ui.draw()
         end
     end

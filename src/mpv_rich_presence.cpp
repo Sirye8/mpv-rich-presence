@@ -581,6 +581,9 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             !((key=="tv_rules" || key=="sidecar_metadata" || key=="confirm_fingerprint") && val.is_boolean())) return false;
         if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
             val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
+        if (category == "watch-retention" && !(key=="months" && val.is_number_integer() && val>=0 && val<=120)) return false;
+        if (category == "save-scopes" && !((key=="Appearance" || key=="Recognition & folders" || key=="Privacy & windows" || key=="AniList") &&
+            (val=="global" || val=="folder" || val=="file"))) return false;
         if (category=="panel-theme")
         {
             static const std::regex rgb("[0-9A-Fa-f]{6}");
@@ -588,7 +591,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
                 ((key=="background" || key=="accent") && val.is_string() &&
                     std::regex_match(val.get_ref<const std::string&>(),rgb)) ||
                 (key=="opacity" && val.is_number_integer() && val>=40 && val<=100) ||
-                (key=="strength" && val.is_number_integer() && val>=2 && val<=12) ||
+                (key=="strength" && val.is_number_integer() && val>=2 && val<=32) ||
+                (key=="method" && (val=="classic" || val=="gaussian" || val=="box")) ||
                 (key=="blur" && val.is_boolean()))) return false;
         }
         if (category == "match" && !((key == "id" && val.is_number_integer() && val > 0 && val <= INT32_MAX)
@@ -718,6 +722,11 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     state.store_failed = false;
                 }
                 read_profiles(state);
+                if (state.store->has_watch_records())
+                {
+                    const char* args[] = {"script-message-to","mpv_rich_presence","start-service",state.instance_id.c_str(),nullptr};
+                    mpv_command(state.mpv,args);
+                }
                 return;
             }
             if (req.value("session", state.file_session) != state.file_session) return;
@@ -874,7 +883,8 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             else if ((action == "apply" || action == "clear") && state.store)
             {
                 const auto category = req.at("category").get<std::string>();
-                if (category == "panel" || category == "recognition-options" || category=="panel-theme")
+                if (category == "panel" || category == "recognition-options" || category=="panel-theme" ||
+                    category=="watch-retention" || category=="save-scopes")
                 {
                     if (action == "clear")
                     {
@@ -1352,6 +1362,25 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     uint64_t observed_session = UINT64_MAX;
     bool last_allowed = false;
     bool last_sample_active = false, last_watch_episode = false;
+    uint64_t last_eof_session = UINT64_MAX;
+    const auto record_watch_eof = [&] {
+        if (!state.store || !lookup_allowed(state) || last_eof_session==state.file_session) return;
+        auto player=state.store->get("player",state.instance_id);
+        const auto total=player.value("total",0);
+        if (player.value("session",UINT64_MAX)!=state.file_session || !player.value("watch",false) ||
+            !player.value("watch_episode",false) || total<=0 || player.value("media",0)<=0 ||
+            player.value("episode",std::string{})!=std::to_string(total)) return;
+        const auto account=state.store->get("account","current");
+        if (!account.contains("generation") || account.value("expired",false)) return;
+        const auto duration=player.value("duration",0.0);
+        if (duration<=0) return;
+        const auto now=chrono::duration<double>(chrono::system_clock::now().time_since_epoch()).count();
+        state.store->put("watch-eof",state.instance_id,{{"account",account.at("generation")},
+            {"media",player.at("media")},{"total",total},{"time",now},{"duration",duration},{"speed",player.value("speed",1.0)},
+            {"session",state.file_session},{"resume",player.at("tracking").value("resume",true)},
+            {"threshold",player.at("tracking").value("threshold",15)}});
+        last_eof_session=state.file_session;
+    };
     std::string last_sample_episode;
     int last_sample_id = -1;
     double last_sample_speed = 1;
@@ -1410,6 +1439,8 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             }
             else if (event->event_id == MPV_EVENT_END_FILE)
             {
+                const auto* end=static_cast<const mpv_event_end_file*>(event->data);
+                if (end && end->reason==MPV_END_FILE_REASON_EOF) record_watch_eof();
                 publish_ask_offer(state, {});
                 ++state.file_load_id;
                 ++state.file_session;
@@ -1442,7 +1473,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         double media_time_left_s = 0.0;
         int is_media_paused = 0;
         int is_seeking = 0;
-        int is_caching = 0;
+        int is_caching = 0, eof_reached = 0;
         double current_speed = 1.0;
         double playtime_left_s = 0.0;
 
@@ -1451,6 +1482,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         mpv_get_property(state.mpv, "time-remaining/full", MPV_FORMAT_DOUBLE, &media_time_left_s);
         mpv_get_property(state.mpv, "pause", MPV_FORMAT_FLAG, &is_media_paused);
         mpv_get_property(state.mpv, "paused-for-cache", MPV_FORMAT_FLAG, &is_caching);
+        if (state.store && last_watch_episode && last_eof_session!=state.file_session)
+        {
+            mpv_get_property(state.mpv,"eof-reached",MPV_FORMAT_FLAG,&eof_reached);
+            if (eof_reached) record_watch_eof();
+        }
 
         if (mpv_get_property(state.mpv, "speed", MPV_FORMAT_DOUBLE, &current_speed) < 0 || current_speed <= 0.01)
             current_speed = 1.0;
@@ -1686,6 +1722,12 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
                 {"match_title",media.anime_title}};
             sample["source"] = source;
+            if (watch_episode)
+            {
+                double duration_s=0;
+                mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
+                sample["duration"]=duration_s;
+            }
             if (extra)
             {
                 sample["title"] = media.title;
@@ -1802,10 +1844,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"yield_idle_pin",state.yield_idle_pin},
                 {"match", media.anilist_id}, {"episode", media.episode}, {"total", media.total}, {"title", media.anime_title},
                 {"appearance", state.appearance}, {"privacy", state.privacy}, {"tracking", state.tracking},
+                {"save_scopes",state.store ? state.store->get("save-scopes","global") : nlohmann::json::object()},
+                {"watch_retention",state.store ? state.store->get("watch-retention","global") : nlohmann::json::object()},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
                 {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"appearance_scope",state.appearance_scope},
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
-                {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-")},
+                {"has_file", !state.scope_path.empty()},
+                {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-") &&
+                    !fs::u8path(state.scope_path).parent_path().empty()},
                 {"folder_filter", {
                     {"mode",state.folder_filter.value("mode",state.folder_filter_mode)},
                     {"folders",state.folder_filter.contains("folders") ? state.panel_folders : state.folder_list},

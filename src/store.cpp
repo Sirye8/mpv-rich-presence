@@ -104,6 +104,13 @@ namespace mpvrp
                     {owner,owner,owner,owner});
     }
 
+    bool profile_store::has_watch_records() const
+    {
+        auto stmt = prepare(db, "SELECT 1 FROM records WHERE category IN "
+                            "('watch','pending','skipped','history','cycle','watch-eof','watch-finished','watch-completed') LIMIT 1");
+        return sqlite3_step(stmt.get()) == SQLITE_ROW;
+    }
+
     int profile_store::version() const
     {
         auto stmt = prepare(db, "PRAGMA data_version");
@@ -112,7 +119,7 @@ namespace mpvrp
     }
 
     static constexpr auto saved_records = " FROM records WHERE (category IN "
-        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options') "
+        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options','save-scopes','watch-retention') "
         "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)="
         "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT))) ";
 

@@ -27,6 +27,7 @@ from account import (
 )
 from backend import Worker
 from providers import fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
+from settings_transfer import export_settings, import_settings
 
 
 class CallbackTests(unittest.TestCase):
@@ -1579,6 +1580,100 @@ class TrackingTests(unittest.TestCase):
         watch = self.worker.get("watch",self.worker.cycle(self.account,self.player))
         self.assertEqual(watch["elapsed"],2)
         self.assertEqual(watch["coverage"],2)
+
+    def test_completed_cleanup_requires_final_playback_and_remote_confirmation(self):
+        scope,final="1/195604","1/195604/12/0"
+        self.player.update(episode="12",tracking={"mode":"manual"})
+        self.publish()
+        now=time.time()
+        self.worker.put("watch",final,{"elapsed":900,"last_watched":(now-1)*1000,"position":1100})
+        self.worker.put("history",scope+"/1/0",{"progress":1})
+        self.worker.put("watch","2/195604/12/0",{"elapsed":900})
+        self.worker.put("match","folder:/fixture",{"id":195604})
+        event=dict(account=self.account["generation"],media=195604,total=12,time=now,
+                   duration=1400,threshold=15,session=self.player["session"])
+        self.row.update(progress=12,status="COMPLETED")
+        self.worker.put("watch-eof","window",event)
+        self.worker.finish_watched_episode()
+        self.assertTrue(self.worker.get("watch",final),"Seeking to the end cleared history")
+        self.worker.put("watch",final,{"elapsed":900,"last_watched":(now-1)*1000,"position":1399})
+        self.worker.put("watch-eof","window",event)
+        self.row["status"]="CURRENT"
+        self.worker.finish_watched_episode()
+        self.assertTrue(self.worker.get("watch",final))
+        self.row["status"]="COMPLETED"
+        self.worker.handle(dict(op="read",account=self.account["generation"],session=self.player["session"],media=195604))
+        self.assertFalse(self.worker.get("watch",final))
+        self.assertFalse(self.worker.get("history",scope+"/1/0"))
+        self.assertTrue(self.worker.get("watch","2/195604/12/0"))
+        self.assertTrue(self.worker.get("match","folder:/fixture"))
+        self.assertTrue(self.worker.completed_in_window(scope,self.player))
+        self.assertFalse(self.worker.completed_in_window(scope,dict(self.player,session=999)))
+
+    def test_completion_cleanup_waits_for_rewatch_to_be_saved(self):
+        scope="1/195604"
+        self.worker.put("watch-finished",scope,dict(total=12,rewatch=True,repeat=2,time=time.time()))
+        self.worker.put("watch",scope+"/12/1",{"elapsed":900})
+        with self.worker.transaction():
+            self.assertFalse(self.worker.clear_completed_watch(scope,dict(status="COMPLETED",progress=12,repeat=2)))
+            self.assertTrue(self.worker.clear_completed_watch(scope,dict(status="COMPLETED",progress=12,repeat=3)))
+        self.assertFalse(self.worker.get("watch",scope+"/12/1"))
+
+    def test_retention_keeps_active_cycles_and_unresolved_writes(self):
+        old=time.time()-100*86400
+        for key in ("1/10/1/0","1/10/2/1","1/11/1/0","1/12/1/0","1/13/1/0"):
+            self.worker.put("watch",key,{"last_watched":old*1000})
+        self.worker.put("watch","1/10/3/1",{"last_watched":time.time()*1000})
+        self.worker.put("history","1/11/1/0",{"activity":old,"progress":1})
+        self.worker.put("cycle","1/11",{"number":0,"activity":old})
+        self.worker.put("pending","1/10/1/0",{"activity":old})
+        self.worker.put("write-intent","1/12",{"unresolved":True})
+        self.worker.put("watch-retention","global",{"months":0})
+        self.worker.sweep_watch(force=True)
+        self.assertTrue(self.worker.get("watch","1/11/1/0"))
+        self.worker.delete("watch-retention","global")
+        self.worker.sweep_watch(force=True)
+        for category,key in (("watch","1/10/1/0"),("pending","1/10/1/0"),("cycle","1/11"),("history","1/11/1/0"),("watch","1/13/1/0")):
+            self.assertFalse(self.worker.get(category,key),key)
+        self.assertTrue(self.worker.get("watch","1/10/2/1"))
+        self.assertTrue(self.worker.get("watch","1/12/1/0"))
+
+    def test_settings_transfer_round_trips_through_v2_0(self):
+        older=Worker(":memory:","legacy",{})
+        self.addCleanup(older.db.close)
+        older.db.execute("CREATE TABLE records(category TEXT, scope TEXT, value TEXT, PRIMARY KEY(category,scope))")
+        self.worker.put("appearance","folder:/Anime",{"anime_layout":{"preset":"clean"}})
+        theme={"preset":"custom","strength":32,"method":"gaussian","opacity":87}
+        self.worker.put("panel-theme","global",theme)
+        self.worker.put("watch-retention","global",{"months":2})
+        self.worker.put("watch","1/195604/4/0",{"elapsed":900})
+        path=self.worker.directory/"settings.json"
+        self.assertEqual(export_settings(self.worker.db,str(path)),3)
+        self.assertNotIn("account",{row["category"] for row in json.loads(path.read_text())["records"]})
+        with older.transaction():
+            count,notes=import_settings(older.db,str(path),legacy=True)
+        self.assertEqual((count,notes),(2,["panel-theme.method","panel-theme.strength","watch-retention.months"]))
+        self.assertEqual(older.get("panel-theme","global"),{"preset":"custom","opacity":87})
+        self.worker.delete("panel-theme","global")
+        path.unlink()
+        export_settings(older.db,str(path))
+        with self.worker.transaction():
+            self.assertEqual(import_settings(self.worker.db,str(path)),(3,[]))
+        self.assertEqual(self.worker.get("panel-theme","global"),theme)
+        self.assertEqual(self.worker.get("watch","1/195604/4/0")["elapsed"],900)
+        with self.assertRaisesRegex(ValueError,"already exists"):
+            export_settings(self.worker.db,str(path))
+
+    def test_invalid_settings_import_rolls_back(self):
+        path=self.worker.directory/"malformed.json"
+        path.write_text(json.dumps({"format":"mpv-rich-presence-settings","version":1,"records":[
+            dict(category="save-scopes",scope="global",value={"New page":"global"}),
+            dict(category="account",scope="current",value={"id":2}),
+        ]}),encoding="utf-8")
+        with self.assertRaises(ValueError), self.worker.transaction():
+            import_settings(self.worker.db,str(path))
+        self.assertEqual(self.worker.get("account","current"),self.account)
+        self.assertFalse(self.worker.db.execute("SELECT 1 FROM records WHERE category='settings-transfer'").fetchone())
 
 
 if __name__ == "__main__":

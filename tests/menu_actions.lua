@@ -1,12 +1,12 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 -- Exercise the same temporary bindings that mpv dispatches for a keyboard.
 local mode=os.getenv("MPVRP_MENU_TEST")
-local actions={"menu","DOWN","DOWN","DOWN","ENTER"}
+local actions={"menu","DOWN","DOWN","DOWN","ENTER","DOWN","ENTER"}
 if mode=="position" or mode=="inherit-position" then
-    actions={"menu","DOWN","DOWN","DOWN","DOWN",mode=="position" and "LEFT" or "RIGHT"}
+    actions={"menu","DOWN","DOWN","DOWN","DOWN","ENTER",mode=="position" and "END" or "UP","ENTER"}
 elseif mode=="apply" or mode=="reset-preset" then
     if mode=="reset-preset" then
-        actions={"menu","DOWN","DOWN","DOWN","RIGHT","LEFT"}
+        actions={"menu","DOWN","DOWN","DOWN","ENTER","ENTER"}
     end
     actions[#actions+1]="END"; actions[#actions+1]="ENTER"
 elseif mode=="custom" then

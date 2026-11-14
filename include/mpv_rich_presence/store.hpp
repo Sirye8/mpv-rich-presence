@@ -20,6 +20,7 @@ namespace mpvrp
         void release_pin(const std::string& owner);
         void close_window(const std::string& owner);
         bool blocked(const std::string& path) const;
+        bool has_watch_records() const;
         int version() const;
         nlohmann::json get(const std::string& category, const std::string& scope) const;
         nlohmann::json episode_watch(int viewer, int media, const std::string& episode) const;

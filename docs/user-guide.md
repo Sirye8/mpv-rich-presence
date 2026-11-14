@@ -55,9 +55,11 @@ Select a text field to edit it in place. Use **Done** or Enter to accept, **Canc
 
 Open **Appearance → Panel theme** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), or **Graphite** (opaque charcoal). Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
 
-Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the open panel. Other video outputs keep translucency. Custom settings accept six-digit RGB colors, 40 to 100% opacity, and a blur strength from 2 to 12 pixels. Turn off **Background blur** in the panel, or set `panel_blur=no` to change the startup default.
+Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the open panel. Other video outputs keep translucency. Custom settings accept six-digit RGB colors, 40 to 100% opacity, and a blur strength from 2 to 32 pixels. **Classic** keeps the original filter. **Gaussian** softens busy footage more evenly and takes more GPU samples. **Box** uses fewer samples and can leave more defined edges at high strengths. Turn off **Background blur** in the panel, or set `panel_blur=no` to change the startup default.
 
 Choosing a preset restores its appearance defaults for the selected save scope and media layout. Choosing a preset for **All media** also resets media-specific overrides saved at that scope. Changing an appearance field marks the layout **Custom** and keeps the selected preset as its base. Use **Apply** to save.
+
+Click a dropdown row or press Enter to open its choices. Use the mouse or Up and Down to choose a value, then select it. Escape closes the list. The current value has a check mark, and longer lists use the panel's scrollbar. Each page remembers its **Save for** setting across navigation and restarts. If a file or folder scope is unavailable, open suitable media or explicitly choose another scope before saving.
 
 To open a page from the mpv console, use `script-message-to mpv_rich_presence menu Appearance`.
 
@@ -136,6 +138,8 @@ For a matched fractional episode, recap, special, episode range or unclear seaso
 
 An entry already marked Rewatching gets its own viewing cycle. Turn on **Rewatch tracking** to offer a new cycle after watching episode 1 of a completed anime. Starting the cycle needs approval because it restarts AniList progress. Reaching the known final episode completes the rewatch and adds one to the repeat count. An unknown total can continue in Rewatching. Use **Start new viewing cycle** to reset local counters and pending updates for the matched entry.
 
+After you watch through the known final episode, the plugin clears that account's local timers, cycles, history, and pending or skipped updates once it confirms **Completed** on AniList. The same applies after a finished rewatch. The plugin needs tracked playback near the end and a confirmed list entry before it clears anything. You can refresh the list entry in mpv if you mark it Completed on AniList yourself. The remote list entry, saved settings and match corrections stay available.
+
 ## Review Ask updates
 
 | Ask timing | When it opens |
@@ -169,9 +173,24 @@ Open **Folder filters** from **Privacy & windows** or **Recognition & folders**.
 
 **Saved data** groups profiles, matches, caches and the current account's AniList records. Open a category to search or clear its entries. Metadata cache rows show their provider and expiry rather than the internal key. Hover for the key and the effect of clearing the record.
 
+**Watch data retention** defaults to three 30-day months since the last activity in each cycle. The helper removes expired timers, cycles, history and pending or skipped updates while mpv is running. Enter `0` to keep inactive cycles indefinitely. Completion cleanup still applies. Older records with usable timestamps keep those dates. Undated records start their retention period when the helper first checks them.
+
 **Release idle Discord pin** is off by default under **Privacy & windows**. Turn it on to release a window's exclusive pin when playback ends, sharing becomes unavailable, or the pause timeout expires. Pin the window again if you want to reclaim it.
 
 The database lives in `scripts/mpv-rich-presence/data.sqlite3` under your config directory. **Clear watch** resets the affected counters and removes their pending proposals and skips. If you keep watching the same episode, it can qualify again once it earns the threshold. Completed local history and saved AniList progress are kept. **Reset everything** clears the local profiles, matches, caches and history, disconnects the account and restores the conf defaults. It leaves your AniList list as it is.
+
+## Transfer panel settings
+
+Open **Alt+p → Saved data → Settings transfer**. **Export settings** writes a JSON backup to an absolute path you choose. **Import settings** replaces matching saved profiles and rules and keeps other existing settings. Backups include global, file, and folder settings, plus saved match rules. File and folder paths must still match your library on the receiving install. The backup omits account credentials, watch data, caches, and `rich-presence.conf`.
+
+Settings transfers support releases starting with v2.0.0. The JSON uses a versioned format. Settings an older build cannot apply are kept for a future re-export and listed in the import result. For v2.0.0, use the migration script from a newer ZIP with Python and close mpv before running it. First open and close the older install once so it creates its database.
+
+```text
+python /path/to/settings_transfer.py export /path/to/data.sqlite3 /path/to/settings.json
+python /path/to/settings_transfer.py import /path/to/data.sqlite3 /path/to/settings.json --target 2.0.0
+```
+
+Use the script at `scripts/mpv-rich-presence/modules/settings_transfer.py` in the newer ZIP. Quote any path with spaces. The Windows ZIP includes an interpreter under `scripts/mpv-rich-presence/runtime/python.exe`. Use the database for the install you are moving settings to or from. Use the panel on releases that include the transfer controls.
 
 Close all mpv instances before removing the plugin folder. The current account helper exits with the player, including when the player is forcibly stopped. If an older installation left a Python process behind, close the helper whose command line points to this plugin's `modules/backend.py`, then remove the folder.
 

@@ -22,6 +22,8 @@ Use **Appearance → Panel position** to move the panel. **Apply** saves card ed
 
 Use **Appearance → Panel theme** to change the panel's colors, opacity, or live background blur. Dark glass is the default.
 
+Click a setting with a dropdown arrow to pick a value directly. Each settings page remembers its **Save for** scope. Use **Saved data → Settings transfer** to move your settings between installs. [Settings transfer guide](docs/user-guide.md#transfer-panel-settings)
+
 ### Sharing and privacy
 
 - Anime cards can show the episode, release group, cover art and AniList link. Movie and TV cards use the matched title and available artwork. Music uses a Listening activity.

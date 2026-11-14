@@ -15,6 +15,8 @@ The in-player interface and tracking build on [`v1.0.10`](https://github.com/Sir
 
 ## Repeatable checks
 
+- The account and tracking regressions cover settings transfers through a v2.0.0 database, preservation of newer fields, per-cycle retention, final-episode completion cleanup, and rewatch confirmation.
+
 - `ctest --test-dir build -C Release --output-on-failure`: native regressions, account/tracking tests and Original SDK-call fixtures. Account tests cover two-process credit/write deduplication, stale responses, scoped deletion, disconnect races and sampling during a blocked account operation.
 - `node --test tests/cloudflare.test.mjs`: encrypted ticket handoff, verifier checks, expiry, the registered public callback, and credential isolation and route restrictions for the TMDB relay.
 - `python -B tests/package_tests.py <extracted-package> <mpv-executable>` checks the installed Lua modules, including panel navigation, tooltips, animations, OSC margins and settings persistence. Check that the binary ZIP includes the shipped config and license files. The documentation and screenshots live in the repository.

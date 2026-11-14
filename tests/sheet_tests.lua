@@ -100,6 +100,19 @@ local function verify()
     before=updates
     ui.draw()
     assert(updates==before,"Closed menu redrew")
+    local picked
+    ui.show("Test")
+    ui.choose("a",{{label="First choice",value=1,selected=true},{label="Second choice",value=2}},
+        function(value) picked=value end)
+    assert(paint:find("First choice",1,true) and paint:find("Second choice",1,true))
+    bindings.DOWN()
+    bindings.ESC()
+    assert(picked==nil and not paint:find("Second choice",1,true))
+    ui.choose("a",{{label="First choice",value=1},{label="Second choice",value=2,selected=true}},
+        function(value) picked=value end)
+    bindings.ENTER()
+    assert(picked==2 and ui.open and not paint:find("First choice",1,true))
+    ui.close()
 
     width,height=1280,720
     local count=3
@@ -221,24 +234,26 @@ local function verify()
     clock=clock+.2
     animation().fn()
 
-    local model,job,opened,applied
+    local model,job,opened,applied,choices,select_choice
     local menu=dofile(modules.."/menu.lua")(function(value)
         model=value
         local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
         panel.push=function(page) panel.page=page end
         panel.back=function() panel.page="AniList" end
+        panel.choose=function(_,entries,select) choices,select_choice=entries,select end
         return panel
     end,function(req)
         job=req.job or job
         if req.action=="apply" then applied=req end
     end,{tmdb_key="",acoustid_key="",
         open_url=function(url) opened=url end},help)
-    menu.update({session=8,allowed=true,match=42,title="Fixture anime",episode="2",watch_episode=true,
+    local initial={session=8,allowed=true,match=42,title="Fixture anime",episode="2",watch_episode=true,
         tracking={mode="manual"},
         account={id=5,name="Viewer",generation="test",avatar={medium="https://s4.anilist.co/avatar.png"}},episode_watch={elapsed=100.4,first_watched=1000,last_watched=103000},
         card={details="Fixture details",state="Fixture state",start=1,["end"]=2,
             buttons={{label="View on AniList",url="https://anilist.co/anime/42"}}},
-        service={message="Progress refreshed.",elapsed=999}})
+        service={message="Progress refreshed.",elapsed=999}}
+    menu.update(initial)
     assert(job and job.op=="read" and job.quiet,"Automatic list read sent a normal notification")
     local function find(page,id)
         for _,row in ipairs(model.rows(page)) do if row.id==id then return row end end
@@ -251,7 +266,26 @@ local function verify()
     find("Panel theme","Background blur").run()
     assert(applied.values.preset=="custom" and applied.values.blur==false)
     find("Panel theme","Panel theme preset").run()
+    assert(choices[1].selected and choices[2].label=="Midnight")
+    select_choice("midnight")
     assert(applied.values.preset=="midnight" and not applied.values.background)
+    find("Panel theme","Blur method").run()
+    select_choice("gaussian")
+    assert(applied.values.preset=="custom" and applied.values.method=="gaussian")
+    find("Recognition & folders","Save for").run()
+    assert(choices[2].disabled and choices[3].disabled)
+    menu.update({session=8,has_file=true,has_local_folder=true})
+    assert(find("Recognition & folders","Save for").label=="Save for   File")
+    find("Recognition & folders","Save for").run()
+    select_choice("global")
+    assert(applied.category=="save-scopes" and applied.values["Recognition & folders"]=="global")
+    find("Menu","Recognition & folders").run()
+    assert(find("Recognition & folders","Save for").label=="Save for   Global")
+    find("Recognition & folders","Media recognition").run()
+    select_choice("anime")
+    find("Confirm","Confirm").run()
+    assert(applied.category=="sources" and applied.scope=="global")
+    menu.update(initial)
     assert(find("AniList","Episode watch time").label=="Episode watch time   01:40","Watch time was not read from the current record")
     assert(find("AniList","Watch started") and find("AniList","Last watched"))
     assert(not find("Card preview","start") and not find("Card preview","end"),"Discord timestamps leaked into the preview")
@@ -308,6 +342,7 @@ local function verify()
     assert(watch.tip:find("Manual, Ask, or Auto",1,true))
     assert(not find("AniList","Watch started"))
     find("AniList","Tracking").run()
+    select_choice("manual")
     assert(applied.category=="tracking" and applied.values.mode=="manual")
     snapshot.episode_watch={elapsed=19.2,first_watched=1000,last_watched=20000}
     menu.update(snapshot)
@@ -323,17 +358,19 @@ local function verify()
     menu.update(snapshot)
     assert(find("AniList","Ask timing").label=="Ask timing   At threshold")
     find("AniList","Ask timing").run()
+    select_choice("end")
     assert(applied.values.ask_timing=="end")
     assert(find("AniList","Ask prompt position") and find("AniList","Ask prompt timeout"))
     assert(find("AniList","Before leaving position").label=="Before leaving position   Center")
     find("AniList","Before leaving position").run()
+    select_choice("top-right")
     assert(applied.values.ask_leave_position=="top-right")
     snapshot.tracking.mode="auto"
     menu.update(snapshot)
     assert(find("AniList","Before leaving position") and not find("AniList","Ask timing"))
     find("AniList","Ask prompt timeout").run()
-    assert(menu.page=="Ask prompt timeout")
-    find(menu.page,"Never").run()
+    assert(choices[1].label=="Never")
+    select_choice("never")
     assert(applied.values.ask_timeout==0)
     snapshot.tracking.ask_timeout=0
     snapshot.total=12
