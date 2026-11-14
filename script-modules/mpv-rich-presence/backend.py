@@ -711,6 +711,7 @@ class Worker:
                     "Choose a matched anime and connect an account first."
                 )
             scope = f"{account['id']}/{p['media']}"
+            epoch = self.get("generation", "data")
             previous = self.get("entry", scope)
             cached = dict(previous, session=p["session"]) if previous else None
             self.reply(read_state="loading", entry=cached, offline=False)
@@ -724,6 +725,8 @@ class Worker:
                 raise
             with self.transaction():
                 self.context(job, True)
+                if self.get("generation", "data") != epoch:
+                    return
                 self.remember_entry(account, p, entry)
                 self.clear_completed_watch(scope, entry, p.get("total",0))
             notice = {} if job.get("quiet") else {"message": "Progress refreshed."}
@@ -797,6 +800,23 @@ class Worker:
                 self.reply(proposal=None, message="Skipped.")
         elif op == "sweep-watch":
             self.sweep_watch(force=True)
+        elif op == "reset-watch":
+            with serialized(self.directory), self.transaction():
+                self.context(job)
+                self.db.execute(
+                    "DELETE FROM records WHERE category IN ('watch','cycle','history','pending','skipped',"
+                    "'entry','watch-finished','watch-completed','watch-eof','write-intent','watch-sweep') "
+                    "OR (category='job' AND json_extract(value,'$.op') IN ('read','write','accept','skip','rearm'))"
+                )
+                self.db.execute(
+                    "UPDATE records SET value=json_remove(value,'$.entry','$.proposal','$.read_state','$.last_read','$.last_write') "
+                    "WHERE category='response' AND (json_type(value,'$.entry') IS NOT NULL "
+                    "OR json_type(value,'$.proposal') IS NOT NULL OR json_type(value,'$.read_state') IS NOT NULL "
+                    "OR json_type(value,'$.last_read') IS NOT NULL OR json_type(value,'$.last_write') IS NOT NULL)"
+                )
+                self.put("generation", "data", {"id": secrets.token_hex(12)})
+            self.previous = self.tracking_probe = None
+            self.reply(message="Local watch data cleared.")
         elif op == "clear":
             category = job["category"]
             with serialized(self.directory), self.transaction():
@@ -1650,6 +1670,10 @@ class Worker:
             else None
         )
         self.previous = (p, a.get("generation"), key)
+        if self.data_generation != epoch:
+            self.data_generation = epoch
+            if prev:
+                return
         if not prev or not a.get("id") or not p.get("active") or key is None:
             return
         before, generation, previous_key = prev
@@ -1749,6 +1773,7 @@ class Worker:
         ):
             return
         self.expected = (a["generation"], p["session"])
+        epoch = self.get("generation", "data")
         episode = int(p["episode"])
         key = self.cycle(a, p)
         scope = f"{a['id']}/{p['media']}"
@@ -1777,7 +1802,6 @@ class Worker:
         enough_time = self.reached_threshold(p, watch)
         done = self.get("history", key) or self.get("skipped", key)
         job = dict(account=a["generation"], session=p["session"], media=p["media"])
-        epoch = self.get("generation", "data")
         prop = self.get("pending", key)
         review = (
             prop
@@ -1789,6 +1813,8 @@ class Worker:
         if ready:
             with self.transaction():
                 self.tracked_context(job, episode, key)
+                if self.get("generation", "data") != epoch:
+                    return
                 watch = self.get("watch", key)
                 if watch.get("retry", 0) > now:
                     ready = False

@@ -1677,6 +1677,59 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(self.worker.get("account","current"),self.account)
         self.assertFalse(self.worker.db.execute("SELECT 1 FROM records WHERE category='settings-transfer'").fetchone())
 
+    def test_match_and_conditional_settings_transfer_without_metadata_loss(self):
+        tv_hit = dict(id=14, name="Fixture", title="Fixture (2020)", kind="tv",
+                      show_type="Animation", link="https://example.com/fixture")
+        records = {
+            ("provider", "file:/fixture.flac"): dict(
+                id="fixture", name="Recording", kind="recording", provider="musicbrainz",
+                artist_names=["Fixture artist"], release=None, release_group=None, duration_ms=None,
+                release_date="2020-03-14", link="https://example.com/recording"),
+            ("provider", "file:/fixture.mkv"): dict(tv_hit, provider="tvmaze", numbering="S02E04"),
+            ("tv-rule", "folder:/fixture"): {"tvmaze:14": dict(
+                provider="tvmaze", hit=tv_hit, titles=["fixture"], dedicated=True, year="2020")},
+            ("tracking", "file:/fixture.mkv"): dict(
+                mode="off", ask_timeout=0, ask_timing="leave", ask_position="top-right",
+                ask_leave_position="center", keep_pending=True, coverage=True, rewatch=True),
+            ("watch-retention", "global"): {"months": 0},
+        }
+        for (category, scope), value in records.items():
+            self.worker.put(category, scope, value)
+        path = str(self.worker.directory / "settings.json")
+        export_settings(self.worker.db, path)
+        with self.worker.transaction():
+            self.worker.db.execute("DELETE FROM records WHERE category!='account'")
+            self.assertEqual(import_settings(self.worker.db, path), (len(records), []))
+        for (category, scope), value in records.items():
+            self.assertEqual(self.worker.get(category, scope), value)
+
+    def test_watch_reset_clears_all_accounts_without_touching_settings_or_credentials(self):
+        watch_categories = ("watch", "cycle", "history", "pending", "skipped", "entry",
+                            "watch-finished", "watch-completed", "watch-eof", "write-intent", "watch-sweep")
+        for category in watch_categories:
+            for viewer in (1, 10):
+                self.worker.put(category, f"{viewer}/2", {"fixture": True})
+        kept = (("tracking", "global"), ("watch-retention", "global"), ("match", "file:/fixture"),
+                ("appearance", "global"), ("cache", "fixture"))
+        for category, scope in kept:
+            self.worker.put(category, scope, {"fixture": True})
+        self.publish()
+        self.worker.put("response", "other", {"entry": {"progress": 3}, "proposal": {}, "search": {"id": "search"}})
+        self.worker.put("job", "stale", {"op": "accept", "window": "other"})
+        self.worker.put("job", "keep", {"op": "export-settings", "window": "other"})
+        with patch.object(self.worker, "credential") as credential:
+            self.worker.handle(dict(op="reset-watch", account=self.account["generation"],
+                                    session=self.player["session"]))
+            credential.assert_not_called()
+        for category in watch_categories:
+            self.assertFalse(self.worker.db.execute("SELECT 1 FROM records WHERE category=?", (category,)).fetchone())
+        for category, scope in kept:
+            self.assertEqual(self.worker.get(category, scope), {"fixture": True})
+        self.assertEqual(self.worker.get("account", "current"), self.account)
+        self.assertEqual(self.worker.get("response", "other"), {"search": {"id": "search"}})
+        self.assertFalse(self.worker.get("job", "stale"))
+        self.assertEqual(self.worker.get("job", "keep")["op"], "export-settings")
+
 
 if __name__ == "__main__":
     unittest.main()

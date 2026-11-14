@@ -66,9 +66,12 @@ FIELDS = {
 }
 GLOBAL_ONLY = {"panel", "panel-theme", "folder-filter", "recognition-options", "watch-retention", "save-scopes"}
 PIN_FIELDS = {
-    **dict.fromkeys("provider kind name title match year numbering genre cover link artist album notation episode_title stream_title release recording release_group group_title".split(), str),
+    **dict.fromkeys("provider kind name title match year numbering genre cover link artist album notation episode_title stream_title recording group_title release_date show_type".split(), str),
     "id": lambda value: type(value) in (int, str), "live": bool,
-    "duration_ms": integer(0, 2**31-1), "years": strings,
+    **dict.fromkeys(("release", "release_group"), lambda value: value is None or isinstance(value, str)),
+    "duration_ms": lambda value: value is None or (type(value) is int and 0 <= value < 2**31),
+    "score": lambda value: type(value) in (int, float) and 0 <= value <= 1,
+    "years": strings, "artist_names": strings,
     "release_candidates": list, "artwork": list, "covers": list,
 }
 TV_FIELDS = {"provider": {"tmdb-tv", "tvmaze"}, "hit": dict, "year": str, "dedicated": bool, "titles": strings}
@@ -125,7 +128,7 @@ def split_fields(category, value, legacy):
                     unused[key] = extra_rule
             else:
                 unused[key] = item
-        elif key in rules and item is not None and supports(rules[key], item) and not (
+        elif key in rules and (item is not None or category=="provider") and supports(rules[key], item) and not (
             legacy and (category in ("watch-retention", "save-scopes") or
                         (category == "panel-theme" and (key == "method" or (key == "strength" and item > 12))))
         ):
@@ -206,6 +209,8 @@ def import_settings(db, path, *, legacy=False):
         active, unused = split_fields(category, value, legacy)
         if category == "provider" and not _safe_provider(active):
             raise ValueError("The export contains an invalid provider link.")
+        if category == "tv-rule" and any(not _safe_provider(rule["hit"]) for rule in active.values()):
+            raise ValueError("The export contains an invalid TV rule link.")
         if active:
             rows.append((category,scope,active))
         if unused:
