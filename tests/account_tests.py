@@ -1023,6 +1023,7 @@ class AccountTests(unittest.TestCase):
                 )
                 worker.put("player", "window", {"session": 1})
                 for forget in (False, True):
+                    other_account = {}
                     worker.put("account", "current", {"id": 1, "generation": "test"})
                     for category in (
                         "watch",
@@ -1034,6 +1035,7 @@ class AccountTests(unittest.TestCase):
                     ):
                         for viewer in (1, 10):
                             worker.put(category, f"{viewer}/2", {"saved": True})
+                        other_account[category] = worker.get(category, "10/2")
                     with patch.object(worker.vault, "forget"):
                         worker.handle(
                             {
@@ -1056,7 +1058,7 @@ class AccountTests(unittest.TestCase):
                             bool(worker.get(category, "1/2")),
                             not forget and category != "pending",
                         )
-                        self.assertEqual(worker.get(category, "10/2"), {"saved": True})
+                        self.assertEqual(worker.get(category, "10/2"), other_account[category])
             finally:
                 worker.db.close()
 
