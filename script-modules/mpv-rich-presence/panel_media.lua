@@ -78,7 +78,10 @@ return function(options, modules, interpreter, utils)
             if avatar_url~=url then return end
             job=nil
             retry_after=mp.get_time()+60
-            if not result or result.status~=0 or #(result.stdout or "")~=16384 then return end
+            if not result or result.status~=0 or #(result.stdout or "")~=16384 then
+                mp.msg.verbose("Could not load the AniList avatar. The panel can retry in 60 seconds.")
+                return
+            end
             avatar_file=avatar_file or utils.join_path(os.getenv("TEMP") or os.getenv("TMPDIR") or "/tmp",
                 "mpv-rich-presence-avatar-"..mp.get_property("pid")..".bgra")
             local file=io.open(avatar_file,"wb")
