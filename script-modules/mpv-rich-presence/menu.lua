@@ -85,7 +85,11 @@ return function(make_sheet, send, options, help)
         episode="Episode number used for AniList.",original="Episode number from the filename.",group="Release group.",
         channel="Stream channel.",year="Release year.",details="The card's first text line before templates.",
         state="The card's second text line before templates.",status="Playback status, such as Playing or Paused (01:23).",site="Name of the site the button links to."}
-    local text_target
+    -- Pages that edit or show the Appearance draft, so the preview includes unapplied changes.
+    local draft_pages={Appearance=true,["Card preview"]=true,["Card buttons"]=true,["Button 1"]=true,["Button 2"]=true,
+        ["Edit text"]=true,["Card text"]=true,["Artwork & badge"]=true,["Timer & pause"]=true,["Card links"]=true}
+    local timer_names={progress="Progress",remaining="Remaining",session="Session",off="Off"}
+    local text_target, unapplied
     local large_image_names={cover="Cover or album art",still="Episode still",mpv="mpv logo",custom="Custom image",off="Off"}
     local large_image_help={cover="The matched anime, film, show or album artwork.",
         still="The TV episode's still image from TMDB or TVmaze. Other media use the cover.",
@@ -220,8 +224,7 @@ return function(make_sheet, send, options, help)
         return layout=="all" and draft or {[layout.."_layout"]=draft}
     end
     local function refresh()
-        local preview=ui.page=="Appearance" or ui.page=="Card preview" or ui.page=="Card buttons" or ui.page=="Edit text"
-            or ui.page=="Button 1" or ui.page=="Button 2"
+        local preview=draft_pages[ui.page]
         request("snapshot",{nonce="menu",page=ui.page,records=category_for(ui.page),
             replace=preview and replace and layout=="all",draft=preview and edits() or nil})
     end
@@ -528,36 +531,53 @@ return function(make_sheet, send, options, help)
                 replace=true; draft={preset=v}
                 refresh()
             end,opts.custom and "Custom" or nil)
-            local position=snap.panel_position
-            if not position or position=="" then position="config" end
-            choice("Panel position",panel_positions,position,function(v)
-                if v=="config" then request("clear",{category="panel",scope="global",field="position"}); refresh()
-                else apply("panel",{position=v},"global") end
-            end,position=="config" and "Config · "..config_position or nil)
-            for _,item in ipairs({{"Title language","language",{"original","english","romaji","native"}},
-                {"Episode numbering","numbering",{"relative","original","both"}},{"Timer","timer",{"progress","remaining","session","off"}}}) do
-                local key=item[2]
-                local default=key=="timer" and opts.preset=="private" and "off" or item[3][1]
-                choice(item[1],item[3],opts[key] or default,function(v) appearance_edit(key,v); refresh() end)
-            end
             local private=opts.preset=="private"
-            local function toggles(items)
-                for _,item in ipairs(items) do
-                    local key=item[2]
-                    toggle(item[1],key,not ((key=="group" and opts.preset=="clean") or (key=="badge" and private)))
-                end
-            end
-            toggles({{"Release group","group"},{"Episode","episode"}})
             local large=opts.large_image or ((opts.art==false or private) and "off" or "cover")
-            choice("Large image",{"cover","still","mpv","custom","off"},large,function(v) appearance_edit("large_image",v); refresh() end,
-                nil,large_image_names,nil,large_image_help)
-            local small=opts.small_image or ((opts.badge==false or private) and "off" or "status")
-            choice("Small badge",{"status","provider","off"},small,function(v) appearance_edit("small_image",v); refresh() end,
-                nil,small_image_names,nil,small_image_help)
-            toggles({{"Tooltip","tooltip"},{"Details","details"},{"State","state"}})
             local slots=button_slots(opts)
+            row("Text   "..(opts.headline or opts.details_template or opts.state_template or "Preset layout"),
+                function() ui.push("Card text") end,false,nil,"Text")
+            row("Artwork & badge   "..large_image_names[large],function() ui.push("Artwork & badge") end,false,nil,"Artwork & badge")
             row("Buttons   "..button_summary(slots[1])..(slots[2] and (" · "..button_summary(slots[2])) or ""),
                 function() ui.push("Card buttons") end,false,nil,"Buttons")
+            row("Timer & pause   "..(timer_names[opts.timer or (private and "off" or "progress")] or opts.timer),
+                function() ui.push("Timer & pause") end,false,nil,"Timer & pause")
+            row("Links   "..((opts.large_url or opts.details_url or opts.state_url) and "Set" or "None"),
+                function() ui.push("Card links") end,false,nil,"Links")
+            row("Reset saved appearance",function()
+                if not require_scope(scope) then return end
+                confirm("Clear appearance overrides for "..scope.." and show the inherited card",function()
+                    request("clear",{category="appearance",scope=scope}); draft={}; replace=false; refresh()
+                end)
+            end)
+            row("Panel look",function() ui.push("Panel look") end)
+            row("Apply",function()
+                if apply("appearance",edits()) then draft={}; replace=false; ui.back() end
+            end,true)
+        elseif page=="Unapplied changes" then
+            local leave=unapplied
+            row("Your card edits for "..layout_names[layout].." are not saved.",nil,false,nil,"Unapplied summary")
+            row("Apply and leave",function()
+                local target=get_scope("Appearance")
+                if not require_scope(target) then return end
+                request("apply",{category="appearance",values=edits(),scope=target,replace=replace and layout=="all"})
+                draft={}; replace=false; unapplied=nil
+                ui.back(true); if leave then leave() end
+            end,true)
+            row("Discard changes",function()
+                draft={}; replace=false; unapplied=nil
+                ui.back(true); if leave then leave() end; refresh()
+            end)
+            row("Keep editing",function() unapplied=nil; ui.back(true) end)
+        elseif page=="Card text" then
+            local opts=appearance_opts()
+            for _,item in ipairs({{"Title language","language",{"original","english","romaji","native"}},
+                {"Episode numbering","numbering",{"relative","original","both"}}}) do
+                local key=item[2]
+                choice(item[1],item[3],opts[key] or item[3][1],function(v) appearance_edit(key,v); refresh() end)
+            end
+            for _,item in ipairs({{"Release group","group"},{"Episode","episode"},{"Details","details"},{"State","state"}}) do
+                toggle(item[1],item[2],not (item[2]=="group" and opts.preset=="clean"))
+            end
             choice("Compact status",{"name","details","state"},opts.compact or "name",function(v) appearance_edit("compact",v); refresh() end)
             toggle("Episode titles","spoilers",false)
             for _,item in ipairs({{"Headline","headline"},{"Details template","details_template"},{"State template","state_template"}}) do
@@ -566,6 +586,12 @@ return function(make_sheet, send, options, help)
                     edit_text({label=label,value=opts[key] or "",limit=128,save=function(v) appearance_edit(key,v) end})
                 end,false,nil,label)
             end
+        elseif page=="Artwork & badge" then
+            local opts=appearance_opts()
+            local private=opts.preset=="private"
+            local large=opts.large_image or ((opts.art==false or private) and "off" or "cover")
+            choice("Large image",{"cover","still","mpv","custom","off"},large,function(v) appearance_edit("large_image",v); refresh() end,
+                nil,large_image_names,nil,large_image_help)
             if large=="custom" then
                 row("Large image link   "..(opts.large_image_url or "Not set"),function()
                     edit_text({label="Large image link",value=opts.large_image_url or "",limit=512,save=function(v)
@@ -576,12 +602,20 @@ return function(make_sheet, send, options, help)
                     end})
                 end,false,nil,"Large image link")
             end
+            local small=opts.small_image or ((opts.badge==false or private) and "off" or "status")
+            choice("Small badge",{"status","provider","off"},small,function(v) appearance_edit("small_image",v); refresh() end,
+                nil,small_image_names,nil,small_image_help)
+            toggle("Tooltip","tooltip",true)
             for _,item in ipairs({{"Large hover text","large_text_template",{}},{"Badge hover text","small_text_template",{"status"}}}) do
                 local label,key,extra=item[1],item[2],item[3]
                 row(label.."   "..(opts[key] or "Default"),function()
                     edit_text({label=label,value=opts[key] or "",limit=128,extra=extra,save=function(v) appearance_edit(key,v) end})
                 end,false,nil,label)
             end
+        elseif page=="Timer & pause" then
+            local opts=appearance_opts()
+            choice("Timer",{"progress","remaining","session","off"},opts.timer or (opts.preset=="private" and "off" or "progress"),
+                function(v) appearance_edit("timer",v); refresh() end)
             choice("While paused",{"keep","generic","hide"},opts.while_paused or "keep",function(v)
                 appearance_edit("while_paused",v); refresh()
             end,nil,{keep="Keep the card",generic="Show a generic card",hide="Hide the card"},nil,
@@ -598,21 +632,19 @@ return function(make_sheet, send, options, help)
                     appearance_edit("pause_timeout",minutes); refresh()
                 end)
             end,false,nil,"Pause timeout")
+        elseif page=="Card links" then
+            local opts=appearance_opts()
             for _,item in ipairs({{"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
                 local label,key=item[1],item[2]
                 row(label.."   "..(opts[key] or "None"),function() ui.text(label,opts[key] or "",function(v) appearance_edit(key,v); refresh() end) end,false,nil,label)
             end
-            row("Reset saved appearance",function()
-                if not require_scope(scope) then return end
-                confirm("Clear appearance overrides for "..scope.." and show the inherited card",function()
-                    request("clear",{category="appearance",scope=scope}); draft={}; replace=false; refresh()
-                end)
-            end)
-            row("Panel theme",function() ui.push("Panel theme") end)
-            row("Apply",function()
-                if apply("appearance",edits()) then draft={}; replace=false; ui.back() end
-            end,true)
-        elseif page=="Panel theme" then
+        elseif page=="Panel look" then
+            local position=snap.panel_position
+            if not position or position=="" then position="config" end
+            choice("Panel position",panel_positions,position,function(v)
+                if v=="config" then request("clear",{category="panel",scope="global",field="position"}); refresh()
+                else apply("panel",{position=v},"global") end
+            end,position=="config" and "Config · "..config_position or nil)
             local config=theme_settings()
             local function save(values,reset)
                 request("apply",{category="panel-theme",values=values,replace=reset})
@@ -1172,6 +1204,12 @@ return function(make_sheet, send, options, help)
             return snap.panel_position and snap.panel_position~="" and snap.panel_position or config_position
         end,
         leaving=function(page) if page=="Appearance" then draft={}; replace=false end end,
+        before_leave=function(page,leave)
+            if page~="Appearance" or (next(draft)==nil and not replace) then return true end
+            unapplied=leave
+            ui.push("Unapplied changes")
+            return false
+        end,
         closed=function() draft={}; edit=nil; edit_base=nil; list_status=nil; pending=nil; clear_notice(); if ui.terminal then mp.set_property("term-status-msg",ui.old_term or "") end end})
     ui.update=function(value)
         if not ui.open then return end

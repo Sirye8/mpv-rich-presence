@@ -3,7 +3,10 @@
 local mode=os.getenv("MPVRP_MENU_TEST")
 local actions={"menu","DOWN","DOWN","DOWN","ENTER","DOWN","ENTER"}
 if mode=="position" or mode=="inherit-position" then
-    actions={"menu","DOWN","DOWN","DOWN","DOWN","ENTER"}
+    -- Appearance → Panel look → Panel position.
+    actions={"menu"}
+    for _=1,10 do actions[#actions+1]="DOWN" end
+    actions[#actions+1]="ENTER"; actions[#actions+1]="ENTER"
     if mode=="position" then actions[#actions+1]="END"
     else actions[#actions+1]="HOME" end
     actions[#actions+1]="ENTER"
@@ -15,15 +18,16 @@ elseif mode=="apply" or mode=="reset-preset" then
 elseif mode=="buttons" then
     -- Appearance → Buttons → Button 1 → Site → Search on Google, then Apply.
     actions={"menu"}
-    for _=1,15 do actions[#actions+1]="DOWN" end
+    for _=1,6 do actions[#actions+1]="DOWN" end
     for _,key in ipairs({"ENTER","ENTER","ENTER","END","UP","ENTER","ESC","ESC","END","ENTER"}) do actions[#actions+1]=key end
 elseif mode=="template" then
     -- Appearance → Headline → Insert placeholder → {title} → Keep, then Apply.
     actions={"menu"}
-    for _=1,18 do actions[#actions+1]="DOWN" end
-    for _,key in ipairs({"ENTER","DOWN","ENTER","HOME","ENTER","END","UP","ENTER","END","ENTER"}) do actions[#actions+1]=key end
+    for _,key in ipairs({"DOWN","DOWN","DOWN","DOWN","ENTER"}) do actions[#actions+1]=key end
+    for _=1,8 do actions[#actions+1]="DOWN" end
+    for _,key in ipairs({"ENTER","DOWN","ENTER","HOME","ENTER","END","UP","ENTER","ESC","END","ENTER"}) do actions[#actions+1]=key end
 elseif mode=="custom" then
-    actions={"menu","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","ENTER","END","ENTER"}
+    actions={"menu","DOWN","DOWN","DOWN","DOWN","ENTER","DOWN","DOWN","ENTER","ESC","END","ENTER"}
 else actions[#actions+1]="ESC" end
 actions[#actions+1]="ESC"
 local index=0

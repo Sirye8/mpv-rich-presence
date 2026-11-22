@@ -18,9 +18,9 @@ Press **Alt+p** to open the panel. Use the mouse or the arrow keys, Enter and Es
 | Saved data | Find and clear local matches, caches and watch records. |
 | Diagnostics | Check lookup permissions, the active provider and publishing status. |
 
-Use **Appearance → Panel position** to move the panel. **Apply** saves card edits. See the [panel controls](docs/user-guide.md#use-the-panel) for keyboard shortcuts and appearance settings.
+Use **Appearance → Panel look** to move the panel. **Apply** saves card edits, and leaving Appearance with unsaved edits asks whether to apply or discard them. See the [panel controls](docs/user-guide.md#use-the-panel) for keyboard shortcuts and appearance settings.
 
-Use **Appearance → Panel theme** to change the panel's colors, opacity, or live background blur. Dark glass is the default.
+**Panel look** also changes the panel's colors, opacity, or live background blur. Dark glass is the default.
 
 Click a setting with a dropdown arrow to open its choices over the current page. Each settings page remembers its **Save for** scope. **Saved data** has controls to transfer settings and reset local watch data separately. [User guide](docs/user-guide.md#manage-privacy-and-saved-data)
 

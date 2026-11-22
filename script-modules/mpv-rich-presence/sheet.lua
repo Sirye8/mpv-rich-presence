@@ -452,8 +452,10 @@ return function(model)
         show_page(page,1)
     end
 
-    function ui.back()
+    function ui.back(force)
         if dropdown then ui.dismiss_choices(); return end
+        -- The model can hold the page, for example to ask about unapplied edits.
+        if not force and model.before_leave and model.before_leave(ui.page,function() ui.back(true) end)==false then return end
         if model.leaving then model.leaving(ui.page) end
         local page = table.remove(ui.stack)
         if page then show_page(page,-1) else ui.close() end
@@ -579,9 +581,13 @@ return function(model)
                 local y=top+44+(i-1)*row_step
                 local key="nav"..i
                 local item=hit(layout.nav,left+6,y,pane-6,y+row_height,key,key,function()
-                    if model.leaving then model.leaving(ui.page) end
-                    ui.stack={"Menu"}
-                    show_page(page,1)
+                    local function go()
+                        if model.leaving then model.leaving(ui.page) end
+                        ui.stack={"Menu"}
+                        show_page(page,1)
+                    end
+                    if model.before_leave and model.before_leave(ui.page,go)==false then return end
+                    go()
                 end,page,model.help and model.help(page))
                 item.display=display(page,15,item.r-item.x-21)
             end
@@ -642,7 +648,7 @@ return function(model)
                 "Keep this update for later and let mpv continue.")
         elseif ui.page=="Appearance" then
             local mid=(pane+right)/2
-            hit(layout.footer,pane+8,bottom-35,mid-3,bottom-7,"cancel","cancel",ui.back,"Cancel","Discard the unsaved preview.")
+            hit(layout.footer,pane+8,bottom-35,mid-3,bottom-7,"cancel","cancel",function() ui.back(true) end,"Cancel","Discard the unsaved preview.")
             for _,row in ipairs(rows) do
                 if row.label=="Apply" then
                     local apply=hit(layout.footer,mid+3,bottom-35,right-8,bottom-7,"apply","apply",row.run,"Apply",row.tip)

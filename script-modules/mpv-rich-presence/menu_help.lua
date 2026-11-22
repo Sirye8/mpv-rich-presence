@@ -27,6 +27,14 @@ local help = {
     ["Watch data retention"]="Keep each local viewing cycle for this many 30-day months after its last activity. Enter 0 to disable expiry. Finishing the last episode and confirming Completed on AniList still clears local watch data for that anime.",
     ["Media layout"]="Set the card for all media or just one media type.",
     ["Preset"]="Choose a starting layout. Selecting a preset resets all appearance overrides in the selected scope and media layout. Editing an appearance field marks it Custom and keeps the selected preset as its base.",
+    Text="Choose title language, episode numbering, which text lines appear, and the headline and line templates.",
+    ["Artwork & badge"]="Choose the large image, the small badge and their hover text.",
+    ["Timer & pause"]="Choose the timer style and what the card does while playback is paused.",
+    Links="Attach public links to the artwork and the two text lines.",
+    ["Panel look"]="Move the panel and change its colors, opacity and blur. These apply immediately across mpv windows and do not change Discord cards.",
+    ["Apply and leave"]="Save the card edits to the selected Save for scope, then continue.",
+    ["Discard changes"]="Drop the unsaved card edits and continue. Saved appearance settings stay as they are.",
+    ["Keep editing"]="Return to Appearance with your edits still in the preview.",
     ["Panel theme"]="Open the panel's own appearance settings. These apply immediately to this panel across mpv windows and do not change Discord cards.",
     ["Background color"]="Enter a six-digit RGB hex color such as #030405. This color tints the panel shell and is used to derive its row and hover colors.",
     ["Accent color"]="Enter a six-digit RGB hex color. It colors links, focus indicators, sliders and active controls. A light accent is easier to read on dark backgrounds.",
@@ -267,6 +275,7 @@ local choices = {
 }
 
 local read_only = {
+    ["Unapplied changes"]={["Unapplied summary"]="Card edits stay in the preview until you apply them."},
     ["Edit text"]={Check="Shows placeholders this media layout cannot fill. Fix them before keeping the text.",
         ["Discord limit"]="Discord shows up to this many characters. Longer text is cut at a whole character.",
         ["Nothing to edit"]="Go back and choose a text setting."},

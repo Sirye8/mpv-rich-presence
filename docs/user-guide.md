@@ -49,11 +49,13 @@ Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to cha
 | Saved data | Find saved profiles, matches, caches, timers and proposals. Review what a clear operation removes. |
 | Diagnostics | See permission, active provider, rule source, tracking and Discord publishing status. |
 
-**Appearance → Panel position** offers six anchors. **Config** uses `panel_position` from the conf file. Top anchors reserve room for the OSC title strip. Set `menu_scale` to resize the panel or `menu_animations=no` for instant transitions.
+Appearance groups the card settings into **Text**, **Artwork & badge**, **Buttons**, **Timer & pause** and **Links**. Each row shows its current value. Edits stay in the preview until you press **Apply**. Leaving Appearance with unsaved edits offers **Apply and leave**, **Discard changes** or **Keep editing**, and the footer **Cancel** discards them directly.
+
+**Appearance → Panel look → Panel position** offers six anchors. **Config** uses `panel_position` from the conf file. Top anchors reserve room for the OSC title strip. Set `menu_scale` to resize the panel or `menu_animations=no` for instant transitions.
 
 Select a text field to edit it in place. Use **Done** or Enter to accept, **Cancel** or Escape to discard, and Ctrl+V to paste where mpv provides clipboard access. Terminal-only mpv uses its text prompt.
 
-Open **Appearance → Panel theme** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), or **Graphite** (opaque charcoal). Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
+Open **Appearance → Panel look** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), or **Graphite** (opaque charcoal). Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
 
 Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the open panel. Other video outputs keep translucency. Custom settings accept six-digit RGB colors, 40 to 100% opacity, and a blur strength from 2 to 32 pixels. **Classic** keeps the original filter. **Gaussian** softens busy footage more evenly and takes more GPU samples. **Box** uses fewer samples and can leave more defined edges at high strengths. Turn off **Background blur** in the panel, or set `panel_blur=no` to change the startup default.
 
