@@ -146,7 +146,16 @@ def wikidata_movies(query, throttle):
     return result
 
 
-USER_AGENT = "mpv-rich-presence/1.0 (https://github.com/Sirye8/mpv-rich-presence)"
+def installed_version():
+    """Version recorded by the package next to the modules folder, or dev for a source checkout."""
+    try:
+        info = json.loads((Path(__file__).resolve().parent.parent / "build-info.json").read_text(encoding="utf-8"))
+        return str(info.get("version") or "dev")
+    except (OSError, ValueError, AttributeError):
+        return "dev"
+
+
+USER_AGENT = "mpv-rich-presence/%s (https://github.com/Sirye8/mpv-rich-presence)" % installed_version()
 
 
 def fetch(base, params=None, headers=None, body=None, *, timeout=8):

@@ -51,6 +51,14 @@ local config = utils.join_path(base, "script-opts/rich-presence.conf")
 options.settings_export_path=utils.join_path(base,"rich-presence-settings.json")
 local windows = package.config:sub(1,1) == "\\"
 local bundled = windows and utils.join_path(directory, "runtime/python.exe")
+do
+    -- Release details written by tools/package.py, shown in Diagnostics.
+    local file = io.open(utils.join_path(directory, "build-info.json"), "r")
+    if file then
+        options.build_info = utils.parse_json(file:read("*a") or "")
+        file:close()
+    end
+end
 options.bundled_fpcalc = utils.file_info(utils.join_path(directory, windows and "runtime/fpcalc.exe" or "runtime/fpcalc")) ~= nil
 local interpreter = options.python
 if interpreter=="" then

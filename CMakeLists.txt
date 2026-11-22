@@ -141,6 +141,8 @@ endif()
 if(WIN32)
     target_compile_definitions(mpv-rich-presence PRIVATE MPV_CPLUGIN_DYNAMIC_SYM)
 endif()
+# The project version is the single source for the plugin, the package and provider User-Agents.
+target_compile_definitions(mpv-rich-presence PRIVATE MPVRP_VERSION="${PROJECT_VERSION}")
 
 target_sources(mpv-rich-presence PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/${mpv-rich-presence_HPP}

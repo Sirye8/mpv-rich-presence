@@ -45,6 +45,21 @@ class TmdbDetailsTests(unittest.TestCase):
         self.assertEqual(calls[1], ("https://api.themoviedb.org/3/tv/5", {"append_to_response": "external_ids"}))
 
 
+class VersionTests(unittest.TestCase):
+    def test_user_agent_uses_the_packaged_version(self):
+        import importlib.util, shutil
+        with tempfile.TemporaryDirectory() as folder:
+            modules = Path(folder) / "modules"
+            modules.mkdir()
+            shutil.copy(Path(__file__).resolve().parents[1] / "script-modules/mpv-rich-presence/providers.py", modules)
+            spec = importlib.util.spec_from_file_location("packaged_providers", modules / "providers.py")
+            packaged = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(packaged)
+            self.assertTrue(packaged.USER_AGENT.startswith("mpv-rich-presence/dev "))
+            (Path(folder) / "build-info.json").write_text('{"version": "2.3"}', encoding="utf-8")
+            self.assertEqual(packaged.installed_version(), "2.3")
+
+
 class CandidateByIdTests(unittest.TestCase):
     def test_tmdb_and_tvmaze_ids_return_one_reviewable_result(self):
         with patch("providers.fetch", return_value={"title": "Interstellar", "release_date": "2014-11-05"}):

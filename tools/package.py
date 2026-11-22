@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -145,8 +146,13 @@ def package(build, output):
             ).strip()
         except (OSError, subprocess.CalledProcessError):
             commit = None
-        build_info = {"commit": commit, "platform": platform.system(), "architecture": platform.machine()}
-        (root / "build-info.json").write_text(json.dumps(build_info, indent=2) + "\n", encoding="utf-8")
+        version = re.search(r"project\(mpv-rich-presence\s+VERSION\s+([\d.]+)",
+                            (Path(__file__).resolve().parents[1] / "CMakeLists.txt").read_text(encoding="utf-8"))
+        build_info = {"version": version[1] if version else None, "commit": commit,
+                      "platform": platform.system(), "architecture": platform.machine()}
+        # One copy at the archive root for release checks, and one that installs with the plugin for Diagnostics.
+        for target in (root, root / "scripts" / "mpv-rich-presence"):
+            (target / "build-info.json").write_text(json.dumps(build_info, indent=2) + "\n", encoding="utf-8")
         with tempfile.NamedTemporaryFile(dir=output.parent, delete=False) as f:
             temporary = Path(f.name)
         try:

@@ -49,6 +49,10 @@
 #include <random>
 #include <regex>
 #include <set>
+
+#ifndef MPVRP_VERSION
+#define MPVRP_VERSION "dev"
+#endif
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -261,7 +265,7 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
         cpr::Header {
             { "Content-Type", "application/json" },
             { "Accept", "application/json" },
-            { "User-Agent", "mpv-rich-presence/1.0" }
+            { "User-Agent", "mpv-rich-presence/" MPVRP_VERSION }
         },
         cpr::Body { query.dump() },
         cpr::Timeout { 3000 },
@@ -329,7 +333,7 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id, profile_store* c
         cpr::Header {
             { "Content-Type", "application/json" },
             { "Accept", "application/json" },
-            { "User-Agent", "mpv-rich-presence/1.0" }
+            { "User-Agent", "mpv-rich-presence/" MPVRP_VERSION }
         },
         cpr::Body { query.dump() },
         cpr::Timeout { 3000 },
@@ -1901,7 +1905,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"save_scopes",state.store ? state.store->get("save-scopes","global") : nlohmann::json::object()},
                 {"watch_retention",state.store ? state.store->get("watch-retention","global") : nlohmann::json::object()},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
-                {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},
+                {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"version",MPVRP_VERSION},
                 {"hidden_seconds",std::max<int64_t>(0,chrono::duration_cast<chrono::seconds>(
                     state.hide_until-chrono::steady_clock::now()).count())},{"appearance_scope",state.appearance_scope},
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},

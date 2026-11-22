@@ -1207,6 +1207,11 @@ return function(make_sheet, send, options, help)
                 end
             end
         elseif page=="Diagnostics" then
+            local build=options.build_info or {}
+            local release="v"..(build.version or snap.version or "dev")
+            if build.commit then release=release.." · "..tostring(build.commit):sub(1,7) else release=release.." · source build" end
+            if build.platform then release=release.." · "..build.platform.." "..(build.architecture or "") end
+            row("Release   "..release,nil,false,nil,"Release")
             row("Sharing   "..(snap.reason or "Waiting")); row("SDK   "..(snap.sdk or "Waiting"))
             if (snap.last_published or 0)>0 then row("Last Discord publish   "..clock_time(snap.last_published)) end
             row("Configuration   "..(snap.configured and "Received" or "Waiting"))

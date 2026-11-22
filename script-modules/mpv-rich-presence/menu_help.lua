@@ -64,6 +64,7 @@ local help = {
     ["Pause timeout"]="Hide a paused card after this many minutes for this media layout. 0 keeps it until playback resumes. Without a value, pause_timeout from rich-presence.conf applies.",
     ["Hide Discord"]="Hide the Discord card in this window for a set time or until the window closes. Lookups and tracking keep their own settings.",
     ["Resume Discord now"]="End the timed or window hide and share the card again.",
+    Release="The installed version, the source commit it was built from, and its platform. Include this when reporting a problem.",
     ["Insert placeholder"]="Add a field to the end of the text. Only fields this media layout can fill are listed. Separate optional parts with | so an empty field drops only its part.",
     Keep="Keep this text in the Appearance draft. Press Apply on Appearance to save it.",
     ["Custom link"]="Enter a public https link. Placeholders such as {title} are URL-encoded, so a search link like https://example.com/search?q={title} works with any title.",

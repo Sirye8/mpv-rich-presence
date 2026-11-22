@@ -335,6 +335,10 @@ local function verify()
     model.before_leave("Appearance",function() left="applied" end)
     find("Unapplied changes","Apply and leave").run()
     assert(left=="applied" and applied.category=="appearance" and applied.values.episode==false,"Apply and leave did not save the draft")
+    -- Diagnostics names the installed release; a source checkout says so.
+    menu.update({session=8,version="2.3"})
+    assert(find("Diagnostics","Release").label=="Release   v2.3 · source build","Diagnostics did not show the release")
+    assert(find("Diagnostics","Release").tip:match("installed version"))
     -- Timed hiding shows its end time and resumes in one step; duplicate rows are gone.
     menu.update({session=8,hidden_seconds=600})
     assert(find("Privacy & windows","Hidden until").label:match("^Hidden until   %d%d:%d%d$"))

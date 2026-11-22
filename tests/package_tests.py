@@ -28,6 +28,9 @@ subprocess.run(
 )
 with tempfile.TemporaryDirectory() as directory:
     config = Path(directory) / "mpv"
+    if (root / "build-info.json").is_file():
+        installed = json.loads((root / "scripts/mpv-rich-presence/build-info.json").read_text(encoding="utf-8"))
+        assert installed == json.loads((root / "build-info.json").read_text(encoding="utf-8")), "Diagnostics build info differs"
     for part in ("scripts", "script-opts"):
         shutil.copytree(root / part, config / part)
     applied = False
