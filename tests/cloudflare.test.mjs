@@ -31,6 +31,32 @@ test("TMDB relay accepts only public metadata requests and keeps the credential 
   assert.equal(upstream.mock.callCount(), 1);
 });
 
+test("TMDB details include a validated IMDb ID in the same request", async t => {
+  const env = { TMDB_READ_TOKEN: "test-token", TMDB_LIMIT: { limit: async () => ({ success: true }) } };
+  const seen = [];
+  t.mock.method(globalThis, "fetch", async target => {
+    seen.push(target.href);
+    if (target.pathname.endsWith("/movie/157336"))
+      return Response.json({ id: 157336, title: "Interstellar", imdb_id: "tt0816692", budget: 1 });
+    if (target.pathname.endsWith("/tv/93405"))
+      return Response.json({ id: 93405, name: "Squid Game", external_ids: { imdb_id: "tt10919420", facebook_id: "x" } });
+    if (target.pathname.endsWith("/tv/1"))
+      return Response.json({ id: 1, name: "Bad", external_ids: { imdb_id: "javascript:alert(1)" } });
+    return Response.json({ name: "Episode" });
+  });
+  const get = async path => (await relay.fetch(new Request("https://login.example.org/metadata" + path), env)).json();
+  assert.equal((await get("/movie/157336")).imdb_id, "tt0816692");
+  assert.deepEqual(await get("/tv/93405"), { id: 93405, name: "Squid Game", imdb_id: "tt10919420" });
+  assert.equal((await get("/tv/1")).imdb_id, undefined);
+  assert.deepEqual(await get("/tv/93405/season/1/episode/2"), { name: "Episode" });
+  assert.deepEqual(seen, [
+    "https://api.themoviedb.org/3/movie/157336?append_to_response=external_ids",
+    "https://api.themoviedb.org/3/tv/93405?append_to_response=external_ids",
+    "https://api.themoviedb.org/3/tv/1?append_to_response=external_ids",
+    "https://api.themoviedb.org/3/tv/93405/season/1/episode/2",
+  ]);
+});
+
 test("a viewer exchanges one code with the original verifier", async t => {
   const origin = "https://login.example.org";
   const env = { ANILIST_CLIENT_ID: "55822", ANILIST_CLIENT_SECRET: "test-only" };

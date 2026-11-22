@@ -2,11 +2,16 @@
 const tmdb = "https://api.themoviedb.org/3";
 const noStore = { "Cache-Control": "no-store" };
 
+function imdbId(value) {
+  return typeof value === "string" && /^tt\d{5,10}$/.test(value) ? value : undefined;
+}
+
 function movieFields(item) {
   return {
     id: item.id, title: item.title, name: item.name,
     release_date: item.release_date, first_air_date: item.first_air_date,
     poster_path: item.poster_path,
+    imdb_id: imdbId(item.imdb_id ?? item.external_ids?.imdb_id),
     genres: item.genres?.map(({ name }) => ({ name })),
   };
 }
@@ -39,6 +44,9 @@ export async function metadata(request, url, env) {
     }
     target.searchParams.set("query", query);
     if (year) target.searchParams.set(yearKey, year);
+  } else if (!path.includes("/episode/")) {
+    // One request returns the IMDb ID for card buttons. TV details have it only under external_ids.
+    target.searchParams.set("append_to_response", "external_ids");
   }
   if (!token) return new Response(null, { status: 503, headers: noStore });
 

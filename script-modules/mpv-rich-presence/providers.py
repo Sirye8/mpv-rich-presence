@@ -179,6 +179,17 @@ def tmdb_request(path, settings, params=None):
         ) from None
 
 
+def tmdb_details(kind, identifier, settings):
+    """Movie or show details. The direct API and the relay both include the IMDb ID."""
+    params = {"append_to_response": "external_ids"} if settings.get("tmdb_key") else None
+    return tmdb_request("/%s/%d" % (kind, int(identifier)), settings, params)
+
+
+def imdb_id(data):
+    value = data.get("imdb_id") or (data.get("external_ids") or {}).get("imdb_id") or ""
+    return value if re.fullmatch(r"tt\d{5,10}", value) else ""
+
+
 def public_query(text):
     text = text.strip()
     if not text or len(text) > 180 or re.search(r"[/\\:?&#\x00-\x1f]", text):
@@ -800,7 +811,7 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
             data = series(hit["id"])
         else:
             throttle(provider)
-            data = tmdb_request("/%s/%d" % (kind, hit["id"]), settings)
+            data = tmdb_details(kind, hit["id"], settings)
         item["name"] = data.get("title") or data.get("name") or hit["name"]
         item["year"] = (data.get("release_date") or data.get("first_air_date") or "")[
             :4
@@ -822,6 +833,8 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
         if data.get("poster_path"):
             item["cover"] = "https://image.tmdb.org/t/p/w500" + data["poster_path"]
         item["link"] = "https://www.themoviedb.org/%s/%d" % (kind, hit["id"])
+        if imdb_id(data):
+            item["imdb"] = imdb_id(data)
     if provider == "tvmaze" and episode:
         throttle(provider)
         data = fetch(

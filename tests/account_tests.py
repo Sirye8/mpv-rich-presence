@@ -26,8 +26,23 @@ from account import (
     save_progress,
 )
 from backend import Worker
-from providers import fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
+from providers import details, fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
 from settings_transfer import export_settings, import_settings
+
+
+class TmdbDetailsTests(unittest.TestCase):
+    def test_details_keep_a_valid_imdb_id_from_one_request(self):
+        calls = []
+        def fake_fetch(url, params=None, headers=None, body=None, **_):
+            calls.append((url, params))
+            return {"title": "Interstellar", "release_date": "2014-11-05", "imdb_id": "tt0816692"} if "/movie/" in url                 else {"name": "Show", "external_ids": {"imdb_id": "not-an-id"}}
+        with patch("providers.fetch", side_effect=fake_fetch):
+            movie = details("tmdb-movie", {"id": 157336, "kind": "movie", "name": "Interstellar"}, {}, lambda _: None, None, None)
+            show = details("tmdb-tv", {"id": 5, "kind": "tv", "name": "Show"}, {"tmdb_key": "token"}, lambda _: None, None, None)
+        self.assertEqual(movie["imdb"], "tt0816692")
+        self.assertNotIn("imdb", show)
+        self.assertIsNone(calls[0][1])
+        self.assertEqual(calls[1], ("https://api.themoviedb.org/3/tv/5", {"append_to_response": "external_ids"}))
 
 
 class CallbackTests(unittest.TestCase):

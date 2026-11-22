@@ -39,6 +39,7 @@ from providers import (
     music_title,
     musicbrainz_album,
     musicbrainz_match,
+    tmdb_details,
     tmdb_request,
     video_query,
     generic_clip,
@@ -1166,7 +1167,7 @@ class Worker:
         def series(identifier):
             def fetch_series():
                 self.throttle(provider)
-                return tmdb_request(f"/tv/{identifier}", self.settings)
+                return tmdb_details("tv", identifier, self.settings)
 
             key = f"tv-catalog/tmdb-series/{identifier}"
             if refresh:

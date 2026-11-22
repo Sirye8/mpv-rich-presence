@@ -4,7 +4,7 @@ Automatic recognition prefers TMDB once it reaches movie or TV lookup. Movie mat
 
 Leave `tmdb_key` empty to use the shared service. For direct lookups, enter your own TMDB API Read Access Token in the local config. See the [settings reference](user-guide.md#account-helper-and-provider-access).
 
-The existing `mpv-anilist-login` Cloudflare Worker serves a separate `/metadata/` route for movie and TV search and details. It sends only the metadata fields used by the plugin. Viewer requests contain a cleaned title or public provider ID. The Worker rejects paths, arbitrary destinations, and unrelated TMDB routes. The desktop caches results locally. TMDB requests have their own rate limiter and use the account's existing Workers Free request allowance.
+The existing `mpv-anilist-login` Cloudflare Worker serves a separate `/metadata/` route for movie and TV search and details. It sends only the metadata fields used by the plugin. Movie and show details include the IMDb ID from the same TMDB request for the optional IMDb card button. Viewer requests contain a cleaned title or public provider ID. The Worker rejects paths, arbitrary destinations, and unrelated TMDB routes. The desktop caches results locally. TMDB requests have their own rate limiter and use the account's existing Workers Free request allowance.
 
 ## Owner setup
 

@@ -75,7 +75,7 @@ FIELDS = {
 }
 GLOBAL_ONLY = {"panel", "panel-theme", "folder-filter", "recognition-options", "watch-retention", "save-scopes"}
 PIN_FIELDS = {
-    **dict.fromkeys("provider kind name title match year numbering genre cover link artist album notation episode_title stream_title recording group_title release_date show_type".split(), str),
+    **dict.fromkeys("provider kind name title match year numbering genre cover link imdb artist album notation episode_title stream_title recording group_title release_date show_type".split(), str),
     "id": lambda value: type(value) in (int, str), "live": bool,
     **dict.fromkeys(("release", "release_group"), lambda value: value is None or isinstance(value, str)),
     "duration_ms": lambda value: value is None or (type(value) is int and 0 <= value < 2**31),
