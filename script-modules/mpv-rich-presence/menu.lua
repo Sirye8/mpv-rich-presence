@@ -84,8 +84,17 @@ return function(make_sheet, send, options, help)
     local field_help={title="Title of the anime, film, show, song or stream.",artist="Track artist.",album="Album or release.",
         episode="Episode number used for AniList.",original="Episode number from the filename.",group="Release group.",
         channel="Stream channel.",year="Release year.",details="The card's first text line before templates.",
-        state="The card's second text line before templates.",site="Name of the site the button links to."}
+        state="The card's second text line before templates.",status="Playback status, such as Playing or Paused (01:23).",site="Name of the site the button links to."}
     local text_target
+    local large_image_names={cover="Cover or album art",still="Episode still",mpv="mpv logo",custom="Custom image",off="Off"}
+    local large_image_help={cover="The matched anime, film, show or album artwork.",
+        still="The TV episode's still image from TMDB or TVmaze. Other media use the cover.",
+        mpv="The mpv logo, for a card that does not show artwork from the file.",
+        custom="Your own public https image link. Placeholders are URL-encoded.",off="No large image."}
+    local small_image_names={status="Play and pause",provider="Matched site",off="Off"}
+    local small_image_help={status="A play or pause icon that follows playback.",
+        provider="The icon of the site that matched this file, such as AniList or TMDB. Unmatched files show the play or pause icon.",
+        off="No small badge or badge hover text."}
     local function unknown_fields(text,extra)
         local allowed={}
         for _,name in ipairs(layout_fields[layout] or layout_fields.all) do allowed[name]=true end
@@ -531,13 +540,21 @@ return function(make_sheet, send, options, help)
                 local default=key=="timer" and opts.preset=="private" and "off" or item[3][1]
                 choice(item[1],item[3],opts[key] or default,function(v) appearance_edit(key,v); refresh() end)
             end
-            for _,item in ipairs({{"Release group","group"},{"Episode","episode"},{"Artwork","art"},{"Badge","badge"},
-                {"Tooltip","tooltip"},{"Details","details"},{"State","state"}}) do
-                local key=item[2]
-                local default=not ((key=="group" and opts.preset=="clean") or
-                    ((key=="art" or key=="badge" or key=="button") and opts.preset=="private"))
-                toggle(item[1],key,default)
+            local private=opts.preset=="private"
+            local function toggles(items)
+                for _,item in ipairs(items) do
+                    local key=item[2]
+                    toggle(item[1],key,not ((key=="group" and opts.preset=="clean") or (key=="badge" and private)))
+                end
             end
+            toggles({{"Release group","group"},{"Episode","episode"}})
+            local large=opts.large_image or ((opts.art==false or private) and "off" or "cover")
+            choice("Large image",{"cover","still","mpv","custom","off"},large,function(v) appearance_edit("large_image",v); refresh() end,
+                nil,large_image_names,nil,large_image_help)
+            local small=opts.small_image or ((opts.badge==false or private) and "off" or "status")
+            choice("Small badge",{"status","provider","off"},small,function(v) appearance_edit("small_image",v); refresh() end,
+                nil,small_image_names,nil,small_image_help)
+            toggles({{"Tooltip","tooltip"},{"Details","details"},{"State","state"}})
             local slots=button_slots(opts)
             row("Buttons   "..button_summary(slots[1])..(slots[2] and (" · "..button_summary(slots[2])) or ""),
                 function() ui.push("Card buttons") end,false,nil,"Buttons")
@@ -547,6 +564,22 @@ return function(make_sheet, send, options, help)
                 local label,key=item[1],item[2]
                 row(label.."   "..(opts[key] or "Preset default"),function()
                     edit_text({label=label,value=opts[key] or "",limit=128,save=function(v) appearance_edit(key,v) end})
+                end,false,nil,label)
+            end
+            if large=="custom" then
+                row("Large image link   "..(opts.large_image_url or "Not set"),function()
+                    edit_text({label="Large image link",value=opts.large_image_url or "",limit=512,save=function(v)
+                        if not v:match("^https://[%w%-%.]+%.%a%a+/") then
+                            notice("Enter a public image link that starts with https://."); return false
+                        end
+                        appearance_edit("large_image_url",v)
+                    end})
+                end,false,nil,"Large image link")
+            end
+            for _,item in ipairs({{"Large hover text","large_text_template",{}},{"Badge hover text","small_text_template",{"status"}}}) do
+                local label,key,extra=item[1],item[2],item[3]
+                row(label.."   "..(opts[key] or "Default"),function()
+                    edit_text({label=label,value=opts[key] or "",limit=128,extra=extra,save=function(v) appearance_edit(key,v) end})
                 end,false,nil,label)
             end
             for _,item in ipairs({{"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do

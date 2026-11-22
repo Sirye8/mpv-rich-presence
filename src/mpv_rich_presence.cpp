@@ -575,6 +575,10 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
                         !b.contains("label") || !b.at("label").is_string()) return false;
             }
             else if (key == "button_slots" && val == false) continue;
+            else if (key == "large_image")
+            { if (!(val=="cover" || val=="still" || val=="mpv" || val=="custom" || val=="off")) return false; }
+            else if (key == "small_image")
+            { if (!(val=="status" || val=="provider" || val=="off")) return false; }
             else if (key == "button_slots")
             {
                 static const std::set<std::string> sites{"off","provider","custom","anilist","myanimelist","tmdb","imdb",

@@ -6,6 +6,10 @@ function imdbId(value) {
   return typeof value === "string" && /^tt\d{5,10}$/.test(value) ? value : undefined;
 }
 
+function imagePath(value) {
+  return typeof value === "string" && /^\/[\w.-]{1,80}\.(?:jpg|png)$/.test(value) ? value : undefined;
+}
+
 function movieFields(item) {
   return {
     id: item.id, title: item.title, name: item.name,
@@ -67,7 +71,7 @@ export async function metadata(request, url, env) {
     if (result.ok && result.headers.get("Content-Type")?.includes("application/json")) {
       const data = await result.json();
       const output = search ? { results: data.results.slice(0, 10).map(movieFields) }
-        : path.includes("/episode/") ? { name: data.name }
+        : path.includes("/episode/") ? { name: data.name, still_path: imagePath(data.still_path) }
         : movieFields(data);
       return Response.json(output, { headers: noStore });
     }

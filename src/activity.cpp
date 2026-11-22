@@ -33,6 +33,23 @@ namespace mpvrp
 
     struct button_link { std::string site, url; };
 
+    static const std::string MPV_LOGO = "https://raw.githubusercontent.com/mpv-player/mpv/master/etc/mpv-icon-8bit-128x128.png";
+
+    // Website of the matched entry, used for the provider badge icon.
+    static std::string site_domain(const playback& m)
+    {
+        if (m.anime) return m.anilist_id > 0 ? "anilist.co" : "";
+        const auto source = m.provider.value("provider", std::string{});
+        const auto link = m.provider.value("link", std::string{});
+        if (source.starts_with("tmdb-")) return "themoviedb.org";
+        if (source == "tvmaze") return "tvmaze.com";
+        if (source == "wikidata") return "wikidata.org";
+        if (source == "musicbrainz" || source == "acoustid") return "musicbrainz.org";
+        if (link.find("twitch.tv/") != std::string::npos) return "twitch.tv";
+        if (link.find("youtube.com/") != std::string::npos || link.find("youtu.be/") != std::string::npos) return "youtube.com";
+        return "";
+    }
+
     // Resolves one button site to its display name and public URL, or an empty URL when this file has no such link.
     static button_link site_link(const std::string& site, const playback& m, const std::string& title, const std::string& query)
     {
@@ -236,9 +253,10 @@ namespace mpvrp
                 state += state.empty() ? duration : " (" + duration + ")";
         }
 
+        json fields = json::object();
         if (!generic)
         {
-            json fields={{"title",m.anime ? title : m.title},{"artist",m.artist},{"group",m.group},
+            fields={{"title",m.anime ? title : m.title},{"artist",m.artist},{"group",m.group},
                          {"episode",m.episode},{"original",m.raw_episode},{"album",m.album},{"state",state},
                          {"details",details},{"channel",m.channel},{"year",m.provider.value("year",std::string{})}};
             if (options.contains("headline")) name = render_template(options.at("headline"),fields);
@@ -288,21 +306,67 @@ namespace mpvrp
                 buttons.push_back({{"label", truncate_utf8_bytes(label, 32)}, {"url", chosen.url}});
             }
             if (!buttons.empty()) card["buttons"] = buttons;
+
+            // Large image choice. Without one, the cover and its default hover text stay as set above.
+            if (options.contains("large_image") || options.contains("large_text_template"))
+            {
+                const auto cover = m.anime ? m.cover : m.provider.value("cover", std::string{});
+                const auto large = options.value("large_image", std::string(options.value("art", true) ? "cover" : "off"));
+                std::string image;
+                if (large == "cover") image = cover;
+                else if (large == "still") image = m.provider.value("still", cover);
+                else if (large == "mpv") image = MPV_LOGO;
+                else if (large == "custom")
+                {
+                    json encoded = fields;
+                    for (auto& [key, value] : encoded.items()) value = url_encode(value.get<std::string>());
+                    image = render_template(options.value("large_image_url", std::string{}), encoded);
+                }
+                if (image.empty() || !public_url(image))
+                {
+                    card.erase("large_image");
+                    card.erase("large_text");
+                }
+                else
+                {
+                    card["large_image"] = image;
+                    card["large_text"] = options.contains("large_text_template")
+                        ? render_template(options.at("large_text_template"), fields) : (m.anime ? title : name);
+                    if (card["large_text"] == "") card.erase("large_text");
+                }
+            }
         }
         if (options.contains("compact")) card["compact"] = options.at("compact");
         card["name"] = name.empty() ? "mpv" : truncate_utf8_bytes(name, 128);
         if (!details.empty() && options.value("details", true)) card["details"] = details;
         if (!state.empty() && options.value("state", true)) card["state"] = state;
-        if (options.value("badge", !generic))
+        // Small badge: playback status icon, the matched site's icon, or nothing. The older badge switch maps to status or off.
+        auto small = options.contains("small_image") ? options.value("small_image", std::string("status"))
+                                                       : std::string(options.value("badge", !generic) ? "status" : "off");
+        if (generic && small == "provider") small = "status";
+        if (small != "off")
         {
             const std::string icons = "https://raw.githubusercontent.com/google/material-design-icons/3.0.1/av/2x_web/";
             card["small_image"] = icons + (m.paused || m.buffering ? "ic_pause_white_48dp.png" : "ic_play_arrow_white_48dp.png");
+            if (small == "provider")
+            {
+                const auto domain = site_domain(m);
+                if (!domain.empty()) card["small_image"] = "https://www.google.com/s2/favicons?domain=" + domain + "&sz=64";
+            }
             if (options.value("tooltip", true))
             {
-                if (m.buffering) card["small_text"] = "Buffering...";
-                else if (m.paused) card["small_text"] = "Paused (" + duration + ")";
-                else if (m.speed != 1) card["small_text"] = std::format("Playing ({:.2f}x)", m.speed);
-                else card["small_text"] = "Playing";
+                std::string status;
+                if (m.buffering) status = "Buffering...";
+                else if (m.paused) status = "Paused (" + duration + ")";
+                else if (m.speed != 1) status = std::format("Playing ({:.2f}x)", m.speed);
+                else status = "Playing";
+                card["small_text"] = status;
+                if (!generic && options.contains("small_text_template"))
+                {
+                    auto badge_fields = fields;
+                    badge_fields["status"] = status;
+                    card["small_text"] = render_template(options.at("small_text_template"), badge_fields);
+                }
             }
         }
         const auto timer = options.value("timer", std::string(generic ? "off" : "progress"));

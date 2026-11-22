@@ -190,6 +190,12 @@ def imdb_id(data):
     return value if re.fullmatch(r"tt\d{5,10}", value) else ""
 
 
+def tvmaze_still(episode):
+    """The episode's still image from TVmaze, when it has one."""
+    url = ((episode or {}).get("image") or {}).get("original") or ""
+    return {"still": url} if re.fullmatch(r"https://static\.tvmaze\.com/[\w./-]{1,200}", url) else {}
+
+
 def public_query(text):
     text = text.strip()
     if not text or len(text) > 180 or re.search(r"[/\\:?&#\x00-\x1f]", text):
@@ -826,6 +832,8 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
                 "/tv/%d/season/%d/episode/%d" % (hit["id"], season, number), settings
             )
             item["episode_title"] = ep.get("name", "")
+            if re.fullmatch(r"/[\w.-]{1,80}\.(?:jpg|png)", ep.get("still_path") or ""):
+                item["still"] = "https://image.tmdb.org/t/p/w780" + ep["still_path"]
             # Both the direct API and the relay return an episode name only
             # after a successful lookup of this exact season and episode.
             if item["episode_title"]:
@@ -843,6 +851,7 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
         )
         item["episode_title"] = data.get("name", "")
         item["numbering"] = "S%02dE%02d" % tuple(map(int, episode))
+        item.update(tvmaze_still(data))
     elif provider == "tvmaze" and airdate:
         throttle(provider)
         matches = fetch(
@@ -852,4 +861,5 @@ def details(provider, hit, settings, throttle, episode, airdate=None):
         if len(matches) == 1:
             item["episode_title"] = matches[0].get("name", "")
             item["numbering"] = airdate
+            item.update(tvmaze_still(matches[0]))
     return item

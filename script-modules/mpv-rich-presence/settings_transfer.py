@@ -24,6 +24,9 @@ APPEARANCE = {
     "compact": {"name", "details", "state"},
     **dict.fromkeys("group episode art badge tooltip button details state spoilers custom".split(), bool),
     **dict.fromkeys("headline details_template state_template large_url details_url state_url".split(), str),
+    **dict.fromkeys("large_text_template small_text_template large_image_url".split(), str),
+    "large_image": {"cover", "still", "mpv", "custom", "off"},
+    "small_image": {"status", "provider", "off"},
     "buttons": lambda value: isinstance(value, list) and len(value) <= 2 and all(
         isinstance(button, dict) and set(button) == {"label", "url"}
         and all(isinstance(part, str) for part in button.values()) for button in value
@@ -35,7 +38,8 @@ APPEARANCE = {
     ),
 }
 # Settings added after v2.0.0, with the first release that reads them.
-INTRODUCED = {("appearance", "button_slots"): (2, 3)}
+INTRODUCED = {("appearance", key): (2, 3) for key in
+              "button_slots large_image small_image large_image_url large_text_template small_text_template".split()}
 
 
 def integer(low, high):
@@ -75,7 +79,7 @@ FIELDS = {
 }
 GLOBAL_ONLY = {"panel", "panel-theme", "folder-filter", "recognition-options", "watch-retention", "save-scopes"}
 PIN_FIELDS = {
-    **dict.fromkeys("provider kind name title match year numbering genre cover link imdb artist album notation episode_title stream_title recording group_title release_date show_type".split(), str),
+    **dict.fromkeys("provider kind name title match year numbering genre cover still link imdb artist album notation episode_title stream_title recording group_title release_date show_type".split(), str),
     "id": lambda value: type(value) in (int, str), "live": bool,
     **dict.fromkeys(("release", "release_group"), lambda value: value is None or isinstance(value, str)),
     "duration_ms": lambda value: value is None or (type(value) is int and 0 <= value < 2**31),

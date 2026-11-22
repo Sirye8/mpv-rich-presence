@@ -92,6 +92,27 @@ int main(int argc, char** argv)
     if (literal.at("name") != "{artist} Live by Band" || literal.at("details") != "Band" || literal.contains("state")) return 1;
     if (format_activity(braces, {{"headline","Y"}}).at("name") != "mpv") return 1;
 
+    // Large image, badge and hover text choices.
+    playback episode;
+    episode.video = true;
+    episode.title = "Loki";
+    episode.provider = {{"kind","tv"},{"provider","tmdb-tv"},{"name","Loki"},{"numbering","S02E04"},
+        {"cover","https://image.tmdb.org/poster.jpg"},{"still","https://image.tmdb.org/still.jpg"},{"link","https://www.themoviedb.org/tv/84958"}};
+    auto plain = format_activity(episode, json::object());
+    if (plain.at("large_image") != "https://image.tmdb.org/poster.jpg" || plain.at("large_text") != "Loki") return 1;
+    auto still = format_activity(episode, {{"large_image","still"},{"large_text_template","{title} · {state}"},
+        {"small_image","provider"},{"small_text_template","{status} · {year}|{status}"}});
+    if (still.at("large_image") != "https://image.tmdb.org/still.jpg" || still.at("large_text") != "Loki · S02E04" ||
+        still.at("small_image") != "https://www.google.com/s2/favicons?domain=themoviedb.org&sz=64" ||
+        still.at("small_text") != "Playing") return 1;
+    if (format_activity(episode, {{"large_image","mpv"}}).at("large_image").get<std::string>().find("mpv-icon") == std::string::npos) return 1;
+    auto none = format_activity(episode, {{"large_image","off"},{"small_image","off"}});
+    if (none.contains("large_image") || none.contains("large_text") || none.contains("small_image")) return 1;
+    auto own = format_activity(episode, {{"large_image","custom"},{"large_image_url","https://img.example.org/{title}.png"}});
+    if (own.at("large_image") != "https://img.example.org/Loki.png") return 1;
+    if (format_activity(episode, {{"large_image","custom"},{"large_image_url","http://insecure.example.org/a.png"}}).contains("large_image")) return 1;
+    if (format_activity(episode, {{"art",false}}).contains("large_image")) return 1;
+
     // Button slots: defaults, legacy settings, sites, fallbacks, custom URLs and limits.
     auto button = [](const json& card, size_t index, const char* field) {
         return card.contains("buttons") && card.at("buttons").size() > index
