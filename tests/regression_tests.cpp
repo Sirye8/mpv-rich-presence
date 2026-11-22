@@ -190,6 +190,7 @@ static void test_anilist_page_parsing()
                 "media": [
                     {
                         "id": 16498,
+                        "idMal": 16498,
                         "title": {
                             "romaji": "Shingeki no Kyojin",
                             "english": "Attack on Titan",
@@ -231,6 +232,7 @@ static void test_anilist_page_parsing()
         TEST_CHECK_EQ(results[0].sequel_id, 20958);
         TEST_CHECK(results[0].unambiguous_sequel);
         TEST_CHECK_EQ(results[0].cover_url, "https://example.com/cover.jpg");
+        TEST_CHECK_EQ(results[0].mal_id, 16498);
     }
 
     // Invalid response where Page is missing (e.g. data.media)
@@ -249,6 +251,10 @@ static void test_anilist_page_parsing()
     bool bad_parse_ok = parse_anilist_page_response(j_invalid, bad_results);
     TEST_CHECK(bad_parse_ok == false);
     TEST_CHECK(bad_results.empty());
+
+    // A missing or null idMal leaves the MyAnimeList button without a link.
+    const auto no_mal = parse_anilist_media(nlohmann::json::parse(R"({"id": 1, "idMal": null})"));
+    TEST_CHECK(no_mal && no_mal->mal_id == 0);
 }
 
 static void test_anilist_sequel_ambiguity()

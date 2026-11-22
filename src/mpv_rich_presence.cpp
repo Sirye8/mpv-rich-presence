@@ -402,6 +402,7 @@ static void process_anime_lookup(rich_presence_state& state, const std::string& 
     state.anime_release_group = std::move(match->release_group);
     state.anime_cover_url = std::move(media.cover_url);
     state.anime_anilist_id = media.id;
+    state.anime_mal_id = media.mal_id;
     state.anime_dirty = true;
 }
 
@@ -498,6 +499,7 @@ static void on_eligibility_changed(rich_presence_state& state)
             std::lock_guard<std::mutex> lock(state.anime_mutex);
             state.is_anime = false;
             state.anime_anilist_id = 0;
+            state.anime_mal_id = 0;
             state.episode_review.clear();
         }
         if ((state.is_rpc_visible || state.publish_pending) && state.discord_api && state.discord)
@@ -984,6 +986,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 std::lock_guard lock(state.anime_mutex);
                 state.is_anime = false;
                 state.anime_anilist_id = 0;
+                state.anime_mal_id = 0;
                 state.episode_review.clear();
             }
             if (old_lookup != lookup_allowed(state) || old_sources != state.sources || old_correction != state.correction || action == "refresh_match")
@@ -1151,6 +1154,7 @@ static void handle_file_loaded(rich_presence_state& state)
         std::lock_guard<std::mutex> lock(state.anime_mutex);
         state.is_anime = false;
         state.anime_anilist_id = 0;
+        state.anime_mal_id = 0;
         state.episode_review.clear();
     }
 
@@ -1493,6 +1497,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                     std::lock_guard<std::mutex> lock(state.anime_mutex);
                     state.is_anime = false;
                     state.anime_anilist_id = 0;
+                    state.anime_mal_id = 0;
                 }
                 hide_rich_presence();
             }
@@ -1579,6 +1584,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 media.group = state.anime_release_group;
                 media.cover = state.anime_cover_url;
                 media.anilist_id = state.anime_anilist_id;
+                media.mal_id = state.anime_mal_id;
             }
         }
 
@@ -1693,6 +1699,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 std::lock_guard lock(state.anime_mutex);
                 state.is_anime = false;
                 state.anime_anilist_id = 0;
+                state.anime_mal_id = 0;
                 state.episode_review.clear();
             }
             if (old_sources != state.sources || old != state.correction ||
@@ -1733,6 +1740,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         {
             media.anime = false;
             media.anilist_id = 0;
+            media.mal_id = 0;
             media.episode.clear();
             media.anime_title.clear();
             watch_episode = false;

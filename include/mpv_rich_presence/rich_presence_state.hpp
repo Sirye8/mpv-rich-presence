@@ -97,6 +97,7 @@ namespace mpvrp
         std::string anime_release_group = "";
         std::string anime_cover_url = "";
         int anime_anilist_id = 0;
+        int anime_mal_id = 0;
 
         int last_playback_paused = -1;
         int last_published_paused = -1;

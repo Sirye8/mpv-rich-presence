@@ -21,6 +21,7 @@
 
 const std::string ANILIST_PAGE_FIELDS = R"(
     id
+    idMal
     title { romaji english native }
     synonyms
     episodes
@@ -49,6 +50,8 @@ std::optional<anilist_media> parse_anilist_media(const nlohmann::json& media)
 
     anilist_media result;
     result.id = media.value("id", 0);
+    if (media.contains("idMal") && media["idMal"].is_number_integer())
+        result.mal_id = media["idMal"].get<int>();
 
     if (media.contains("title") && !media["title"].is_null())
     {

@@ -26,6 +26,7 @@
 struct anilist_media
 {
     int id = 0;
+    int mal_id = 0; // MyAnimeList ID linked from AniList, or 0
     std::string title; // Preferred display title
     std::vector<std::string> matching_titles; // Romaji, English, Native, and Synonyms for alias matching
     std::string romaji, english, native;
