@@ -51,6 +51,15 @@ The Windows x64 ZIP is the prebuilt release asset. Linux users can build the sam
 
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 
+## Release a version
+
+Every release, including one that only fixes bugs, increases the second version number: `v2.3`, then `v2.4`.
+
+1. Update `project(... VERSION 2.3)` in `CMakeLists.txt`, `"version": "2.3.0"` in `vcpkg.json` and any version lines in the docs. Commit only these changes as `chore(release): set version to 2.3`.
+2. Run `python tools/package.py dist/mpv-rich-presence-windows-x64.zip`. Copy the ZIP and its `.sha256` file to `dist/v2.3/`, and check that `build-info.json` names the release commit.
+3. Push `main` and wait for the Regressions workflow to pass.
+4. Run `gh release create v2.3 --target main --title v2.3 --notes-file <notes>` with the ZIP and its `.sha256` file. The notes list what changed and how to upgrade, and link the tag's user guide and build guide.
+
 ## License
 
 See [LICENSE](../LICENSE) for the project's license and [NOTICE](../NOTICE) for upstream attribution and third-party terms.
