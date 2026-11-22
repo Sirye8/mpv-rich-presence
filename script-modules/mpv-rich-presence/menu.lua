@@ -698,7 +698,6 @@ return function(make_sheet, send, options, help)
             row("Cancel",ui.back)
         elseif page=="Recognition & folders" then
             scope_row()
-            row("Folder filters",function() ui.push("Folder filters") end)
             local current=(snap.sources or {}).source or "auto"
             local label=current
             for _,source in ipairs(sources) do if source[1]==current then label=source[2]; break end end
@@ -836,21 +835,34 @@ return function(make_sheet, send, options, help)
             row("Exclude this folder",function() confirm("Block lookups, tracking and Discord for this folder?",function()
                 apply("exclude",{blocked=true},"folder")
             end) end)
-            row("Hide Discord for a time",function()
-                ui.text("Minutes to hide (0 to resume)","60",function(value)
-                    local minutes=tonumber(value)
-                    if minutes and minutes==math.floor(minutes) and minutes>=0 and minutes<=1440 then
-                        request("hide_minutes",{minutes=minutes}); refresh()
-                    end
+            -- Timed hiding shows when it ends, with one action to resume early.
+            local left=tonumber(snap.hidden_seconds) or 0
+            if left>0 or snap.hidden_until_exit then
+                row("Hidden until   "..(snap.hidden_until_exit and "This window closes" or os.date("%H:%M",os.time()+left)),nil,false,nil,"Hidden until")
+                row("Resume Discord now",function()
+                    if left>0 then request("hide_minutes",{minutes=0}) end
+                    if snap.hidden_until_exit then request("hide_until_exit",{enabled=false}) end
+                    refresh()
                 end)
-            end)
-            row(snap.hidden_until_exit and "End window hide" or "Hide Discord until this window closes",function()
-                request("hide_until_exit",{enabled=not snap.hidden_until_exit}); refresh()
-            end)
+            end
+            choice("Hide Discord",{"15","60","180","window","custom"},"",function(v)
+                if v=="window" then request("hide_until_exit",{enabled=true}); refresh()
+                elseif v=="custom" then
+                    ui.text("Minutes to hide (1 to 1440)","60",function(value)
+                        local minutes=tonumber(value)
+                        if not minutes or minutes~=math.floor(minutes) or minutes<1 or minutes>1440 then
+                            return notice("Enter whole minutes from 1 to 1440.")
+                        end
+                        request("hide_minutes",{minutes=minutes}); refresh()
+                    end)
+                else request("hide_minutes",{minutes=tonumber(v)}); refresh() end
+            end,"Choose",{["15"]="15 minutes",["60"]="1 hour",["180"]="3 hours",window="Until this window closes",custom="Custom…"},nil,
+                {["15"]="Hide the card for 15 minutes in this window.",["60"]="Hide the card for an hour in this window.",
+                ["180"]="Hide the card for three hours in this window.",window="Hide the card until this mpv window closes.",
+                custom="Enter any number of minutes up to a day."})
             row(snap.pinned and "Return to last-resumed window" or "Pin this window for Discord",function()
                 request(snap.pinned and "unpin" or "pin"); refresh()
             end)
-            row("Use this window",function() request("claim"); refresh() end)
             switch("Track while hidden",tracking.without_sharing==true,function()
                 apply("tracking",{without_sharing=not tracking.without_sharing})
             end)

@@ -62,6 +62,8 @@ local help = {
     ["Badge hover text"]="Text Discord shows when someone hovers over the badge. {status} is the playback status, such as Playing or Paused (01:23).",
     ["While paused"]="Choose what this media layout shows while playback is paused: the full card, a generic mpv card, or nothing.",
     ["Pause timeout"]="Hide a paused card after this many minutes for this media layout. 0 keeps it until playback resumes. Without a value, pause_timeout from rich-presence.conf applies.",
+    ["Hide Discord"]="Hide the Discord card in this window for a set time or until the window closes. Lookups and tracking keep their own settings.",
+    ["Resume Discord now"]="End the timed or window hide and share the card again.",
     ["Insert placeholder"]="Add a field to the end of the text. Only fields this media layout can fill are listed. Separate optional parts with | so an empty field drops only its part.",
     Keep="Keep this text in the Appearance draft. Press Apply on Appearance to save it.",
     ["Custom link"]="Enter a public https link. Placeholders such as {title} are URL-encoded, so a search link like https://example.com/search?q={title} works with any title.",
@@ -112,12 +114,8 @@ local help = {
     ["Start private session"]="Stop Discord sharing, lookups, and tracking for this session.",
     ["End private session"]="Restore the usual file and folder privacy rules.",
     ["Exclude this folder"]="Review blocking Discord, recognition, and tracking in this folder and its subfolders.",
-    ["Hide Discord for a time"]="Enter a whole number from 1 to 1440 minutes. Enter 0 to end the timed hide.",
-    ["Hide Discord until this window closes"]="Hide this window's Discord presence until it closes.",
-    ["End window hide"]="Restore the usual sharing rules for this window.",
     ["Pin this window for Discord"]="Keep this eligible window as the Discord publisher.",
     ["Return to last-resumed window"]="Release the pin so the last resumed eligible window can publish.",
-    ["Use this window"]="Make this window the active Discord publisher.",
     ["Track while hidden"]="Allow tracking while Discord is hidden. Private sessions and exclusions still block it.",
     ["Connect account"]="Approve sign-in in your browser and use the OS credential store when available.",
     ["Connect for this session"]="Approve sign-in in your browser and keep the credential in memory until mpv closes.",
@@ -276,6 +274,7 @@ local choices = {
 }
 
 local read_only = {
+    ["Privacy & windows"]={["Hidden until"]="When this window's Discord hide ends."},
     ["Unapplied changes"]={["Unapplied summary"]="Card edits stay in the preview until you apply them."},
     ["Edit text"]={Check="Shows placeholders this media layout cannot fill. Fix them before keeping the text.",
         ["Discord limit"]="Discord shows up to this many characters. Longer text is cut at a whole character.",

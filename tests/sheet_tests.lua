@@ -280,7 +280,7 @@ local function verify()
     clock=clock+.2
     animation().fn()
 
-    local model,job,opened,applied,choices,select_choice,typed
+    local model,job,opened,applied,choices,select_choice,typed,last_request
     local menu=dofile(modules.."/menu.lua")(function(value)
         model=value
         local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
@@ -291,6 +291,7 @@ local function verify()
         return panel
     end,function(req)
         job=req.job or job
+        if req.action~="snapshot" then last_request=req end
         if req.action=="apply" then applied=req end
     end,{tmdb_key="",acoustid_key="",
         open_url=function(url) opened=url end},help)
@@ -334,6 +335,15 @@ local function verify()
     model.before_leave("Appearance",function() left="applied" end)
     find("Unapplied changes","Apply and leave").run()
     assert(left=="applied" and applied.category=="appearance" and applied.values.episode==false,"Apply and leave did not save the draft")
+    -- Timed hiding shows its end time and resumes in one step; duplicate rows are gone.
+    menu.update({session=8,hidden_seconds=600})
+    assert(find("Privacy & windows","Hidden until").label:match("^Hidden until   %d%d:%d%d$"))
+    find("Privacy & windows","Resume Discord now").run()
+    assert(last_request.action=="hide_minutes" and last_request.minutes==0)
+    find("Privacy & windows","Hide Discord").run()
+    select_choice("180")
+    assert(last_request.action=="hide_minutes" and last_request.minutes==180)
+    assert(not find("Privacy & windows","Use this window") and not find("Recognition & folders","Folder filters"))
     -- One search form: the chosen provider, a prefilled title, and IDs or links from three sites.
     menu.update({session=8,allowed=true,match=42,title="Fixture anime",provider="local"})
     assert(find("Recognition & folders","Search").label=="Search   Fixture anime")

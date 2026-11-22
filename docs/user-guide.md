@@ -179,7 +179,9 @@ Ctrl+q script-message-to mpv_rich_presence review-before "quit-watch-later"
 
 **Privacy & windows** can hide only the card, switch to a generic card, or start a private session that stops both lookups and tracking. Folder exclusions and private sessions take precedence. **Track while hidden** lets AniList continue when Discord sharing is off and the file is otherwise eligible. A new or resumed file can claim Discord unless another player is pinned.
 
-Open **Folder filters** from **Privacy & windows** or **Recognition & folders**. Review whether the current file passes, choose a filter mode, and add or remove folders. These edits apply across mpv windows and override the conf. **Restore conf filter** returns both settings to their file values. An exception can allow just the open file or all local files in the current window until it closes. Exceptions still honor private sessions and separate exclusions.
+**Hide Discord** hides this window's card for 15 minutes, an hour, three hours, a custom number of minutes, or until the window closes. While it is hidden, **Hidden until** shows when sharing returns and **Resume Discord now** ends it early.
+
+Open **Folder filters** from **Privacy & windows**. Review whether the current file passes, choose a filter mode, and add or remove folders. These edits apply across mpv windows and override the conf. **Restore conf filter** returns both settings to their file values. An exception can allow just the open file or all local files in the current window until it closes. Exceptions still honor private sessions and separate exclusions.
 
 **Saved data** groups profiles, matches, caches and the current account's AniList records. Open a category to search or clear its entries. Metadata cache rows show their provider and expiry rather than the internal key. Hover for the key and the effect of clearing the record.
 

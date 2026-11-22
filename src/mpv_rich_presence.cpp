@@ -1901,7 +1901,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"save_scopes",state.store ? state.store->get("save-scopes","global") : nlohmann::json::object()},
                 {"watch_retention",state.store ? state.store->get("watch-retention","global") : nlohmann::json::object()},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
-                {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"appearance_scope",state.appearance_scope},
+                {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},
+                {"hidden_seconds",std::max<int64_t>(0,chrono::duration_cast<chrono::seconds>(
+                    state.hide_until-chrono::steady_clock::now()).count())},{"appearance_scope",state.appearance_scope},
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
                 {"has_file", !state.scope_path.empty()},
                 {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-") &&
