@@ -51,3 +51,9 @@ dist/
 
 __pycache__/
 *.pyc
+
+# Local project audit
+/PROJECT_AUDIT.md
+
+# Local planning notes
+/UPCOMING_CHANGES.md
