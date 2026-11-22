@@ -280,13 +280,14 @@ local function verify()
     clock=clock+.2
     animation().fn()
 
-    local model,job,opened,applied,choices,select_choice
+    local model,job,opened,applied,choices,select_choice,typed
     local menu=dofile(modules.."/menu.lua")(function(value)
         model=value
         local panel={open=true,page="AniList",draw=function() end,text_columns=function() return 38 end}
         panel.push=function(page) panel.page=page end
         panel.back=function() panel.page="AniList" end
         panel.choose=function(_,entries,select) choices,select_choice=entries,select end
+        panel.text=function(_,value,fn) fn(typed or value) end
         return panel
     end,function(req)
         job=req.job or job
@@ -333,6 +334,25 @@ local function verify()
     model.before_leave("Appearance",function() left="applied" end)
     find("Unapplied changes","Apply and leave").run()
     assert(left=="applied" and applied.category=="appearance" and applied.values.episode==false,"Apply and leave did not save the draft")
+    -- One search form: the chosen provider, a prefilled title, and IDs or links from three sites.
+    menu.update({session=8,allowed=true,match=42,title="Fixture anime",provider="local"})
+    assert(find("Recognition & folders","Search").label=="Search   Fixture anime")
+    find("Recognition & folders","Search").run()
+    assert(job.op=="search" and job.provider=="anilist" and job.query=="Fixture anime")
+    typed="https://www.themoviedb.org/tv/84958-loki"
+    find("Recognition & folders","Enter ID or link").run()
+    assert(job.op=="search" and job.provider=="tmdb-tv" and job.identifier==84958 and job.query=="")
+    typed="https://anilist.co/anime/21"
+    find("Recognition & folders","Enter ID or link").run()
+    find("Confirm","Confirm").run()
+    assert(applied.category=="match" and applied.values.id==21)
+    typed=nil
+    find("Recognition & folders","Search provider").run()
+    select_choice("tvmaze")
+    typed="73"
+    find("Recognition & folders","Enter ID or link").run()
+    assert(job.provider=="tvmaze" and job.identifier==73)
+    typed=nil
     find("Recognition & folders","Save for").run()
     assert(choices[2].disabled and choices[3].disabled)
     menu.update({session=8,has_file=true,has_local_folder=true})

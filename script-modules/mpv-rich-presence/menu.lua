@@ -89,7 +89,11 @@ return function(make_sheet, send, options, help)
     local draft_pages={Appearance=true,["Card preview"]=true,["Card buttons"]=true,["Button 1"]=true,["Button 2"]=true,
         ["Edit text"]=true,["Card text"]=true,["Artwork & badge"]=true,["Timer & pause"]=true,["Card links"]=true}
     local timer_names={progress="Progress",remaining="Remaining",session="Session",off="Off"}
-    local text_target, unapplied
+    local text_target, unapplied, search_provider
+    local search_names={anilist="AniList",["tmdb-movie"]="TMDB movies",["tmdb-tv"]="TMDB TV",tvmaze="TVmaze",musicbrainz="MusicBrainz"}
+    local search_help={anilist="Anime titles. Choosing a result pins its AniList ID.",
+        ["tmdb-movie"]="Films from TMDB.",["tmdb-tv"]="TV shows from TMDB. A result is saved for this file.",
+        tvmaze="TV shows from TVmaze, including air-date episodes.",musicbrainz="Recordings from MusicBrainz, using the file's artist tag when present."}
     local large_image_names={cover="Cover or album art",still="Episode still",mpv="mpv logo",custom="Custom image",off="Off"}
     local large_image_help={cover="The matched anime, film, show or album artwork.",
         still="The TV episode's still image from TMDB or TVmaze. Other media use the cover.",
@@ -234,10 +238,10 @@ return function(make_sheet, send, options, help)
         args.notice_page=args.notice_page or ui.page
         request("service",{job=args})
     end
-    local function start_search(provider,query,scope)
+    local function start_search(provider,query,scope,identifier)
         search_number=search_number+1
-        search={id=tostring(search_number),provider=provider,query=query,session=snap.session,scope=scope}
-        service("search",{provider=provider,query=query,request=search.id,notice_page="Search results"})
+        search={id=tostring(search_number),provider=provider,query=query,session=snap.session,scope=scope,identifier=identifier}
+        service("search",{provider=provider,query=query,identifier=identifier,request=search.id,notice_page="Search results"})
         if ui.page~="Search results" then ui.push("Search results") else ui.draw() end
     end
     local function clear_notice()
@@ -722,12 +726,31 @@ return function(make_sheet, send, options, help)
                 apply("recognition-options",{confirm_fingerprint=not recognition.confirm_fingerprint},"global")
             end)
             row("Provider settings and credits",function() ui.push("Providers") end)
-            row("AniList search",function() ui.text("Search anime","",function(q)
-                start_search("anilist",q,scope)
-            end) end)
-            row("Enter AniList ID or URL",function() ui.text("AniList ID or URL","",function(s)
-                local id=tonumber(s:match("^%d+$") or s:match("^https://anilist%.co/anime/(%d+)"))
-                if id then confirm("Use AniList "..id.." for "..scope,function() apply("match",{id=id,not_anime=false}) end) end
+            -- One search form for every provider, prefilled with the current title.
+            local provider=search_provider or (({["tmdb-movie"]="tmdb-movie",["tmdb-tv"]="tmdb-tv",tvmaze="tvmaze",
+                musicbrainz="musicbrainz",acoustid="musicbrainz",wikidata="tmdb-movie"})[snap.provider or ""] or "anilist")
+            choice("Search provider",{"anilist","tmdb-movie","tmdb-tv","tvmaze","musicbrainz"},provider,function(v)
+                search_provider=v; ui.draw()
+            end,nil,search_names,nil,search_help)
+            local prefill=(snap.match or 0)>0 and snap.title or (card.name~="mpv" and card.name) or ""
+            row("Search   "..(prefill~="" and prefill or "Enter a title"),function()
+                ui.text("Search "..search_names[provider],prefill,function(q) start_search(provider,q,scope) end)
+            end,true,nil,"Search")
+            row("Enter ID or link",function() ui.text("AniList, TMDB or TVmaze ID or link","",function(s)
+                s=s:match("^%s*(.-)%s*$")
+                local id=tonumber(s:match("^https://anilist%.co/anime/(%d+)") or (provider=="anilist" and s:match("^%d+$")))
+                if id then
+                    return confirm("Use AniList "..id.." for "..scope,function() apply("match",{id=id,not_anime=false}) end)
+                end
+                local kind,number=s:match("^https://www%.themoviedb%.org/(%a+)/(%d+)")
+                local target=kind=="movie" and "tmdb-movie" or kind=="tv" and "tmdb-tv" or nil
+                if not target then
+                    number=s:match("^https://www%.tvmaze%.com/shows/(%d+)")
+                    target=number and "tvmaze" or nil
+                end
+                if not target and s:match("^%d+$") and provider~="anilist" and provider~="musicbrainz" then target,number=provider,s end
+                if not target then return notice("Enter an AniList, TMDB or TVmaze ID or link.") end
+                start_search(target,"",scope,tonumber(number))
             end) end)
             local offset=(snap.correction or {}).offset or 0
             row("Episode offset   "..offset,function()
@@ -739,12 +762,6 @@ return function(make_sheet, send, options, help)
             end)
             row("Mark as non-anime",function() confirm("Skip anime matching for "..scope,function() apply("match",{not_anime=true}) end) end)
             row("Refresh match",function() request("refresh_match"); refresh() end)
-            for _,provider in ipairs({{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},{"musicbrainz","MusicBrainz"}}) do
-                local id,name=provider[1],provider[2]
-                row("Search "..name,function() ui.text("Search "..name,"",function(q)
-                    start_search(id,q,scope)
-                end) end)
-            end
             row("Fingerprint this file",function()
                 start_search("acoustid",nil,scope)
             end)
@@ -766,7 +783,7 @@ return function(make_sheet, send, options, help)
             elseif result.id~=search.id then row("Searching…")
             elseif result.state=="failed" then
                 row("Search failed   "..(result.error or "Provider unavailable"))
-                row("Retry search",function() start_search(search.provider,search.query,search.scope) end)
+                row("Retry search",function() start_search(search.provider,search.query,search.scope,search.identifier) end)
             else
                 local current=search
                 local tv=current.provider=="tmdb-tv" or current.provider=="tvmaze"

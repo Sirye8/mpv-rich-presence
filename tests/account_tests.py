@@ -26,7 +26,7 @@ from account import (
     save_progress,
 )
 from backend import Worker
-from providers import details, fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
+from providers import candidate_by_id, details, fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
 from settings_transfer import export_settings, import_settings
 
 
@@ -43,6 +43,23 @@ class TmdbDetailsTests(unittest.TestCase):
         self.assertNotIn("imdb", show)
         self.assertIsNone(calls[0][1])
         self.assertEqual(calls[1], ("https://api.themoviedb.org/3/tv/5", {"append_to_response": "external_ids"}))
+
+
+class CandidateByIdTests(unittest.TestCase):
+    def test_tmdb_and_tvmaze_ids_return_one_reviewable_result(self):
+        with patch("providers.fetch", return_value={"title": "Interstellar", "release_date": "2014-11-05"}):
+            self.assertEqual(candidate_by_id("tmdb-movie", 157336, {}, lambda _: None),
+                             [dict(id=157336, kind="movie", name="Interstellar", year="2014", title="Interstellar (2014)")])
+        show = {"id": 73, "name": "The Walking Dead", "premiered": "2010-10-31", "url": "https://www.tvmaze.com/shows/73/x",
+                "type": "Scripted", "image": None}
+        with patch("providers.fetch", return_value=show):
+            self.assertEqual(candidate_by_id("tvmaze", 73, {}, lambda _: None)[0]["link"], show["url"])
+        with patch("providers.fetch", side_effect=OSError("404")):
+            self.assertEqual(candidate_by_id("tvmaze", 9, {}, lambda _: None), [])
+        with self.assertRaises(AccountError):
+            candidate_by_id("musicbrainz", 1, {}, lambda _: None)
+        with self.assertRaises(AccountError):
+            candidate_by_id("tmdb-tv", 0, {}, lambda _: None)
 
 
 class CallbackTests(unittest.TestCase):

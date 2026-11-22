@@ -27,6 +27,7 @@ from account import (
     save_progress,
 )
 from providers import (
+    candidate_by_id,
     candidates,
     details,
     fingerprint,
@@ -921,13 +922,16 @@ class Worker:
         elif op == "search":
             provider = job["provider"]
             query = job.get("query", "")
+            identifier = job.get("identifier")
+            if isinstance(identifier, float) and identifier.is_integer():
+                identifier = int(identifier)
             request = job["request"]
             key = (
                 provider
                 + "/"
-                + hashlib.sha256(
+                + (f"id/{int(identifier)}" if identifier else hashlib.sha256(
                     (p["path"] if provider == "acoustid" else query).encode()
-                ).hexdigest()
+                ).hexdigest())
             )
 
             def valid():
@@ -938,6 +942,8 @@ class Worker:
             def fetch_results():
                 if provider == "acoustid":
                     return fingerprint(p["path"], self.settings, self.throttle, valid)
+                if identifier:
+                    return candidate_by_id(provider, identifier, self.settings, self.throttle)
                 return candidates(provider, query, self.settings, self.throttle)
 
             try:

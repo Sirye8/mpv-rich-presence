@@ -559,6 +559,33 @@ def music_art(sources):
     return ""
 
 
+def candidate_by_id(provider, identifier, settings, throttle):
+    """One search result for a TMDB or TVmaze ID, in the same shape as candidates()."""
+    if type(identifier) is not int or not 0 < identifier < 2**31:
+        raise AccountError("Enter a positive numeric ID.")
+    throttle(provider)
+    if provider in ("tmdb-movie", "tmdb-tv"):
+        kind = provider.split("-")[1]
+        try:
+            m = tmdb_request("/%s/%d" % (kind, identifier), settings)
+        except AccountError:
+            return []
+        name = m.get("title") or m.get("name")
+        if not name:
+            return []
+        year = (m.get("release_date") or m.get("first_air_date") or "")[:4]
+        return [dict(id=identifier, kind=kind, name=name, year=year, title="%s (%s)" % (name, year or "?"))]
+    if provider == "tvmaze":
+        try:
+            m = fetch("https://api.tvmaze.com/shows/%d" % identifier)
+        except (OSError, ValueError):
+            return []
+        return [dict(id=m["id"], kind="tv", name=m["name"], year=(m.get("premiered") or "")[:4],
+                     show_type=m.get("type", ""), title="%s (%s)" % (m["name"], (m.get("premiered") or "?")[:4]),
+                     cover=(m.get("image") or {}).get("original", ""), link=m["url"])]
+    raise AccountError("ID lookups support TMDB and TVmaze. Use Search for other providers.")
+
+
 def candidates(provider, query, settings, throttle, *, artist="", album=""):
     query = query.strip() if provider == "musicbrainz" else public_query(query)
     if not query:

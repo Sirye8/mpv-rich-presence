@@ -99,6 +99,8 @@ To classify a directory, open a file inside it and choose **Recognition & folder
 | Original | AniList for anime and local titles or tags for other media. |
 | Local only | Use local titles and tags. A saved manual match can still apply. |
 
+To correct a match, choose a **Search provider** and select **Search**. The current title is filled in, so you can edit it or search right away. **Enter ID or link** accepts an `anilist.co`, `themoviedb.org` or `tvmaze.com` link, or a numeric ID for the chosen provider. TMDB and TVmaze IDs show the entry for review before it is saved.
+
 The effective order is file, nearest matching folder, global panel setting, then `recognition_source` in the conf file. Choose **Inherit recognition source** to remove a rule. Saved match corrections still apply. **Fingerprint this file** runs an explicit AcoustID lookup on local audio.
 
 **TV folder rules** and **Local metadata files** are off by default under **Recognition & folders**. A TV folder rule reuses the selected series only for matching titles in that folder. Each file resolves its own episode. Choose **Dedicated folder** only for a single-series directory if files such as `S02E04.mkv` should use the rule. Conflicting titles use regular recognition. Legacy folder-wide TV cards can be inspected in **Saved data**. Create a new rule to replace one.
