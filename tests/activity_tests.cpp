@@ -168,6 +168,19 @@ int main(int argc, char** argv)
     auto layered = format_activity(film, {{"movie_layout",{{"button_slots",json::array({{{"site","wikidata"},{"fallback","off"}}})}}}});
     if (layered.contains("buttons")) return 1;
 
+    // Pause behavior per media layout: timeout minutes, generic card or hide while paused.
+    playback paused_song = song;
+    paused_song.paused = true;
+    if (pause_timeout_seconds(paused_song, json::object(), 1800) != 1800) return 1;
+    if (pause_timeout_seconds(paused_song, {{"recording_layout",{{"pause_timeout",5}}}}, 1800) != 300) return 1;
+    if (pause_timeout_seconds(paused_song, {{"pause_timeout",0}}, 1800) != 0) return 1;
+    if (pause_timeout_seconds(paused_song, {{"recording_layout",{{"while_paused","hide"}}}}, 1800) != 1) return 1;
+    if (pause_timeout_seconds(show, {{"recording_layout",{{"pause_timeout",5}}}}, 1800) != 1800) return 1;
+    auto quiet = format_activity(paused_song, {{"while_paused","generic"}});
+    if (quiet.at("name") != "mpv" || quiet.contains("buttons") || quiet.contains("details")) return 1;
+    paused_song.paused = false;
+    if (format_activity(paused_song, {{"while_paused","generic"}}).at("name") == "mpv") return 1;
+
     const auto directory = std::filesystem::temp_directory_path() /
         ("mpvrp-store-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto database = directory / std::filesystem::u8path("日本語.sqlite3");

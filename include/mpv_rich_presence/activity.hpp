@@ -19,4 +19,8 @@ namespace mpvrp
     };
 
     nlohmann::json format_activity(const playback& media, const nlohmann::json& overrides);
+    // Appearance settings with the media layout's overrides applied.
+    nlohmann::json layout_options(const playback& media, const nlohmann::json& overrides);
+    // Seconds a paused card stays visible for this media layout. 0 keeps it, and fallback is the conf value.
+    int pause_timeout_seconds(const playback& media, const nlohmann::json& overrides, int fallback);
 }

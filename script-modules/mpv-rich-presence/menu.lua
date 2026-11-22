@@ -582,6 +582,22 @@ return function(make_sheet, send, options, help)
                     edit_text({label=label,value=opts[key] or "",limit=128,extra=extra,save=function(v) appearance_edit(key,v) end})
                 end,false,nil,label)
             end
+            choice("While paused",{"keep","generic","hide"},opts.while_paused or "keep",function(v)
+                appearance_edit("while_paused",v); refresh()
+            end,nil,{keep="Keep the card",generic="Show a generic card",hide="Hide the card"},nil,
+                {keep="Keep the full card until the pause timeout.",generic="Switch to a generic mpv card while paused. Playing again restores the full card.",
+                hide="Hide the card as soon as playback pauses."})
+            local conf_timeout=math.floor((tonumber(options.pause_timeout) or 1800)/60)
+            row("Pause timeout   "..(opts.pause_timeout and (opts.pause_timeout==0 and "Never" or opts.pause_timeout.." min")
+                or ("Conf default · "..conf_timeout.." min")),function()
+                ui.text("Minutes before a paused card hides (0 never hides)",tostring(opts.pause_timeout or conf_timeout),function(v)
+                    local minutes=tonumber(v)
+                    if not minutes or minutes~=math.floor(minutes) or minutes<0 or minutes>1440 then
+                        return notice("Enter whole minutes from 0 to 1440.")
+                    end
+                    appearance_edit("pause_timeout",minutes); refresh()
+                end)
+            end,false,nil,"Pause timeout")
             for _,item in ipairs({{"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
                 local label,key=item[1],item[2]
                 row(label.."   "..(opts[key] or "None"),function() ui.text(label,opts[key] or "",function(v) appearance_edit(key,v); refresh() end) end,false,nil,label)

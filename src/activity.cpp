@@ -152,7 +152,7 @@ namespace mpvrp
         return result;
     }
 
-    json format_activity(const playback& m, const json& settings)
+    json layout_options(const playback& m, const json& settings)
     {
         json options = settings;
         auto layout = m.anime ? "anime_layout" : m.provider.value("kind",m.video ? std::string("video") : std::string("audio")) + "_layout";
@@ -162,8 +162,22 @@ namespace mpvrp
             if (specific.contains("preset")) options = json::object();
             options.merge_patch(specific);
         }
+        return options;
+    }
+
+    int pause_timeout_seconds(const playback& m, const json& settings, int fallback)
+    {
+        const auto options = layout_options(m, settings);
+        if (options.value("while_paused", std::string("keep")) == "hide") return 1;
+        const auto minutes = options.value("pause_timeout", -1);
+        return minutes >= 0 ? minutes * 60 : fallback;
+    }
+
+    json format_activity(const playback& m, const json& settings)
+    {
+        const json options = layout_options(m, settings);
         const auto preset = options.value("preset", std::string("original"));
-        const bool generic = preset == "private";
+        const bool generic = preset == "private" || (m.paused && options.value("while_paused", std::string("keep")) == "generic");
         const bool clean = preset == "clean";
         const auto language = options.value("language", std::string("original"));
         std::string title = m.anime_title;

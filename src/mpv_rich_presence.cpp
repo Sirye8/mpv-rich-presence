@@ -579,6 +579,10 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             { if (!(val=="cover" || val=="still" || val=="mpv" || val=="custom" || val=="off")) return false; }
             else if (key == "small_image")
             { if (!(val=="status" || val=="provider" || val=="off")) return false; }
+            else if (key == "while_paused")
+            { if (!(val=="keep" || val=="generic" || val=="hide")) return false; }
+            else if (key == "pause_timeout")
+            { if (!val.is_number_integer() || val<0 || val>1440) return false; }
             else if (key == "button_slots")
             {
                 static const std::set<std::string> sites{"off","provider","custom","anilist","myanimelist","tmdb","imdb",
@@ -1618,8 +1622,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             const auto expires = pin.value("expires",uint64_t{});
             state.pinned_elsewhere = !owner.empty() && owner != state.instance_id && expires > media.now;
             state.pinned_here = owner == state.instance_id && expires > media.now;
-            const bool timed_out = is_media_paused==1 && state.pause_timeout_seconds>0 &&
-                now_steady-state.pause_start_time>=chrono::seconds(state.pause_timeout_seconds);
+            const auto timeout = pause_timeout_seconds(media, state.appearance, state.pause_timeout_seconds);
+            const bool timed_out = is_media_paused==1 && timeout>0 &&
+                now_steady-state.pause_start_time>=chrono::seconds(timeout);
             if (state.pinned_here && state.yield_idle_pin &&
                 (!is_window_eligible(state) || timed_out))
             {
@@ -1982,10 +1987,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         // Pause timeout handling
         if (is_media_paused == 1)
         {
-            if (state.pause_timeout_seconds > 0)
+            const auto timeout = pause_timeout_seconds(media, state.appearance, state.pause_timeout_seconds);
+            if (timeout > 0)
             {
                 auto pause_elapsed = now_steady - state.pause_start_time;
-                if (pause_elapsed >= chrono::seconds(state.pause_timeout_seconds))
+                if (pause_elapsed >= chrono::seconds(timeout))
                 {
                     state.rpc_hidden_by_timeout = true;
                     hide_rich_presence();

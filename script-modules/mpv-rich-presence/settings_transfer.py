@@ -27,6 +27,8 @@ APPEARANCE = {
     **dict.fromkeys("large_text_template small_text_template large_image_url".split(), str),
     "large_image": {"cover", "still", "mpv", "custom", "off"},
     "small_image": {"status", "provider", "off"},
+    "while_paused": {"keep", "generic", "hide"},
+    "pause_timeout": lambda value: type(value) is int and 0 <= value <= 1440,
     "buttons": lambda value: isinstance(value, list) and len(value) <= 2 and all(
         isinstance(button, dict) and set(button) == {"label", "url"}
         and all(isinstance(part, str) for part in button.values()) for button in value
@@ -39,7 +41,7 @@ APPEARANCE = {
 }
 # Settings added after v2.0.0, with the first release that reads them.
 INTRODUCED = {("appearance", key): (2, 3) for key in
-              "button_slots large_image small_image large_image_url large_text_template small_text_template".split()}
+              "button_slots large_image small_image large_image_url large_text_template small_text_template while_paused pause_timeout".split()}
 
 
 def integer(low, high):

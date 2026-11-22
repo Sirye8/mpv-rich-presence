@@ -52,6 +52,8 @@ local help = {
     ["Large image link"]="Enter a public https image link for the Custom image choice. Placeholders such as {title} are URL-encoded.",
     ["Large hover text"]="Text Discord shows when someone hovers over the large image. Leave it empty to show the title.",
     ["Badge hover text"]="Text Discord shows when someone hovers over the badge. {status} is the playback status, such as Playing or Paused (01:23).",
+    ["While paused"]="Choose what this media layout shows while playback is paused: the full card, a generic mpv card, or nothing.",
+    ["Pause timeout"]="Hide a paused card after this many minutes for this media layout. 0 keeps it until playback resumes. Without a value, pause_timeout from rich-presence.conf applies.",
     ["Insert placeholder"]="Add a field to the end of the text. Only fields this media layout can fill are listed. Separate optional parts with | so an empty field drops only its part.",
     Keep="Keep this text in the Appearance draft. Press Apply on Appearance to save it.",
     ["Custom link"]="Enter a public https link. Placeholders such as {title} are URL-encoded, so a search link like https://example.com/search?q={title} works with any title.",
