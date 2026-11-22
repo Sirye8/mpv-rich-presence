@@ -101,29 +101,29 @@ namespace mpvrp
         return json::array({{{"site","provider"}}});
     }
 
+    // Fills {field} tokens in one pass, so braces inside a title or artist stay literal.
+    // A part between | separators is dropped when one of its fields is unknown or empty.
     static std::string render_template(const std::string& pattern, const json& fields)
     {
         std::istringstream input(pattern);
-        std::string part, result;
-        while (std::getline(input,part,'|'))
+        std::string source, result;
+        while (std::getline(input,source,'|'))
         {
             static const std::regex placeholder(R"(\{([a-zA-Z_][a-zA-Z_0-9]*)\})");
-            if (std::any_of(std::sregex_iterator(part.begin(),part.end(),placeholder),std::sregex_iterator{},
-                [&](const auto& token) { return !fields.contains(token[1].str()); })) continue;
+            std::string part;
             bool missing = false;
-            for (auto& [key,value] : fields.items())
+            auto last = source.cbegin();
+            for (std::sregex_iterator it(source.begin(),source.end(),placeholder), end; it != end; ++it)
             {
-                const auto token = "{" + key + "}";
-                const auto& text = value.get_ref<const std::string&>();
-                size_t offset = 0;
-                while ((offset = part.find(token, offset)) != std::string::npos)
-                {
-                    if (text.empty()) { missing = true; break; }
-                    part.replace(offset,token.size(),text);
-                    offset += text.size();
-                }
-                if (missing) break;
+                const auto key = (*it)[1].str();
+                const auto& text = fields.contains(key) ? fields.at(key).get_ref<const std::string&>() : std::string{};
+                if (text.empty()) { missing = true; break; }
+                part.append(last, (*it)[0].first);
+                part += text;
+                last = (*it)[0].second;
             }
+            if (missing) continue;
+            part.append(last, source.cend());
             const auto first = part.find_first_not_of(" \t\r\n");
             part = first == std::string::npos ? "" : part.substr(first,part.find_last_not_of(" \t\r\n")-first+1);
             if (!missing && !part.empty())
@@ -322,6 +322,10 @@ namespace mpvrp
         }
         for (const auto* key : {"details","state","large_text","small_text"})
             if (card.contains(key)) card[key] = truncate_utf8_bytes(card.at(key).get_ref<const std::string&>(),128);
+        // Discord rejects text fields shorter than two characters.
+        for (const auto* key : {"details","state","large_text","small_text"})
+            if (card.contains(key) && card.at(key).get_ref<const std::string&>().size() < 2) card.erase(key);
+        if (card.at("name").get_ref<const std::string&>().size() < 2) card["name"] = "mpv";
         return card;
     }
 }

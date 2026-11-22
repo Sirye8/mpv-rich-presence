@@ -9,6 +9,7 @@ return function(make_sheet, send, options, help)
     local snap, draft, pending = {}, {}, nil
     local scopes={}
     local layout, replace = "all", false
+    local ui
     local themes={
         glass={background="030405",accent="AFD9FF",opacity=87,blur=true,strength=6},
         midnight={background="0B1323",accent="A7D0FF",opacity=82,blur=true,strength=8},
@@ -75,6 +76,31 @@ return function(make_sheet, send, options, help)
         for k,v in pairs(draft) do opts[k]=v end
         return opts
     end
+    -- Placeholders that the card can fill for each media layout (see format_activity in activity.cpp).
+    local layout_fields={all={"title","artist","album","episode","original","group","channel","year","details","state"},
+        anime={"title","episode","original","group","details","state"},audio={"title","artist","album","details","state"},
+        recording={"title","artist","album","year","details","state"},video={"title","details","state"},
+        movie={"title","year","details","state"},tv={"title","year","details","state"},stream={"title","channel","details","state"}}
+    local field_help={title="Title of the anime, film, show, song or stream.",artist="Track artist.",album="Album or release.",
+        episode="Episode number used for AniList.",original="Episode number from the filename.",group="Release group.",
+        channel="Stream channel.",year="Release year.",details="The card's first text line before templates.",
+        state="The card's second text line before templates.",site="Name of the site the button links to."}
+    local text_target
+    local function unknown_fields(text,extra)
+        local allowed={}
+        for _,name in ipairs(layout_fields[layout] or layout_fields.all) do allowed[name]=true end
+        for _,name in ipairs(extra or {}) do allowed[name]=true end
+        local unknown={}
+        for name in (text or ""):gmatch("{([%a_][%w_]*)}") do
+            if not allowed[name] then unknown[#unknown+1]="{"..name.."}" end
+        end
+        return unknown
+    end
+    -- Opens the shared text editor with a placeholder list and a check before the value is kept.
+    local function edit_text(target)
+        text_target=target
+        ui.push("Edit text")
+    end
     local function button_summary(slot)
         if not slot or slot.site=="off" then return "Off" end
         local text=button_sites[slot.site] or slot.site
@@ -88,7 +114,6 @@ return function(make_sheet, send, options, help)
     local pending_filter=""
     local last_read
     local record
-    local ui
     local saved_groups={
         {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","panel-theme","folder-filter","recognition-options","save-scopes","watch-retention"}},
         {"Saved matches",{"match","provider","tv-rule"}},
@@ -186,7 +211,7 @@ return function(make_sheet, send, options, help)
         return layout=="all" and draft or {[layout.."_layout"]=draft}
     end
     local function refresh()
-        local preview=ui.page=="Appearance" or ui.page=="Card preview" or ui.page=="Card buttons"
+        local preview=ui.page=="Appearance" or ui.page=="Card preview" or ui.page=="Card buttons" or ui.page=="Edit text"
             or ui.page=="Button 1" or ui.page=="Button 2"
         request("snapshot",{nonce="menu",page=ui.page,records=category_for(ui.page),
             replace=preview and replace and layout=="all",draft=preview and edits() or nil})
@@ -443,21 +468,45 @@ return function(make_sheet, send, options, help)
             if slot.site~="off" then
                 local default=slot.site and slot.site:match("^search%-") and "Search on {site}" or "View on {site}"
                 row("Label   "..(slot.label or default),function()
-                    ui.text("Button label (up to 32 characters, placeholders allowed)",slot.label or default,function(v)
-                        store({label=v~=default and v or ""})
-                    end)
+                    edit_text({label="Label",value=slot.label or default,limit=32,extra={"site"},
+                        save=function(v) store({label=v~=default and v or ""}) end})
                 end)
             end
             if slot.site=="custom" then
                 row("Custom link   "..(slot.url or "Not set"),function()
-                    ui.text("Public https link, for example https://example.com/search?q={title}",slot.url or "",function(v)
-                        if not v:match("^https://[%w%-%.]+%.%a%a+") then return notice("Enter a public link that starts with https://.") end
+                    edit_text({label="Custom link",value=slot.url or "",limit=512,save=function(v)
+                        if not v:match("^https://[%w%-%.]+%.%a%a+") then
+                            notice("Enter a public link that starts with https://."); return false
+                        end
                         store({url=v})
-                    end)
+                    end})
                 end)
             elseif slot.site~="off" then
                 local values=button_values(false)
                 choice("Fallback",values,slot.fallback or "off",function(v) store({fallback=v}) end,nil,button_sites,nil,button_site_help)
+            end
+        elseif page=="Edit text" then
+            local t=text_target
+            if not t then row("Nothing to edit") else
+                local value=t.value or ""
+                row(t.label.."   "..(value~="" and value or "Empty"),function()
+                    ui.text(t.label,value,function(v) t.value=v; ui.draw() end)
+                end,false,nil,t.label)
+                local fields=copy(layout_fields[layout] or layout_fields.all)
+                for _,name in ipairs(t.extra or {}) do fields[#fields+1]=name end
+                local names,descriptions={},{}
+                for _,name in ipairs(fields) do names[name]="{"..name.."}"; descriptions[name]=field_help[name] end
+                choice("Insert placeholder",fields,"",function(name) t.value=value.."{"..name.."}"; ui.draw() end,
+                    "Choose",names,nil,descriptions)
+                local unknown=unknown_fields(value,t.extra)
+                row("Check   "..(#unknown==0 and "Ready" or ("Unknown "..table.concat(unknown,", "))),nil,false,nil,"Check")
+                row("Discord limit   "..t.limit.." characters",nil,false,nil,"Discord limit")
+                row("Keep",function()
+                    if #unknown>0 then return notice("Remove "..table.concat(unknown,", ").." or choose a listed placeholder.") end
+                    if t.save(value)==false then return end
+                    text_target=nil; ui.back(); refresh()
+                end,true)
+                row("Cancel",function() text_target=nil; ui.back() end)
             end
         elseif page=="Appearance" then
             local opts=appearance_opts()
@@ -494,10 +543,15 @@ return function(make_sheet, send, options, help)
                 function() ui.push("Card buttons") end,false,nil,"Buttons")
             choice("Compact status",{"name","details","state"},opts.compact or "name",function(v) appearance_edit("compact",v); refresh() end)
             toggle("Episode titles","spoilers",false)
-            for _,item in ipairs({{"Headline","headline"},{"Details template","details_template"},{"State template","state_template"},
-                {"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
+            for _,item in ipairs({{"Headline","headline"},{"Details template","details_template"},{"State template","state_template"}}) do
                 local label,key=item[1],item[2]
-                row(label,function() ui.text(label,opts[key] or "",function(v) appearance_edit(key,v); refresh() end) end)
+                row(label.."   "..(opts[key] or "Preset default"),function()
+                    edit_text({label=label,value=opts[key] or "",limit=128,save=function(v) appearance_edit(key,v) end})
+                end,false,nil,label)
+            end
+            for _,item in ipairs({{"Artwork link","large_url"},{"Details link","details_url"},{"State link","state_url"}}) do
+                local label,key=item[1],item[2]
+                row(label.."   "..(opts[key] or "None"),function() ui.text(label,opts[key] or "",function(v) appearance_edit(key,v); refresh() end) end,false,nil,label)
             end
             row("Reset saved appearance",function()
                 if not require_scope(scope) then return end

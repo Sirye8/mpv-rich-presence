@@ -236,6 +236,6 @@ Edit `script-opts/rich-presence.conf` in your mpv config directory and restart m
 
 Keep provider overrides in your local config. Use the browser sign-in flow for AniList secrets and tokens.
 
-Appearance templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. A piece is skipped when its fields are missing.
+Appearance templates support `{title}`, `{artist}`, `{album}`, `{episode}`, `{original}`, `{group}`, `{channel}`, `{details}`, `{state}` and `{year}`. Separate optional pieces with a vertical bar, for example `{artist}|{title}`. A piece is skipped when its fields are missing. Editing a template or button label in the panel opens a text page with **Insert placeholder**, which lists only the fields the selected media layout can fill, and a **Check** row that flags unknown placeholders before you keep the text. Braces inside a title or artist name stay as written. Discord needs at least two characters in a text line, so shorter lines are left off the card.
 
 To toggle the card with a key, add a line such as `D script-message-to rich_presence toggle` to `input.conf`. The same target also accepts `on`, `off`, `application_id <id>`, `folder_filter_mode <mode>`, `folder_list <paths>` and `pause_timeout <seconds>`.

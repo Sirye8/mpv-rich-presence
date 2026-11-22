@@ -17,6 +17,11 @@ elseif mode=="buttons" then
     actions={"menu"}
     for _=1,15 do actions[#actions+1]="DOWN" end
     for _,key in ipairs({"ENTER","ENTER","ENTER","END","UP","ENTER","ESC","ESC","END","ENTER"}) do actions[#actions+1]=key end
+elseif mode=="template" then
+    -- Appearance → Headline → Insert placeholder → {title} → Keep, then Apply.
+    actions={"menu"}
+    for _=1,18 do actions[#actions+1]="DOWN" end
+    for _,key in ipairs({"ENTER","DOWN","ENTER","HOME","ENTER","END","UP","ENTER","END","ENTER"}) do actions[#actions+1]=key end
 elseif mode=="custom" then
     actions={"menu","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","ENTER","END","ENTER"}
 else actions[#actions+1]="ESC" end

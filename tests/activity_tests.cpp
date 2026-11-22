@@ -82,6 +82,16 @@ int main(int argc, char** argv)
     const auto movie_card = format_activity(movie, json::object());
     if (movie_card.at("name") != "Matched film" || movie_card.at("state") != "2014") return 1;
 
+    // Templates fill each token once, keep braces from metadata, and respect Discord's two-character minimum.
+    playback braces;
+    braces.title = "{artist} Live";
+    braces.artist = "Band";
+    braces.track_title = "{artist} Live";
+    auto literal = format_activity(braces, {{"headline","{title} by {artist}"},{"details_template","{unknown}|{artist}"},
+        {"state_template","X"}});
+    if (literal.at("name") != "{artist} Live by Band" || literal.at("details") != "Band" || literal.contains("state")) return 1;
+    if (format_activity(braces, {{"headline","Y"}}).at("name") != "mpv") return 1;
+
     // Button slots: defaults, legacy settings, sites, fallbacks, custom URLs and limits.
     auto button = [](const json& card, size_t index, const char* field) {
         return card.contains("buttons") && card.at("buttons").size() > index

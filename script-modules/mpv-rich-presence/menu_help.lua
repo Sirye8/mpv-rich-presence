@@ -47,6 +47,8 @@ local help = {
     ["Button 2"]="Choose the site, label and fallback for the second button. Leave it Off for a single button.",
     ["Restore default buttons"]="Remove these button choices and use the defaults: the matched provider, or Last.fm for matched music. Press Apply on Appearance to save it.",
     Label="Edit the button text. Up to 32 characters reach Discord. Placeholders such as {site}, {title}, {artist} and {episode} are filled in, and parts separated by | are dropped when a placeholder is empty.",
+    ["Insert placeholder"]="Add a field to the end of the text. Only fields this media layout can fill are listed. Separate optional parts with | so an empty field drops only its part.",
+    Keep="Keep this text in the Appearance draft. Press Apply on Appearance to save it.",
     ["Custom link"]="Enter a public https link. Placeholders such as {title} are URL-encoded, so a search link like https://example.com/search?q={title} works with any title.",
     ["Details"]="Show or hide the first text line under the activity name.",
     ["State"]="Show or hide the second text line under the activity name.",
@@ -258,6 +260,9 @@ local choices = {
 }
 
 local read_only = {
+    ["Edit text"]={Check="Shows placeholders this media layout cannot fill. Fix them before keeping the text.",
+        ["Discord limit"]="Discord shows up to this many characters. Longer text is cut at a whole character.",
+        ["Nothing to edit"]="Go back and choose a text setting."},
     ["Card preview"]={
         Activity="Activity type and name that Discord receives.",
         Details="First text line under the activity name. Change it in Appearance.",
