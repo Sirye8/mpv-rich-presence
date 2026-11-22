@@ -82,6 +82,61 @@ int main(int argc, char** argv)
     const auto movie_card = format_activity(movie, json::object());
     if (movie_card.at("name") != "Matched film" || movie_card.at("state") != "2014") return 1;
 
+    // Button slots: defaults, legacy settings, sites, fallbacks, custom URLs and limits.
+    auto button = [](const json& card, size_t index, const char* field) {
+        return card.contains("buttons") && card.at("buttons").size() > index
+            ? card.at("buttons").at(index).value(field, std::string{}) : std::string{};
+    };
+    playback song;
+    song.title = "Bring Me to Life";
+    song.artist = "Evanescence";
+    song.provider = {{"kind","recording"},{"provider","musicbrainz"},{"name","Bring Me to Life"},
+        {"artist","Evanescence"},{"link","https://musicbrainz.org/recording/abc"}};
+    auto song_card = format_activity(song, json::object());
+    if (button(song_card,0,"label") != "View on Last.fm" ||
+        button(song_card,0,"url") != "https://www.last.fm/music/Evanescence/_/Bring+Me+to+Life" ||
+        song_card.at("buttons").size() != 1) return 1;
+    song.provider["artist"] = "";
+    song.artist = "";
+    if (button(format_activity(song, json::object()),0,"label") != "View on MusicBrainz") return 1;
+    song.provider["provider"] = "acoustid";
+    if (button(format_activity(song, json::object()),0,"label") != "View on MusicBrainz") return 1;
+    if (format_activity(song, {{"button",false}}).contains("buttons")) return 1;
+    auto legacy = format_activity(song, {{"buttons",json::array({{{"label","Site"},{"url","https://example.org/a"}}})}});
+    if (button(legacy,0,"label") != "Site" || legacy.at("buttons").size() != 1) return 1;
+    if (format_activity(song, {{"buttons",json::array()}}).contains("buttons")) return 1;
+
+    playback show;
+    show.video = show.anime = true;
+    show.anime_title = "A&B Show";
+    show.anilist_id = 21;
+    show.mal_id = 42;
+    auto two = format_activity(show, {{"button_slots",json::array({{{"site","myanimelist"}},
+        {{"site","anilist"},{"label","AniList · {title}"}}})}});
+    if (button(two,0,"url") != "https://myanimelist.net/anime/42" || button(two,0,"label") != "View on MyAnimeList" ||
+        button(two,1,"label") != "AniList · A&B Show") return 1;
+    auto custom = format_activity(show, {{"button_slots",json::array({{{"site","custom"},{"label","Find {title}"},
+        {"url","https://example.com/s?q={title}"}}})}});
+    if (button(custom,0,"url") != "https://example.com/s?q=A%26B%20Show" || button(custom,0,"label") != "Find A&B Show") return 1;
+    auto search = format_activity(show, {{"button_slots",json::array({{{"site","search-youtube"}}})}});
+    if (button(search,0,"url") != "https://www.youtube.com/results?search_query=A%26B+Show" ||
+        button(search,0,"label") != "Search on YouTube") return 1;
+    auto duplicate = format_activity(show, {{"button_slots",json::array({{{"site","anilist"}},{{"site","provider"}}})}});
+    if (duplicate.at("buttons").size() != 1) return 1;
+    if (format_activity(show, {{"button_slots",json::array({{{"site","off"}}})}}).contains("buttons")) return 1;
+    if (format_activity(show, {{"button_slots",json::array({{{"site","custom"},{"label","Bad"},{"url","http://example.com"}}})}}).contains("buttons")) return 1;
+
+    playback film;
+    film.video = true;
+    film.provider = {{"kind","movie"},{"provider","tmdb-movie"},{"name","Interstellar"},{"link","https://www.themoviedb.org/movie/157336"}};
+    auto fallback = format_activity(film, {{"button_slots",json::array({{{"site","imdb"},{"fallback","tmdb"}}})}});
+    if (button(fallback,0,"label") != "View on TMDB") return 1;
+    film.provider["imdb"] = "tt0816692";
+    auto imdb = format_activity(film, {{"button_slots",json::array({{{"site","imdb"},{"fallback","tmdb"}}})}});
+    if (button(imdb,0,"url") != "https://www.imdb.com/title/tt0816692/") return 1;
+    auto layered = format_activity(film, {{"movie_layout",{{"button_slots",json::array({{{"site","wikidata"},{"fallback","off"}}})}}}});
+    if (layered.contains("buttons")) return 1;
+
     const auto directory = std::filesystem::temp_directory_path() /
         ("mpvrp-store-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto database = directory / std::filesystem::u8path("日本語.sqlite3");

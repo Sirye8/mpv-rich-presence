@@ -1666,6 +1666,25 @@ class TrackingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,"already exists"):
             export_settings(self.worker.db,str(path))
 
+    def test_button_slots_transfer_and_wait_for_older_targets(self):
+        slots=[{"site":"lastfm","fallback":"provider"},{"site":"custom","label":"Find {title}","url":"https://example.com/?q={title}"}]
+        self.worker.put("appearance","global",{"button":False,"recording_layout":{"button_slots":slots}})
+        path=self.worker.directory/"buttons.json"
+        export_settings(self.worker.db,str(path))
+        for target,expected in (((2,2),["appearance.recording_layout"]),((2,3),[])):
+            older=Worker(":memory:","older",{})
+            self.addCleanup(older.db.close)
+            older.db.execute("CREATE TABLE records(category TEXT, scope TEXT, value TEXT, PRIMARY KEY(category,scope))")
+            with older.transaction():
+                self.assertEqual(import_settings(older.db,str(path),target=target),(1,expected))
+            layout=older.get("appearance","global").get("recording_layout")
+            self.assertEqual(layout,None if expected else {"button_slots":slots})
+        bad=self.worker.directory/"bad-buttons.json"
+        bad.write_text(json.dumps({"format":"mpv-rich-presence-settings","version":1,"records":[dict(
+            category="appearance",scope="global",value={"button_slots":[{"site":"custom","fallback":"custom"}]})]}),encoding="utf-8")
+        with self.worker.transaction():
+            self.assertEqual(import_settings(self.worker.db,str(bad)),(0,["appearance.button_slots"]))
+
     def test_invalid_settings_import_rolls_back(self):
         path=self.worker.directory/"malformed.json"
         path.write_text(json.dumps({"format":"mpv-rich-presence-settings","version":1,"records":[

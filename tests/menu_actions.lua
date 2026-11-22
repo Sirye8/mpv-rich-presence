@@ -12,6 +12,11 @@ elseif mode=="apply" or mode=="reset-preset" then
         actions={"menu","DOWN","DOWN","DOWN","ENTER","ENTER"}
     end
     actions[#actions+1]="END"; actions[#actions+1]="ENTER"
+elseif mode=="buttons" then
+    -- Appearance → Buttons → Button 1 → Site → Search on Google, then Apply.
+    actions={"menu"}
+    for _=1,15 do actions[#actions+1]="DOWN" end
+    for _,key in ipairs({"ENTER","ENTER","ENTER","END","UP","ENTER","ESC","ESC","END","ENTER"}) do actions[#actions+1]=key end
 elseif mode=="custom" then
     actions={"menu","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","DOWN","ENTER","END","ENTER"}
 else actions[#actions+1]="ESC" end

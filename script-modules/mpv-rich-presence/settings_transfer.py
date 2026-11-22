@@ -13,6 +13,8 @@ FORMAT_VERSION = 1
 MAX_BYTES = 8 * 1024 * 1024
 SOURCES = frozenset("auto anime movie-tv movie tv original local tmdb-movie tmdb-tv tvmaze wikidata musicbrainz acoustid stream".split())
 POSITIONS = frozenset(f"{side}-{edge}" for side in ("top", "bottom") for edge in ("left", "center", "right"))
+BUTTON_SITES = frozenset(
+    "off provider custom anilist myanimelist tmdb imdb tvmaze wikidata musicbrainz lastfm stream search-youtube search-google".split())
 LAYOUTS = frozenset(f"{name}_layout" for name in "anime audio video movie tv recording stream".split())
 APPEARANCE = {
     "preset": {"original", "clean", "detailed", "private"},
@@ -26,7 +28,14 @@ APPEARANCE = {
         isinstance(button, dict) and set(button) == {"label", "url"}
         and all(isinstance(part, str) for part in button.values()) for button in value
     ),
+    "button_slots": lambda value: isinstance(value, list) and len(value) <= 2 and all(
+        isinstance(slot, dict) and "site" in slot and set(slot) <= {"site", "fallback", "label", "url"}
+        and all(isinstance(part, str) and len(part) <= 512 for part in slot.values())
+        and slot["site"] in BUTTON_SITES and slot.get("fallback", "off") in BUTTON_SITES - {"custom"} for slot in value
+    ),
 }
+# Settings added after v2.0.0, with the first release that reads them.
+INTRODUCED = {("appearance", "button_slots"): (2, 3)}
 
 
 def integer(low, high):
@@ -129,8 +138,9 @@ def split_fields(category, value, legacy):
             else:
                 unused[key] = item
         elif key in rules and (item is not None or category=="provider") and supports(rules[key], item) and not (
-            legacy and (category in ("watch-retention", "save-scopes") or
-                        (category == "panel-theme" and (key == "method" or (key == "strength" and item > 12))))
+            (legacy and INTRODUCED.get((category, key), (0, 0)) > legacy)
+            or (legacy == (2, 0) and (category in ("watch-retention", "save-scopes") or
+                (category == "panel-theme" and (key == "method" or (key == "strength" and item > 12)))))
         ):
             active[key] = item
         else:
@@ -186,7 +196,9 @@ def export_settings(db, path):
     return len(rows)
 
 
-def import_settings(db, path, *, legacy=False):
+def import_settings(db, path, *, legacy=False, target=None):
+    """Import into the current release, or into ``target`` (major, minor) when set. ``legacy`` means v2.0.0."""
+    legacy = (2, 0) if legacy else target
     with data_path(path).open("rb") as file:
         payload = file.read(MAX_BYTES + 1)
     if len(payload) > MAX_BYTES:
@@ -253,7 +265,7 @@ def main():
                 print(f"Exported {export_settings(db,args.file)} settings records.")
             else:
                 db.execute("BEGIN IMMEDIATE")
-                print(summary(import_settings(db,args.file,legacy=int(version[1])==2 and int(version[2])==0)))
+                print(summary(import_settings(db,args.file,target=(int(version[1]), int(version[2])))))
     except (OSError, sqlite3.Error, ValueError, RecursionError) as exc:
         parser.exit(1, f"{exc}\n")
 

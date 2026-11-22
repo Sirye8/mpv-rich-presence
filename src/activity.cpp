@@ -3,6 +3,7 @@
 #include "mpv_rich_presence/string_utils.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <format>
 #include <regex>
 #include <sstream>
@@ -13,8 +14,91 @@ namespace mpvrp
 {
     static bool public_url(const std::string& url)
     {
-        static const std::regex valid(R"(^https://([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s?#]*)?$)");
+        static const std::regex valid(R"(^https://([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(?:/[^\s?#]*)?(?:\?[^\s#]*)?$)");
         return url.size() <= 512 && std::regex_match(url,valid) && url.find(".localhost/") == std::string::npos && url.find(".local/") == std::string::npos;
+    }
+
+    static std::string url_encode(const std::string& text, bool plus_for_space = false)
+    {
+        static const char* hex = "0123456789ABCDEF";
+        std::string out;
+        for (const unsigned char c : text)
+        {
+            if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += static_cast<char>(c);
+            else if (c == ' ' && plus_for_space) out += '+';
+            else { out += '%'; out += hex[c >> 4]; out += hex[c & 15]; }
+        }
+        return out;
+    }
+
+    struct button_link { std::string site, url; };
+
+    // Resolves one button site to its display name and public URL, or an empty URL when this file has no such link.
+    static button_link site_link(const std::string& site, const playback& m, const std::string& title, const std::string& query)
+    {
+        const auto& p = m.provider;
+        const auto source = p.value("provider", std::string{});
+        const auto link = p.value("link", std::string{});
+        const auto kind = p.value("kind", std::string{});
+        if (site == "provider")
+        {
+            if (m.anime) return site_link("anilist", m, title, query);
+            if (source.starts_with("tmdb-")) return {"TMDB", link};
+            if (source == "tvmaze") return {"TVmaze", link};
+            if (source == "wikidata") return {"Wikidata", link};
+            if (source == "musicbrainz" || source == "acoustid") return {"MusicBrainz", link};
+            if (kind == "stream") return site_link("stream", m, title, query);
+            return {source.empty() ? "provider" : source, link};
+        }
+        if (site == "anilist") return {"AniList", m.anime && m.anilist_id > 0 ? std::format("https://anilist.co/anime/{}", m.anilist_id) : ""};
+        if (site == "myanimelist") return {"MyAnimeList", m.anime && m.mal_id > 0 ? std::format("https://myanimelist.net/anime/{}", m.mal_id) : ""};
+        if (site == "tmdb") return {"TMDB", source.starts_with("tmdb-") ? link : ""};
+        if (site == "tvmaze") return {"TVmaze", source == "tvmaze" ? link : ""};
+        if (site == "wikidata") return {"Wikidata", source == "wikidata" ? link : ""};
+        if (site == "musicbrainz") return {"MusicBrainz", source == "musicbrainz" || source == "acoustid" ? link : ""};
+        if (site == "imdb")
+        {
+            static const std::regex imdb(R"(tt\d{5,10})");
+            const auto id = p.value("imdb", std::string{});
+            return {"IMDb", std::regex_match(id, imdb) ? "https://www.imdb.com/title/" + id + "/" : ""};
+        }
+        if (site == "lastfm")
+        {
+            const bool recording = kind == "recording";
+            const auto artist = recording ? p.value("artist", m.artist) : m.artist;
+            const auto track = recording ? p.value("name", m.track_title) : (m.track_title.empty() ? m.title : m.track_title);
+            if (m.video && !recording) return {"Last.fm", ""};
+            return {"Last.fm", artist.empty() || track.empty() ? "" :
+                "https://www.last.fm/music/" + url_encode(artist, true) + "/_/" + url_encode(track, true)};
+        }
+        if (site == "stream")
+        {
+            const auto page = kind == "stream" ? link : std::string{};
+            if (page.find("twitch.tv/") != std::string::npos) return {"Twitch", page};
+            return {"YouTube", page};
+        }
+        if (site == "search-youtube")
+            return {"YouTube", query.empty() ? "" : "https://www.youtube.com/results?search_query=" + url_encode(query, true)};
+        if (site == "search-google")
+            return {"Google", query.empty() ? "" : "https://www.google.com/search?q=" + url_encode(query, true)};
+        return {site, ""};
+    }
+
+    // Default slots when nothing is saved. Matched music links to Last.fm and falls back to its recognition provider.
+    static json default_buttons(const playback& m, const json& options)
+    {
+        if (options.contains("buttons"))
+        {
+            json slots = json::array();
+            for (const auto& button : options.at("buttons"))
+                if (button.is_object())
+                    slots.push_back({{"site","custom"},{"label",button.value("label",std::string{})},{"url",button.value("url",std::string{})}});
+            return slots;
+        }
+        if (!options.value("button", true)) return json::array();
+        if (m.provider.value("kind", std::string{}) == "recording")
+            return json::array({{{"site","lastfm"},{"fallback","provider"}}});
+        return json::array({{{"site","provider"}}});
     }
 
     static std::string render_template(const std::string& pattern, const json& fields)
@@ -102,8 +186,6 @@ namespace mpvrp
                     card["large_image"] = m.cover;
                     card["large_text"] = truncate_utf8_bytes(title, 128);
                 }
-                if (options.value("button", true) && m.anilist_id > 0)
-                    card["buttons"] = json::array({{{"label", "View on AniList"}, {"url", std::format("https://anilist.co/anime/{}", m.anilist_id)}}});
             }
             else
             {
@@ -147,16 +229,6 @@ namespace mpvrp
                     card["large_image"] = m.provider.at("cover");
                     card["large_text"] = truncate_utf8_bytes(name,128);
                 }
-                if (options.value("button",true) && m.provider.contains("link"))
-                {
-                    auto source = m.provider.value("provider", std::string("provider"));
-                    if (source.starts_with("tmdb-")) source = "TMDB";
-                    else if (source == "tvmaze") source = "TVmaze";
-                    else if (source == "wikidata") source = "Wikidata";
-                    else if (source == "musicbrainz") source = "MusicBrainz";
-                    card["buttons"] = json::array({{{"label", "View on " + source},
-                                                    {"url",m.provider.at("link")}}});
-                }
             }
             if (m.buffering)
                 state += state.empty() ? "Buffering... (" + duration + ")" : " (Buffering... " + duration + ")";
@@ -176,36 +248,48 @@ namespace mpvrp
                 state = m.provider.at("episode_title");
             for (const auto* key : {"large_url","details_url","state_url"})
                 if (options.contains(key) && public_url(options.at(key))) card[key] = options.at(key);
-            if (options.contains("buttons"))
+            const auto kind = m.provider.value("kind", std::string{});
+            std::string query = m.anime ? title : name;
+            if (!m.anime && (kind == "recording" || !m.video))
             {
-                card.erase("buttons");
-                for (const auto& button : options.at("buttons"))
-                {
-                    if (!button.is_object()) continue;
-                    auto label = button.value("label",std::string{});
-                    auto link = button.value("url",std::string{});
-                    if (!label.empty() && public_url(link) && card["buttons"].size()<2)
-                        card["buttons"].push_back({{"label",truncate_utf8_bytes(label,32)},{"url",link}});
-                }
+                const auto artist = kind == "recording" ? m.provider.value("artist", m.artist) : m.artist;
+                if (!artist.empty() && !to_lower(query).starts_with(to_lower(artist))) query = artist + " " + query;
             }
+            const bool reset = options.contains("button_slots") && options.at("button_slots") == false;
+            const auto slots = options.contains("button_slots") && options.at("button_slots").is_array()
+                ? options.at("button_slots") : default_buttons(m, reset ? json::object() : options);
+            json buttons = json::array();
+            for (const auto& slot : slots)
+            {
+                if (!slot.is_object() || buttons.size() >= 2) continue;
+                auto site = slot.value("site", std::string("off"));
+                button_link chosen;
+                if (site == "custom")
+                {
+                    json encoded = fields;
+                    for (auto& [key, value] : encoded.items()) value = url_encode(value.get<std::string>());
+                    chosen = {"link", render_template(slot.value("url", std::string{}), encoded)};
+                    if (!public_url(chosen.url)) chosen.url.clear();
+                }
+                else if (site != "off") chosen = site_link(site, m, title, query);
+                if (chosen.url.empty() && slot.contains("fallback"))
+                {
+                    site = slot.value("fallback", std::string("off"));
+                    if (site != "off" && site != "custom") chosen = site_link(site, m, title, query);
+                }
+                if (chosen.url.empty() || !public_url(chosen.url)) continue;
+                if (std::any_of(buttons.begin(), buttons.end(), [&](const json& b) { return b.at("url") == chosen.url; })) continue;
+                const auto fallback_label = std::string(site.starts_with("search-") ? "Search on " : "View on ") + chosen.site;
+                json label_fields = fields;
+                label_fields["site"] = chosen.site;
+                auto label = slot.contains("label") ? render_template(slot.value("label", std::string{}), label_fields) : fallback_label;
+                if (label.empty()) label = site == "custom" ? std::string{} : fallback_label;
+                if (label.empty()) continue;
+                buttons.push_back({{"label", truncate_utf8_bytes(label, 32)}, {"url", chosen.url}});
+            }
+            if (!buttons.empty()) card["buttons"] = buttons;
         }
         if (options.contains("compact")) card["compact"] = options.at("compact");
-        if (card.contains("buttons"))
-        {
-            static const std::regex youtube(R"(^https://(?:www\.)?youtube\.com/watch\?v=[A-Za-z0-9_-]{11}$)");
-            const auto kind = m.provider.value("kind",std::string{});
-            auto& buttons = card["buttons"];
-            for (auto it=buttons.begin(); it!=buttons.end();)
-            {
-                const auto& button = *it;
-                const auto url = button.value("url",std::string{});
-                const bool invalid = !public_url(url) &&
-                    !(kind=="stream" && !options.contains("buttons") && std::regex_match(url,youtube));
-                if (invalid) it = buttons.erase(it);
-                else ++it;
-            }
-            if (buttons.empty()) card.erase("buttons");
-        }
         card["name"] = name.empty() ? "mpv" : truncate_utf8_bytes(name, 128);
         if (!details.empty() && options.value("details", true)) card["details"] = details;
         if (!state.empty() && options.value("state", true)) card["state"] = state;

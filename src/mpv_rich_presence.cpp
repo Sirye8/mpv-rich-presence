@@ -48,6 +48,7 @@
 #include <mutex>
 #include <random>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -571,6 +572,25 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
                     if (!b.is_object() || !b.contains("url") || !b.at("url").is_string() ||
                         !b.contains("label") || !b.at("label").is_string()) return false;
             }
+            else if (key == "button_slots" && val == false) continue;
+            else if (key == "button_slots")
+            {
+                static const std::set<std::string> sites{"off","provider","custom","anilist","myanimelist","tmdb","imdb",
+                    "tvmaze","wikidata","musicbrainz","lastfm","stream","search-youtube","search-google"};
+                if (!val.is_array() || val.size()>2) return false;
+                for (auto& slot : val)
+                {
+                    if (!slot.is_object() || slot.size()>4) return false;
+                    for (const auto& [field, text] : slot.items())
+                    {
+                        if (!text.is_string() || text.get_ref<const std::string&>().size()>512) return false;
+                        if ((field=="site" || field=="fallback") && !sites.contains(text.get<std::string>())) return false;
+                        if (field=="fallback" && text=="custom") return false;
+                        if (field!="site" && field!="fallback" && field!="label" && field!="url") return false;
+                    }
+                    if (!slot.contains("site")) return false;
+                }
+            }
             else if (key == "preset" || key == "language" || key == "numbering" || key == "timer" || key == "compact"
                 || key == "headline" || key.ends_with("_template") || key.ends_with("_url"))
             { if (!val.is_string()) return false; }
@@ -934,6 +954,23 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                         state.store->get(category,scope).value("id",0)!=patch.at("id"))
                         patch["episode"] = nullptr;
                     if (category == "privacy" && values.value("mode",std::string("hidden")) != "hidden") patch["block_lookup"] = nullptr;
+                    if (category == "appearance")
+                    {
+                        // Button slots replace the older switch and button list. false restores the defaults.
+                        const bool replacing = req.value("replace",false);
+                        auto migrate = [replacing](nlohmann::json& level) {
+                            if (!level.is_object() || !level.contains("button_slots")) return;
+                            // A replaced record is stored as is, so remove keys instead of patching them to null.
+                            for (const auto* key : {"button","buttons"})
+                                if (replacing) level.erase(key); else level[key] = nullptr;
+                            if (level.at("button_slots") == false)
+                            {
+                                if (replacing) level.erase("button_slots"); else level["button_slots"] = nullptr;
+                            }
+                        };
+                        migrate(patch);
+                        for (auto& [key, level] : patch.items()) if (key.ends_with("_layout")) migrate(level);
+                    }
                     if (category == "appearance" && req.value("replace",false)) state.store->put(category,scope,patch);
                     else state.store->save(category, scope, patch);
                 }

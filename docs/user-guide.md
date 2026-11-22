@@ -43,7 +43,7 @@ Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to cha
 | --- | --- |
 | Now playing | Inspect the current card, correct a match or choose which window shares to Discord. |
 | AniList | Connect, see watch time, edit progress, change tracking settings or review a proposal. |
-| Appearance | Preview a preset or edit artwork, language, numbering, timers, links and card layouts. **Apply** saves the preview. |
+| Appearance | Preview a preset or edit artwork, language, numbering, timers, links, buttons and card layouts. **Apply** saves the preview. |
 | Recognition & folders | Choose a provider scope, pin an AniList match, adjust episode numbering or fingerprint a local track. |
 | Privacy & windows | Hide a card or folder, choose a publishing window or start a private session. |
 | Saved data | Find saved profiles, matches, caches, timers and proposals. Review what a clear operation removes. |
@@ -56,6 +56,8 @@ Select a text field to edit it in place. Use **Done** or Enter to accept, **Canc
 Open **Appearance → Panel theme** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), or **Graphite** (opaque charcoal). Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
 
 Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the open panel. Other video outputs keep translucency. Custom settings accept six-digit RGB colors, 40 to 100% opacity, and a blur strength from 2 to 32 pixels. **Classic** keeps the original filter. **Gaussian** softens busy footage more evenly and takes more GPU samples. **Box** uses fewer samples and can leave more defined edges at high strengths. Turn off **Background blur** in the panel, or set `panel_blur=no` to change the startup default.
+
+Open **Appearance → Buttons** to choose up to two Discord buttons for the selected media layout. Each button has a **Site**: the matched provider, a specific site such as AniList, MyAnimeList, TMDB, IMDb, TVmaze, Wikidata, Last.fm, MusicBrainz or the stream page, a YouTube or Google search for the title, or a **Custom link**. If the site has no link for the current file, the button uses its **Fallback**, or is left off the card. **Label** defaults to `View on {site}` and accepts the template placeholders. A custom link must start with `https://`, and its placeholders are URL-encoded, so `https://example.com/search?q={title}` works with any title. By default, cards show one button for the matched provider, and matched music links to Last.fm with MusicBrainz as the fallback. **Restore default buttons** removes your choices for the layout. Discord shows at most two buttons with up to 32 characters each.
 
 Choosing a preset restores its appearance defaults for the selected save scope and media layout. Choosing a preset for **All media** also resets media-specific overrides saved at that scope. Changing an appearance field marks the layout **Custom** and keeps the selected preset as its base. Use **Apply** to save.
 

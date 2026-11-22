@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as directory:
     for part in ("scripts", "script-opts"):
         shutil.copytree(root / part, config / part)
     applied = False
-    for mode in ("cancel", "apply", "cancel", "position", "inherit-position", "custom", "reset-preset"):
+    for mode in ("cancel", "apply", "cancel", "position", "inherit-position", "custom", "buttons", "reset-preset"):
         log = Path(directory) / "mpv.log"
         subprocess.run(
             [
@@ -70,6 +70,9 @@ with tempfile.TemporaryDirectory() as directory:
             )
             if mode=="custom":
                 assert json.loads(row[0]).get("custom") is True
+            if mode=="buttons":
+                saved = json.loads(row[0])
+                assert saved.get("button_slots") == [{"site":"search-google"}] and "buttons" not in saved, saved
             if mode=="reset-preset":
                 assert json.loads(row[0]) == {"preset":"clean"}
         else:

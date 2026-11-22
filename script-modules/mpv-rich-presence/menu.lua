@@ -32,6 +32,55 @@ return function(make_sheet, send, options, help)
         draft[key]=value
         draft.custom=true
     end
+    local button_sites={off="Off",provider="Matched provider",custom="Custom link",anilist="AniList",
+        myanimelist="MyAnimeList",tmdb="TMDB",imdb="IMDb",tvmaze="TVmaze",wikidata="Wikidata",musicbrainz="MusicBrainz",
+        lastfm="Last.fm",stream="Stream page",["search-youtube"]="Search on YouTube",["search-google"]="Search on Google"}
+    local button_site_help={off="No button in this position.",
+        provider="Link to the entry that recognition matched: AniList, TMDB, TVmaze, Wikidata, MusicBrainz or the stream page.",
+        custom="Your own label and public https link. Placeholders in the link are URL-encoded.",
+        anilist="The matched AniList anime page.",myanimelist="The MyAnimeList page linked from the AniList entry.",
+        tmdb="The matched TMDB movie or show.",imdb="The IMDb title linked from the TMDB match.",
+        tvmaze="The matched TVmaze show.",wikidata="The matched Wikidata film.",musicbrainz="The matched MusicBrainz recording or release.",
+        lastfm="The Last.fm track page, built from the recognized artist and title.",stream="The public YouTube or Twitch page.",
+        ["search-youtube"]="A YouTube search for the title, even without a match.",["search-google"]="A Google search for the title, even without a match."}
+    local layout_sites={all={"anilist","myanimelist","tmdb","imdb","tvmaze","wikidata","lastfm","musicbrainz","stream"},
+        anime={"anilist","myanimelist"},movie={"tmdb","imdb","wikidata"},tv={"tmdb","imdb","tvmaze"},
+        recording={"lastfm","musicbrainz"},audio={"lastfm"},video={},stream={"stream"}}
+    local function button_values(with_custom)
+        local values={"off","provider"}
+        for _,site in ipairs(layout_sites[layout] or {}) do values[#values+1]=site end
+        values[#values+1]="search-youtube"; values[#values+1]="search-google"
+        if with_custom then values[#values+1]="custom" end
+        return values
+    end
+    -- Mirrors default_buttons in activity.cpp, including older button settings.
+    local function button_slots(opts)
+        if type(opts.button_slots)=="table" then return opts.button_slots end
+        if opts.button_slots==false then opts={} end
+        if opts.buttons then
+            local slots={}
+            for _,b in ipairs(opts.buttons) do slots[#slots+1]={site="custom",label=b.label,url=b.url} end
+            return slots
+        end
+        if opts.button==false then return {} end
+        if layout=="recording" then return {{site="lastfm",fallback="provider"}} end
+        return {{site="provider"}}
+    end
+    local function appearance_opts()
+        local opts={}
+        if not replace then for k,v in pairs(snap.appearance or {}) do opts[k]=v end end
+        local saved=opts[layout.."_layout"] or {}
+        if saved.preset then opts={} end
+        for k,v in pairs(saved) do opts[k]=v end
+        for k,v in pairs(draft) do opts[k]=v end
+        return opts
+    end
+    local function button_summary(slot)
+        if not slot or slot.site=="off" then return "Off" end
+        local text=button_sites[slot.site] or slot.site
+        if slot.fallback and slot.fallback~="off" then text=text.." → "..(button_sites[slot.fallback] or slot.fallback) end
+        return text
+    end
     local edit, edit_key, edit_base, list_status
     local status, status_timer, search
     local search_number=0
@@ -137,7 +186,8 @@ return function(make_sheet, send, options, help)
         return layout=="all" and draft or {[layout.."_layout"]=draft}
     end
     local function refresh()
-        local preview=ui.page=="Appearance" or ui.page=="Card preview"
+        local preview=ui.page=="Appearance" or ui.page=="Card preview" or ui.page=="Card buttons"
+            or ui.page=="Button 1" or ui.page=="Button 2"
         request("snapshot",{nonce="menu",page=ui.page,records=category_for(ui.page),
             replace=preview and replace and layout=="all",draft=preview and edits() or nil})
     end
@@ -365,12 +415,52 @@ return function(make_sheet, send, options, help)
             for i,button in ipairs(card.buttons or {}) do
                 link(button.label,button.url,"This button label and URL appear on the Discord card.",nil,"Public button "..i)
             end
+        elseif page=="Card buttons" then
+            local slots=button_slots(appearance_opts())
+            for i=1,2 do
+                local n=i
+                row("Button "..n.."   "..button_summary(slots[n]),function() ui.push("Button "..n) end)
+            end
+            row("Restore default buttons",function()
+                appearance_edit("button_slots",false); refresh(); ui.back()
+            end)
+        elseif page=="Button 1" or page=="Button 2" then
+            local n=tonumber(page:sub(-1))
+            local slots=button_slots(appearance_opts())
+            local slot=copy(slots[n] or {site="off"})
+            local function store(changes)
+                local list={copy(slots[1] or {site="off"}),copy(slots[2] or {site="off"})}
+                for k,v in pairs(changes) do slot[k]=v end
+                if slot.label=="" then slot.label=nil end
+                if slot.site~="custom" then slot.url=nil end
+                if slot.fallback=="off" then slot.fallback=nil end
+                list[n]=slot
+                if list[2].site=="off" then list[2]=nil end
+                appearance_edit("button_slots",list)
+                refresh()
+            end
+            choice("Site",button_values(true),slot.site or "off",function(v) store({site=v}) end,nil,button_sites,nil,button_site_help)
+            if slot.site~="off" then
+                local default=slot.site and slot.site:match("^search%-") and "Search on {site}" or "View on {site}"
+                row("Label   "..(slot.label or default),function()
+                    ui.text("Button label (up to 32 characters, placeholders allowed)",slot.label or default,function(v)
+                        store({label=v~=default and v or ""})
+                    end)
+                end)
+            end
+            if slot.site=="custom" then
+                row("Custom link   "..(slot.url or "Not set"),function()
+                    ui.text("Public https link, for example https://example.com/search?q={title}",slot.url or "",function(v)
+                        if not v:match("^https://[%w%-%.]+%.%a%a+") then return notice("Enter a public link that starts with https://.") end
+                        store({url=v})
+                    end)
+                end)
+            elseif slot.site~="off" then
+                local values=button_values(false)
+                choice("Fallback",values,slot.fallback or "off",function(v) store({fallback=v}) end,nil,button_sites,nil,button_site_help)
+            end
         elseif page=="Appearance" then
-            local opts=copy(replace and {} or snap.appearance)
-            local saved=opts[layout.."_layout"] or {}
-            if saved.preset then opts={} end
-            for k,v in pairs(saved) do opts[k]=v end
-            for k,v in pairs(draft) do opts[k]=v end
+            local opts=appearance_opts()
             row("Preview   "..(card.name or "mpv").." · "..(card.state or card.details or ""),function() ui.push("Card preview") end)
             scope_row()
             choice("Media layout",{"all","anime","audio","video","movie","tv","recording","stream"},layout,function(v)
@@ -393,12 +483,15 @@ return function(make_sheet, send, options, help)
                 choice(item[1],item[3],opts[key] or default,function(v) appearance_edit(key,v); refresh() end)
             end
             for _,item in ipairs({{"Release group","group"},{"Episode","episode"},{"Artwork","art"},{"Badge","badge"},
-                {"Tooltip","tooltip"},{"Provider button","button"},{"Details","details"},{"State","state"}}) do
+                {"Tooltip","tooltip"},{"Details","details"},{"State","state"}}) do
                 local key=item[2]
                 local default=not ((key=="group" and opts.preset=="clean") or
                     ((key=="art" or key=="badge" or key=="button") and opts.preset=="private"))
                 toggle(item[1],key,default)
             end
+            local slots=button_slots(opts)
+            row("Buttons   "..button_summary(slots[1])..(slots[2] and (" · "..button_summary(slots[2])) or ""),
+                function() ui.push("Card buttons") end,false,nil,"Buttons")
             choice("Compact status",{"name","details","state"},opts.compact or "name",function(v) appearance_edit("compact",v); refresh() end)
             toggle("Episode titles","spoilers",false)
             for _,item in ipairs({{"Headline","headline"},{"Details template","details_template"},{"State template","state_template"},
@@ -406,16 +499,6 @@ return function(make_sheet, send, options, help)
                 local label,key=item[1],item[2]
                 row(label,function() ui.text(label,opts[key] or "",function(v) appearance_edit(key,v); refresh() end) end)
             end
-            row("Edit public buttons",function()
-                local values={}
-                for _,button in ipairs(opts.buttons or {}) do values[#values+1]=button.label.."|"..button.url end
-                ui.text("Label|https://host/path (separate two buttons with a comma)",table.concat(values,","),function(v)
-                appearance_edit("buttons",{})
-                for label,url in v:gmatch("([^,|]+)|([^,]+)") do
-                    if #draft.buttons<2 then draft.buttons[#draft.buttons+1]={label=label,url=url} end
-                end
-                refresh()
-            end) end)
             row("Reset saved appearance",function()
                 if not require_scope(scope) then return end
                 confirm("Clear appearance overrides for "..scope.." and show the inherited card",function()

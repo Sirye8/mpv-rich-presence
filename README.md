@@ -26,7 +26,8 @@ Click a setting with a dropdown arrow to open its choices over the current page.
 
 ### Sharing and privacy
 
-- Anime cards can show the episode, release group, cover art and AniList link. Movie and TV cards use the matched title and available artwork. Music uses a Listening activity.
+- Anime cards can show the episode, release group, cover art and AniList link. Movie and TV cards use the matched title and available artwork. Music uses a Listening activity and links to Last.fm.
+- Choose up to two card buttons for each media type in **Appearance → Buttons**, with a fallback site and your own label or link.
 - Paused presence hides after 30 minutes by default. Folder exclusions and private sessions also block metadata lookups and tracking.
 - **Track while hidden** can keep AniList tracking active while Discord sharing is off. See [privacy and saved data](docs/user-guide.md#manage-privacy-and-saved-data).
 
