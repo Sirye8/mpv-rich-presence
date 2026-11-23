@@ -9,8 +9,34 @@ local utf8_char = "[%z\1-\127\194-\244][\128-\191]*"
 local function escape(text)
     return (text:gsub("\\", "\\\239\187\191"):gsub("{", "\\{"):gsub("}", "\\}"))
 end
+local function codepoint(ch)
+    local b1,b2,b3,b4=ch:byte(1,4)
+    if #ch==2 then return (b1%32)*64+b2%64 end
+    if #ch==3 then return (b1%16)*4096+(b2%64)*64+b3%64 end
+    if #ch==4 then return (b1%8)*262144+(b2%64)*4096+(b3%64)*64+b4%64 end
+    return b1
+end
+-- Ranges are in em widths: marks and joiners take no space, CJK and emoji take a full em.
+local zero_width={{0x0300,0x036F},{0x0483,0x0489},{0x0591,0x05BD},{0x05BF,0x05C7},{0x0610,0x061A},
+    {0x064B,0x065F},{0x0670,0x0670},{0x06D6,0x06ED},{0x0E31,0x0E31},{0x0E34,0x0E3A},{0x0E47,0x0E4E},
+    {0x200B,0x200F},{0x202A,0x202E},{0x2060,0x2064},{0x20D0,0x20FF},{0xFE00,0xFE0F},{0xFE20,0xFE2F},
+    {0x1F3FB,0x1F3FF},{0xE0000,0xE01EF}}
+local wide={{0x1100,0x115F},{0x2E80,0x303E},{0x3041,0x33FF},{0x3400,0x4DBF},{0x4E00,0x9FFF},{0xA000,0xA4CF},
+    {0xAC00,0xD7A3},{0xF900,0xFAFF},{0xFE30,0xFE4F},{0xFF00,0xFF60},{0xFFE0,0xFFE6},{0x1F000,0x1FAFF},
+    {0x20000,0x3FFFD}}
+local function within(ranges,code)
+    for _,range in ipairs(ranges) do
+        if code>=range[1] and code<=range[2] then return true end
+    end
+    return false
+end
 local function advance(ch)
-    if #ch>=3 then return .88 end
+    if #ch>=2 then
+        local code=codepoint(ch)
+        if within(zero_width,code) then return 0 end
+        if within(wide,code) then return 1 end
+        return #ch==2 and .47 or .6
+    end
     if ch:match("[ ilI1%.,:;'!|]") then return .23 end
     if ch:match("[MWmw@%%&]") then return .64 end
     if ch:match("%u") then return .49 end
@@ -365,7 +391,7 @@ return function(model)
                 end
                 height=height+math.max(20,16*math.max(#detail,#option_label)+3)
             end
-        else
+        elseif target.tip then
             for _,value in ipairs(wrap(target.tip,width-24,14)) do
                 line(value,12,height,14,theme.text)
                 height=height+18
@@ -877,12 +903,17 @@ return function(model)
             clear_hover(false)
             hovered=key
             if target then animate("hover",.15,1,.11) end
-            if target and target.tip then
+            -- Without animation long text cannot scroll, so its tooltip shows the full text.
+            local function cut(item)
+                return model.animate==false and math.max(item.display and item.display.overflow or 0,
+                    item.value and item.value.overflow or 0)>0
+            end
+            if target and (target.tip or cut(target)) then
                 hover_timer=mp.add_timeout(.33,function()
                     hover_timer=nil
                     for _,item in ipairs(ui.hits) do
                         if item.key==hovered then
-                            if item.tip then
+                            if item.tip or cut(item) then
                                 tooltip=make_tip(item)
                                 animate("hint",.18,1,.13)
                             end
@@ -1085,6 +1116,7 @@ return function(model)
         end)
     end
 
+    ui.measure=measure
     function ui.show(page)
         if ui.open then
             if page then ui.stack={"Menu"}; show_page(page,1) else ui.close() end

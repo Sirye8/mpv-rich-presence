@@ -287,6 +287,32 @@ local function verify()
     clock=clock+.2
     animation().fn()
 
+    -- Character widths: marks and joiners add nothing, CJK and emoji take a full em.
+    local m=ui.measure
+    assert(m("e\204\129",15)==m("e",15),"A combining accent added width")
+    assert(m("日本語",15)>=m("abc",15)*2,"CJK text was measured too narrow")
+    assert(m("\240\159\145\141\240\159\143\189",15)==m("\240\159\145\141",15),"A skin tone modifier added width")
+    assert(m("\240\159\145\169\226\128\141\240\159\146\187",15)==2*m("\240\159\145\169",15),"A zero-width joiner added width")
+    assert(m("مرحبا بالعالم",15)>0 and m("שלום",15)>0,"Right-to-left text had no width")
+    -- With animations off, cut-off text gets a tooltip with the full value.
+    local long_value="Full value "..string.rep("long text ",20)
+    local still_rows={{id="still",label="Title   "..long_value,run=function() end}}
+    local still=sheet({sections={},animate=false,rows=function() return still_rows end,refresh=function() end,closed=function() end})
+    still.show("Still")
+    local cut_hit
+    for _,hit in ipairs(still.hits) do if hit.key=="row:still" then cut_hit=hit end end
+    x,y=(cut_hit.x+4)*height/paint_height,(cut_hit.y+4)*height/paint_height
+    still.mouse_moved(nil,{hover=true})
+    local tip_timer=timers[#timers]
+    tip_timer.killed=true
+    tip_timer.fn()
+    assert(paint:find("long text long text",1,true),"Cut-off text had no full-text tooltip without animation")
+    still.close()
+    -- A doubled interface scale stays inside the window.
+    local large=sheet({sections={"Alpha"},animate=false,scale=2,rows=function() return still_rows end,refresh=function() end,closed=function() end})
+    large.show("Alpha")
+    assert(bounds[3]<=width and bounds[4]<=height,"A doubled scale left the window")
+    large.close()
     local sections_ui=sheet({sections={"Alpha","Beta"},animate=false,rows=function() return rows end,refresh=function() end,closed=function() end})
     sections_ui.show("Beta")
     sections_ui.push("Beta details")
