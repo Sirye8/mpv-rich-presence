@@ -10,7 +10,7 @@ Press **Alt+p** to open the panel. Use the mouse or the arrow keys, Enter and Es
 
 | Section | What you can do |
 | --- | --- |
-| Now playing | Preview the Discord card, correct a match or choose which window shares. |
+| Now playing | Preview the Discord card, update AniList progress, see the scrobble status or hide Discord for an hour. |
 | AniList | Connect an account, see watch time and review or edit progress. |
 | Last.fm | Connect an account, scrobble music, love tracks and review queued plays. |
 | Appearance | Preview presets and edit card text, artwork, links and timers. |

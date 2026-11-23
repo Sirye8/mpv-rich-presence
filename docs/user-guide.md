@@ -37,11 +37,11 @@ The Windows x64 ZIP includes Python and Chromaprint. The Linux ZIP includes Chro
 
 ## Use the panel
 
-Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. The wheel and touchpad scroll the list independently of keyboard selection. Drag the scrollbar or click its track to move through long lists. Hover over a row for help and the full value. Long values scroll on hover. If a hovered tooltip has more text, the wheel scrolls that tooltip. Click a row marked ↗ or press Enter to open its link.
+Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to change a choice, and Escape to go back. The wheel and touchpad scroll the list independently of keyboard selection. Drag the scrollbar or click its track to move through long lists. Hover over a row for help and the full value. Long values scroll on hover. If a hovered tooltip has more text, the wheel scrolls that tooltip. Click a row marked ↗ or press Enter to open its link. Pressing **Alt+p** again later reopens the section you last used, with the same row selected.
 
 | Page | Use it to |
 | --- | --- |
-| Now playing | Inspect the current card, correct a match or choose which window shares to Discord. |
+| Now playing | Inspect the current card, step AniList progress, see the scrobble status, hide Discord for an hour, correct a match or choose which window shares. |
 | AniList | Connect, see watch time, edit progress, change tracking settings or review a proposal. |
 | Appearance | Preview a preset or edit artwork, language, numbering, timers, links, buttons and card layouts. **Apply** saves the preview. |
 | Recognition & folders | Choose a provider scope, pin an AniList match, adjust episode numbering or fingerprint a local track. |
@@ -192,7 +192,7 @@ Ctrl+q script-message-to mpv_rich_presence review-before "quit-watch-later"
 
 ## Manage privacy and saved data
 
-**Privacy & windows** can hide only the card, switch to a generic card, or start a private session that stops both lookups and tracking. Folder exclusions and private sessions take precedence. **Track while hidden** lets AniList continue when Discord sharing is off and the file is otherwise eligible. A new or resumed file can claim Discord unless another player is pinned.
+**Privacy & windows** can hide only the card, switch to a generic card, or start a private session that stops both lookups and tracking. Folder exclusions and private sessions take precedence. **Track while hidden** lets AniList continue when Discord sharing is off and the file is otherwise eligible. A new or resumed file can claim Discord unless another player is pinned. The **Discord status** row names the rule that decides sharing, for example **Hidden by privacy for this folder**, **Blocked by an exclusion** or **Hidden for 45 more min**. If another mpv window briefly locks saved data, the status shows **Saved data busy · retrying** and recovers on its own.
 
 **Hide Discord** hides this window's card for 15 minutes, an hour, three hours, a custom number of minutes, or until the window closes. While it is hidden, **Hidden until** shows when sharing returns and **Resume Discord now** ends it early.
 
