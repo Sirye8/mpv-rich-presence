@@ -51,6 +51,12 @@ The Windows x64 ZIP is the prebuilt release asset. Linux users can build the sam
 
 Compiled binaries will be generated in `build/Release/rich-presence.dll` (or `build/rich-presence.so`).
 
+## Test the package in CI
+
+The **package** job builds the Windows and Linux packages and runs the packaged panel tests on pushes to `main` and on manual runs. It downloads a trimmed Discord Social SDK from the private repository `Sirye8/discord-social-sdk-ci` and checks it against the `DISCORD_SDK_ARCHIVE_SHA256` repository variable. The `DISCORD_SDK_TOKEN` secret must hold a fine-grained token with read-only access to that repository's contents. Pull requests and forks skip the job.
+
+To replace the SDK, upload the new archive to the `sdk` release of that repository and update the variable with its SHA-256.
+
 ## Release a version
 
 Every release, including one that only fixes bugs, increases the second version number: `v2.3`, then `v2.4`.

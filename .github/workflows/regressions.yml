@@ -3,6 +3,7 @@ name: Regressions
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,7 +43,9 @@ jobs:
           sudo apt-get install -y mpv
           MPVRP_MODULES="$PWD/script-modules/mpv-rich-presence" mpv --no-config --load-scripts=no --idle=yes --vo=null --ao=null --script=tests/sheet_tests.lua
   package:
-    if: ${{ vars.DISCORD_SDK_ARCHIVE_URL != '' }}
+    # Packages and tests the real plugin on pushes to main and manual runs. The Discord SDK
+    # comes from a private repository, so pull requests from forks never receive it.
+    if: ${{ vars.DISCORD_SDK_ARCHIVE_SHA256 != '' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -53,8 +56,8 @@ jobs:
             triplet: x64-linux
     runs-on: ${{ matrix.os }}
     env:
-      SDK_ARCHIVE_URL: ${{ vars.DISCORD_SDK_ARCHIVE_URL }}
       SDK_ARCHIVE_SHA256: ${{ vars.DISCORD_SDK_ARCHIVE_SHA256 }}
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,17 +65,37 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - name: Find the vcpkg commit
+        id: vcpkg
+        shell: bash
+        run: echo "commit=$(git rev-parse HEAD:thirdparty/vcpkg)" >> "$GITHUB_OUTPUT"
+      - name: Restore built vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.triplet }}-${{ steps.vcpkg.outputs.commit }}-
+      - name: Download the Discord Social SDK
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.DISCORD_SDK_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Set the DISCORD_SDK_TOKEN secret to a token that can read Sirye8/discord-social-sdk-ci."
+            exit 1
+          fi
+          mkdir -p vcpkg-cache
+          gh release download sdk -R Sirye8/discord-social-sdk-ci -p discord_social_sdk-ci.zip -O sdk.zip
       - name: Install the Discord Social SDK
         shell: python {0}
         run: |
-          import hashlib, io, os, zipfile
-          from urllib.request import urlopen
-          with urlopen(os.environ["SDK_ARCHIVE_URL"], timeout=60) as response:
-              data = response.read()
+          import hashlib, os, zipfile
+          data = open("sdk.zip", "rb").read()
           if hashlib.sha256(data).hexdigest() != os.environ["SDK_ARCHIVE_SHA256"]:
               raise SystemExit("Unexpected Discord SDK checksum")
-          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+          with zipfile.ZipFile("sdk.zip") as archive:
               archive.extractall("thirdparty/discord_social_sdk")
+          os.remove("sdk.zip")
       - name: Bootstrap vcpkg on Windows
         if: runner.os == 'Windows'
         run: .\thirdparty\vcpkg\bootstrap-vcpkg.bat
