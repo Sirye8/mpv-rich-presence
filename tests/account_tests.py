@@ -297,6 +297,39 @@ class RecognitionTests(unittest.TestCase):
                     worker.recognize(sample)
                 self.assertEqual(worker.get("auto","window")["hit"].get("numbering"),expected,name)
 
+    def test_nfo_files_select_tmdb_and_record_their_origin(self):
+        import sidecars
+        with tempfile.TemporaryDirectory() as directory:
+            show = Path(directory) / "Loki"
+            season = show / "Season 02"
+            season.mkdir(parents=True)
+            (show / "tvshow.nfo").write_text('<?xml version="1.0"?><tvshow><title>Loki</title><year>2021</year>'
+                                             '<uniqueid type="tmdb">84958</uniqueid></tvshow>\nhttps://www.themoviedb.org/tv/84958')
+            (season / "Episode 4.nfo").write_text('<episodedetails><title>Heart of the TVA</title><showtitle>Loki</showtitle>'
+                                                  '<season>2</season><episode>4</episode><premiered>2023-10-26</premiered>'
+                                                  '<uniqueid type="tmdb">4567</uniqueid></episodedetails>')
+            fields, origin = sidecars.find(season / "Episode 4.mkv")
+            self.assertEqual(fields, {"kind": "tv", "title": "Loki", "season": 2, "episode": 4, "year": "2021", "tmdb": 84958})
+            self.assertEqual(origin["tmdb"], "tvshow.nfo")
+            self.assertEqual(origin["episode"], "Episode 4.nfo")
+            (season / "unsafe.nfo").write_text('<!DOCTYPE m [<!ENTITY x "y">]><movie><title>&x;</title></movie>')
+            self.assertEqual(sidecars.read_nfo(season / "unsafe.nfo"), {})
+            worker = Worker(":memory:", "window", {})
+            self.addCleanup(worker.db.close)
+            worker.db.execute("CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+            seen = []
+            for session, enabled in ((1, False), (2, True)):
+                sample = dict(session=session, source="auto", title="Episode 4", filename="Episode 4.mkv", video=True,
+                              allowed=True, path=(season / "Episode 4.mkv").as_posix(), duration=3000,
+                              recognition_options={"sidecar_metadata": enabled})
+                worker.put("player", "window", sample)
+                with patch("backend.candidates", return_value=[]), patch("backend.details", side_effect=lambda provider, hit, *rest: (
+                        seen.append((provider, hit.get("id"), rest[2] if len(rest) > 2 else None)) or dict(hit, name="Loki"))):
+                    worker.recognize(sample)
+            published = worker.get("auto", "window")
+            self.assertEqual(published["metadata_origin"]["tmdb"], "tvshow.nfo")
+            self.assertIn(("tmdb-tv", 84958, ("2", "4")), [(a, int(b) if b else b, c) for a, b, c in seen])
+
     def test_stale_search_result_cannot_be_saved(self):
         worker = Worker(":memory:", "window", {})
         self.addCleanup(worker.db.close)

@@ -48,6 +48,7 @@ from providers import (
 )
 from settings_transfer import export_settings, import_settings, summary as import_summary
 import lastfm
+import sidecars
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
 MUSIC_RETRY_DELAYS = (5, 15)
@@ -1371,6 +1372,7 @@ class Worker:
                         unavailable=unavailable,
                         ambiguous=ambiguous and not hit and not unavailable,
                         fingerprint_available=fingerprint_available,
+                        metadata_origin=p.get("metadata_origin", {}),
                     ),
                 )
 
@@ -1431,6 +1433,21 @@ class Worker:
                         video_profile = False
                 except (OSError, ValueError):
                     pass
+            if path and options.get("sidecar_metadata") and profile_source in ("auto", "movie-tv", "movie", "tv", "verify-tv", "verify-movie")                     and not p.get("sidecar_selected"):
+                # Library .nfo files: a TMDB ID selects the entry, other fields guide the search.
+                nfo, origin = sidecars.find(path)
+                if nfo:
+                    p = dict(p, metadata_origin=origin)
+                    kind = nfo.get("kind")
+                    if "season" in nfo:
+                        episode = (str(nfo["season"]), str(nfo["episode"]))
+                        missing_tv_season = False
+                    if nfo.get("tmdb") and profile_source in ("auto", "movie-tv", kind, f"verify-{kind}"):
+                        p = dict(p, tmdb=str(nfo["tmdb"]), sidecar_selected=True)
+                        source = "tmdb-" + kind
+                        video_profile = False
+                    elif nfo.get("title"):
+                        title, year = nfo["title"], nfo.get("year", year)
             if missing_tv_season and not p.get("sidecar_selected"):
                 publish(None)
                 return

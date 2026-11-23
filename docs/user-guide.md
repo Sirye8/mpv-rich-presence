@@ -107,6 +107,8 @@ The effective order is file, nearest matching folder, global panel setting, then
 
 With **Local metadata files** enabled, place a file such as `Loki.S02E04.mpv-rp.json` next to `Loki.S02E04.mkv`. Use `{"kind":"tv","tmdb":84958,"season":2,"episode":4}`. For a movie, use `kind` set to `movie` and its numeric TMDB ID. The sidecar guides supplemental recognition. AniList retains priority for confirmed anime, and manual file corrections still take precedence.
 
+The same option reads `.nfo` files kept by Kodi, Jellyfin and Plex: `<file>.nfo`, `movie.nfo`, and `tvshow.nfo` in the folder or the one above it. A TMDB ID selects the entry directly. Otherwise the title, year, season and episode guide the search. A `.mpv-rp.json` file takes priority. **Now playing → Why this match?** shows which file supplied each field. With **Save for → folder**, **Recognition & folders** shows how many media files a folder rule covers.
+
 If two distinct AniList entries still tie after checking the available title, year, and sequel evidence, mpv uses a local card and asks you to correct the match before AniList tracking resumes. To correct only the episode number, use **Now playing → Correct episode**. Previously recorded time stays with its original episode.
 
 You can override the bundled provider access with `tmdb_key` or `acoustid_key`. See [shared TMDB setup](tmdb-metadata.md) for deployment details.

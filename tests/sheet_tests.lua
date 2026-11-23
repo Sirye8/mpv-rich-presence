@@ -577,6 +577,19 @@ local function verify()
     find("Now playing","Apply progress").run()
     hub.adjust(-2)
     assert(not find("Now playing","Apply progress"),"Apply progress stayed without an edit")
+    snapshot.metadata_origin={tmdb="tvshow.nfo",episode="Episode 4.nfo"}
+    menu.update(snapshot)
+    assert(find("Match evidence","Metadata tmdb").label=="TMDB ID   from tvshow.nfo")
+    assert(find("Match evidence","Metadata episode").label=="Episode   from Episode 4.nfo")
+    snapshot.metadata_origin=nil
+    snapshot.save_scopes={["Recognition & folders"]="folder"}
+    snapshot.has_local_folder=true
+    snapshot.folder_filter={mode="disabled",passes=true,current=modules,folders={}}
+    menu.update(snapshot)
+    find("Recognition & folders","Save for").run()
+    select_choice("folder")
+    assert(find("Recognition & folders","Folder rule covers").label=="Folder rule covers   0 media files","Folder preview did not count")
+    snapshot.save_scopes=nil
     snapshot.folder_filter={mode="whitelist",passes=false,current="D:/clips",folders={"D:/anime"}}
     snapshot.record_counts={cache=8,watch=2,match=1}
     snapshot.records={{category="cache",scope="v3:auto:wikidata/abcdef",label="v3:auto:wikidata",expires=1}}

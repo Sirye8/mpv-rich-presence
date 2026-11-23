@@ -287,6 +287,28 @@ return function(make_sheet, send, options, help)
         if scope_available(scope) then return true end
         notice(scope=="folder" and "Open a local file to use the Folder scope." or "Open media to use the File scope.")
     end
+    -- Folder previews count media below the folder once, up to a limit, and reuse the result.
+    local folder_counts={}
+    local media_extensions={}
+    for ext in ("mkv mp4 avi webm mov m4v ts m2ts wmv flv mpg mpeg ogv flac mp3 m4a ogg opus wav aac wma alac ape wv"):gmatch("%S+") do media_extensions[ext]=true end
+    local function media_files(folder)
+        if folder_counts[folder] then return folder_counts[folder] end
+        local utils=require("mp.utils")
+        local count,pending=0,{{folder,0}}
+        while #pending>0 and count<2000 do
+            local entry=table.remove(pending)
+            local dir,level=entry[1],entry[2]
+            for _,name in ipairs(utils.readdir(dir,"files") or {}) do
+                local ext=name:match("%.([^.]+)$")
+                if ext and media_extensions[ext:lower()] then count=count+1 end
+            end
+            if level<4 then
+                for _,name in ipairs(utils.readdir(dir,"dirs") or {}) do pending[#pending+1]={utils.join_path(dir,name),level+1} end
+            end
+        end
+        folder_counts[folder]=count
+        return count
+    end
     local function pick(page) if page=="Appearance" then draft={}; replace=false end; ui.push(page) end
     local function rows(page)
         local list={}
@@ -496,6 +518,11 @@ return function(make_sheet, send, options, help)
             row("Recognition rule   "..(snap.source_scope or "configuration"))
             row("Match rule   "..(snap.match_scope or "configuration"))
             if snap.episode_review and snap.episode_review~="" then row("Review reason   "..snap.episode_review) end
+            local names={kind="Media kind",title="Title",year="Year",season="Season",episode="Episode",tmdb="TMDB ID",imdb="IMDb ID"}
+            for _,key in ipairs({"kind","title","year","season","episode","tmdb","imdb"}) do
+                local file=(snap.metadata_origin or {})[key]
+                if file then row(names[key].."   from "..file,nil,false,nil,"Metadata "..key).tip="Read only. This field came from a local metadata file beside the media." end
+            end
         elseif page=="Card preview" then
             row("Activity   "..(card.type or "").." "..(card.name or ""))
             for _,field in ipairs({{"Details","details"},{"State","state"},{"Artwork","large_image"},{"Artwork tooltip","large_text"},
@@ -826,6 +853,12 @@ return function(make_sheet, send, options, help)
             row("Cancel",ui.back)
         elseif page=="Recognition & folders" then
             scope_row()
+            local folder=(snap.folder_filter or {}).current
+            if scope=="folder" and folder and folder~="" then
+                local count=media_files(folder)
+                row("Folder rule covers   "..(count>=2000 and "2000+" or tostring(count)).." media "..(count==1 and "file" or "files"),
+                    nil,false,nil,"Folder rule covers").tip="Read only. Media files in "..folder.." and its subfolders that a folder rule here applies to, unless a file rule overrides it."
+            end
             local current=(snap.sources or {}).source or "auto"
             local label=current
             for _,source in ipairs(sources) do if source[1]==current then label=source[2]; break end end
