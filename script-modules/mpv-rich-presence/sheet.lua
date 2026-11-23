@@ -83,7 +83,11 @@ end
 
 -- Discord's dark activity card, in ASS colours (BBGGRR).
 local discord={card="282423",image="47413F",text="F5F3F2",muted="C1BAB5",button="58504E",bar="FFFFFF"}
-local card_width,card_image=304,84
+-- Music cards on Discord give the album art more room than video cards.
+local function card_size(card)
+    if card.header=="Listening" then return 344,112 end
+    return 304,84
+end
 
 local function clock(ms)
     local seconds=math.max(0,math.floor(ms/1000))
@@ -102,11 +106,13 @@ end
 
 local function card_height(card)
     local text=#card_lines(card)*19+((card.start or card["end"]) and 24 or 0)
-    return 40+math.max(card_image,text)+14+#(card.buttons or {})*38
+    local _,art=card_size(card)
+    return 40+math.max(art,text)+14+#(card.buttons or {})*38
 end
 
 local function draw_card(ass,place,opacity)
     local card,x,y,w=place.card,place.x,place.y,place.w
+    local card_image=place.art
     box(ass,x+1,y+4,x+w+1,y+place.h+5,"000000",.35*opacity,12)
     box(ass,x,y,x+w,y+place.h,discord.card,.98*opacity,12)
     label(ass,x+14,y+12,escape(card.header),12,discord.muted,opacity,nil,true)
@@ -321,7 +327,7 @@ return function(model)
                 or (layout.dropdown and layout.dropdown.r>place.x and layout.dropdown.x<place.x+place.w)
             local function at(value) return math.floor(value*scale) end
             model.card_images.show(not covered and place and place.card.large_image,
-                place and at(place.x+14),place and at(place.y+38),place and at(card_image),
+                place and at(place.x+14),place and at(place.y+38),place and at(place.art),
                 not covered and place and place.card.small_image,
                 place and at(place.badge_x),place and at(place.badge_y),place and at(place.badge))
         end
@@ -841,15 +847,18 @@ return function(model)
         local preview=not model.compact and not editing and model.card_preview and model.card_preview(ui.page)
         if preview then
             local h=card_height(preview)
+            local card_width,card_image=card_size(preview)
             local space_right=layout.w-layout.right>=card_width+24
             local space_left=layout.left>=card_width+24
             if (space_right or space_left) and h<=layout.max_bottom-layout.min_top then
                 local x=space_right and layout.right+12 or layout.left-card_width-12
                 local y=math.max(layout.min_top,math.min(top,layout.max_bottom-h))
+                -- The badge centre and ring match the notch avatar.py cuts into the artwork.
                 local badge=math.floor(card_image*.34)
-                layout.card={card=preview,x=x,y=y,w=card_width,h=h,badge=badge,
+                local centre=card_image*.881
+                layout.card={card=preview,x=x,y=y,w=card_width,h=h,badge=badge,art=card_image,
                     text_height=#card_lines(preview)*19+((preview.start or preview["end"]) and 24 or 0),
-                    badge_x=x+14+card_image-badge+4,badge_y=y+38+card_image-badge+4}
+                    badge_x=math.floor(x+14+centre-badge/2),badge_y=math.floor(y+38+centre-badge/2)}
             end
         end
         if model.avatar then

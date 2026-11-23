@@ -49,7 +49,7 @@ Press **Alt+p**. Use Up and Down to move, Enter to select, Left and Right to cha
 | Saved data | Find saved profiles, matches, caches, timers and proposals. Review what a clear operation removes. |
 | Diagnostics | See permission, active provider, rule source, tracking and Discord publishing status. |
 
-While **Now playing**, **Appearance** or a card editing page is open, a drawn copy of the Discord card appears beside the panel when the window has room. It shows the artwork and badge, the text lines, the elapsed time or progress bar, and the buttons, and it follows unapplied edits and updates every second. It is drawn by mpv, so the font differs from Discord's and Discord may shorten long lines differently. The panel downloads the card's artwork from the same public links it sends to Discord.
+While **Now playing**, **Appearance** or a card editing page is open, a drawn copy of the Discord card appears beside the panel when the window has room. It shows the artwork and badge, the text lines, the elapsed time or progress bar, and the buttons, and it follows unapplied edits and updates every second. Music cards use Discord's listening layout, with larger album art and a wider text column. It is drawn by mpv, so the font differs from Discord's and Discord may shorten long lines differently. The panel downloads the card's artwork from the same public links it sends to Discord.
 
 Appearance groups the card settings into **Text**, **Artwork & badge**, **Buttons**, **Timer & pause** and **Links**. Each row shows its current value. Edits stay in the preview until you press **Apply**. Leaving Appearance with unsaved edits offers **Apply and leave**, **Discard changes** or **Keep editing**, and the footer **Cancel** discards them directly.
 
