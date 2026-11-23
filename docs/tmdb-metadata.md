@@ -11,6 +11,9 @@ The existing `mpv-anilist-login` Cloudflare Worker serves a separate `/metadata/
 1. Register the project with TMDB and describe the public, non-commercial desktop plugin and its shared server lookup. Use the application's API Read Access Token. See [TMDB application authentication](https://developer.themoviedb.org/docs/authentication-application).
 2. Deploy the Worker from `tools/cloudflare/wrangler.jsonc`. In its production **Variables and secrets**, save the token as a **Secret** named `TMDB_READ_TOKEN`. Keep the token out of source, packages, and log output.
 3. Check `/metadata/health` for `configured: true`, then verify a movie search and a TV episode lookup. The AniList `/health` and callback use the existing Netlify exchange.
+4. Enable **Analytics Engine** for the account. The Worker writes one data point per request to the `mpv_rich_presence_requests` dataset with only the route group and status code, for example `/metadata/search` and `429`. Titles, IDs, tokens and addresses are never written. Without the binding, requests are answered normally and not counted.
+
+A missing token returns `503` with `X-Relay-Reason: not-configured`. An upstream failure returns `502`, and throttling returns `429` with `Retry-After`. The plugin shows these as **Not configured**, **Unreachable** and **Rate limited** under **Diagnostics → TMDB relay**.
 
 ## Credits
 
