@@ -1448,6 +1448,12 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     double last_sample_speed = 1;
     uint64_t sampled_seek = 0;
     uint64_t last_seek = 0;
+    // Records other windows or the helper write are read again only after the database changes,
+    // or once a second for time-based values such as pin expiry.
+    int seen_data_version = -1;
+    chrono::steady_clock::time_point next_data_read{}, next_lease_check{};
+    nlohmann::json pin_cache = nlohmann::json::object(), auto_cache = nlohmann::json::object(),
+        lastfm_track_cache = nlohmann::json::object();
     // Main event loop
 
     while (true)
@@ -1628,9 +1634,18 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
         media.pause_start = state.pause_start_epoch_ms;
 
+        const int data_version = state.store ? state.store->version() : 0;
+        if (state.store && (data_version != seen_data_version || now_steady >= next_data_read))
+        {
+            seen_data_version = data_version;
+            next_data_read = now_steady + 1s;
+            pin_cache = state.store->get("pin","current");
+            auto_cache = state.store->get("auto",state.instance_id);
+            lastfm_track_cache = state.lastfm_fields ? state.store->get("lastfm-track", state.instance_id) : nlohmann::json::object();
+        }
         if (state.store)
         {
-            const auto pin = state.store->get("pin","current");
+            const auto& pin = pin_cache;
             const auto owner = pin.value("owner",std::string{});
             const auto expires = pin.value("expires",uint64_t{});
             state.pinned_elsewhere = !owner.empty() && owner != state.instance_id && expires > media.now;
@@ -1645,9 +1660,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 release_active_instance(state.instance_id);
                 state.store->release_pin(state.instance_id);
                 state.pinned_here = false;
+                pin_cache = nlohmann::json::object();
             }
             else if (state.pinned_here && expires < media.now + 4000)
+            {
                 state.store->renew_pin(state.instance_id,media.now+6000);
+                pin_cache["expires"] = media.now+6000;
+            }
         }
 
         // Handover on resume: unpausing an eligible instance claims ownership immediately
@@ -1668,7 +1687,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         }
 
         // Track ownership transitions
-        bool currently_active = is_active_instance(state.instance_id);
+        bool currently_active = state.was_active_instance;
+        if (now_steady >= next_lease_check)
+        {
+            // Reading the shared lease file takes a system mutex and several file operations.
+            currently_active = is_active_instance(state.instance_id);
+            next_lease_check = now_steady + 1s;
+        }
         if (currently_active && !state.was_active_instance)
         {
             // Regained active ownership: force an immediate update and lease renewal
@@ -1677,7 +1702,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         }
         state.was_active_instance = currently_active;
 
-        if (state.store && state.store_version != state.store->version())
+        if (state.store && state.store_version != data_version)
         {
             auto response = state.store->get("response",state.instance_id);
             auto message = response.value("notice",std::string{});
@@ -1752,7 +1777,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (!media.video && !state.scope_path.starts_with("stream-") &&
             (source == "auto" || source == "musicbrainz" || source == "acoustid"))
             media.track_title = state.track_title;
-        const auto candidate = extra && state.store ? state.store->get("auto",state.instance_id) : nlohmann::json::object();
+        const auto candidate = extra && state.store ? auto_cache : nlohmann::json::object();
         const bool resolved = candidate.value("session",uint64_t{}) == state.file_session &&
             candidate.value("source",std::string{}) == source && candidate.value("title",std::string{}) == media.title &&
             candidate.value("track_title",std::string{}) == media.track_title &&
@@ -1781,7 +1806,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         const bool sampling = watch || scrobble;
         if (state.lastfm_fields && state.store)
         {
-            const auto info = state.store->get("lastfm-track", state.instance_id);
+            const auto& info = lastfm_track_cache;
             const bool current = info.value("session", uint64_t{}) == state.file_session;
             media.plays = current ? info.value("plays", std::string{}) : "";
             media.loved = current && info.value("loved", false) ? "Loved" : "";
