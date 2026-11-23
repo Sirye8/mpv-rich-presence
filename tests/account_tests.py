@@ -1941,6 +1941,18 @@ class TrackingTests(unittest.TestCase):
             with older.transaction():
                 self.assertEqual(import_settings(older.db,str(path),target=target)[1],expected)
 
+    def test_v27_settings_wait_for_older_targets(self):
+        self.worker.put("appearance","global",{"button_slots":[{"site":"anilist"},{"site":"lastfm-profile"}]})
+        self.worker.put("anilist-updates","global",{"step":False,"changed":"conflict"})
+        path=self.worker.directory/"v27.json"
+        export_settings(self.worker.db,str(path))
+        for target,expected in (((2,6),["anilist-updates.changed","anilist-updates.step","appearance.button_slots"]),((2,7),[])):
+            older=Worker(":memory:","older",{})
+            self.addCleanup(older.db.close)
+            older.db.execute("CREATE TABLE records(category TEXT, scope TEXT, value TEXT, PRIMARY KEY(category,scope))")
+            with older.transaction():
+                self.assertEqual(sorted(import_settings(older.db,str(path),target=target)[1]),expected)
+
     def test_invalid_settings_import_rolls_back(self):
         path=self.worker.directory/"malformed.json"
         path.write_text(json.dumps({"format":"mpv-rich-presence-settings","version":1,"records":[

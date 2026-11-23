@@ -218,6 +218,19 @@ int main(int argc, char** argv)
     auto duplicate = format_activity(show, {{"button_slots",json::array({{{"site","anilist"}},{{"site","provider"}}})}});
     if (duplicate.at("buttons").size() != 1) return 1;
     if (format_activity(show, {{"button_slots",json::array({{{"site","off"}}})}}).contains("buttons")) return 1;
+    // Profile buttons link to the connected accounts and are left off until one is connected.
+    const json profiles = {{"button_slots",json::array({{{"site","anilist"}},{{"site","anilist-profile"}}})}};
+    if (format_activity(show, profiles).at("buttons").size() != 1) return 1;
+    show.anilist_user = "Viewer";
+    auto profile = format_activity(show, profiles);
+    if (button(profile,1,"url") != "https://anilist.co/user/Viewer/" || button(profile,1,"label") != "My AniList") return 1;
+    show.lastfm_user = "bad name/../x";
+    if (format_activity(show, {{"button_slots",json::array({{{"site","lastfm-profile"}}})}}).contains("buttons")) return 1;
+    show.lastfm_user = "Listener_1";
+    if (button(format_activity(show, {{"button_slots",json::array({{{"site","lastfm-profile"}}})}}),0,"url")
+        != "https://www.last.fm/user/Listener_1") return 1;
+    show.anilist_user.clear();
+    show.lastfm_user.clear();
     if (format_activity(show, {{"button_slots",json::array({{{"site","custom"},{"label","Bad"},{"url","http://example.com"}}})}}).contains("buttons")) return 1;
 
     playback film;

@@ -94,6 +94,17 @@ namespace mpvrp
             if (page.find("twitch.tv/") != std::string::npos) return {"Twitch", page};
             return {"YouTube", page};
         }
+        // Profile buttons link to the connected account, so they work for any media type.
+        if (site == "anilist-profile")
+        {
+            static const std::regex name(R"([A-Za-z0-9_-]{1,64})");
+            return {"AniList", std::regex_match(m.anilist_user, name) ? "https://anilist.co/user/" + m.anilist_user + "/" : ""};
+        }
+        if (site == "lastfm-profile")
+        {
+            static const std::regex name(R"([A-Za-z0-9_.-]{1,64})");
+            return {"Last.fm", std::regex_match(m.lastfm_user, name) ? "https://www.last.fm/user/" + m.lastfm_user : ""};
+        }
         if (site == "search-youtube")
             return {"YouTube", query.empty() ? "" : "https://www.youtube.com/results?search_query=" + url_encode(query, true)};
         if (site == "search-google")
@@ -336,7 +347,8 @@ namespace mpvrp
                 }
                 if (chosen.url.empty() || !public_url(chosen.url)) continue;
                 if (std::any_of(buttons.begin(), buttons.end(), [&](const json& b) { return b.at("url") == chosen.url; })) continue;
-                const auto fallback_label = std::string(site.starts_with("search-") ? "Search on " : "View on ") + chosen.site;
+                const auto fallback_label = std::string(site.starts_with("search-") ? "Search on " :
+                    site.ends_with("-profile") ? "My " : "View on ") + chosen.site;
                 json label_fields = fields;
                 label_fields["site"] = chosen.site;
                 auto label = slot.contains("label") ? render_template(slot.value("label", std::string{}), label_fields) : fallback_label;

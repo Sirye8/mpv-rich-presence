@@ -36,7 +36,8 @@ return function(make_sheet, send, options, help)
     end
     local button_sites={off="Off",provider="Matched provider",custom="Custom link",anilist="AniList",
         myanimelist="MyAnimeList",tmdb="TMDB",imdb="IMDb",tvmaze="TVmaze",wikidata="Wikidata",musicbrainz="MusicBrainz",
-        lastfm="Last.fm",stream="Stream page",["search-youtube"]="Search on YouTube",["search-google"]="Search on Google"}
+        lastfm="Last.fm",stream="Stream page",["search-youtube"]="Search on YouTube",["search-google"]="Search on Google",
+        ["anilist-profile"]="My AniList profile",["lastfm-profile"]="My Last.fm profile"}
     local button_site_help={off="No button in this position.",
         provider="Link to the entry that recognition matched: AniList, TMDB, TVmaze, Wikidata, MusicBrainz or the stream page.",
         custom="Your own label and public https link. Placeholders in the link are URL-encoded.",
@@ -44,7 +45,9 @@ return function(make_sheet, send, options, help)
         tmdb="The matched TMDB movie or show.",imdb="The IMDb title linked from the TMDB match.",
         tvmaze="The matched TVmaze show.",wikidata="The matched Wikidata film.",musicbrainz="The matched MusicBrainz recording or release.",
         lastfm="The Last.fm track page, built from the recognized artist and title.",stream="The public YouTube or Twitch page.",
-        ["search-youtube"]="A YouTube search for the title, even without a match.",["search-google"]="A Google search for the title, even without a match."}
+        ["search-youtube"]="A YouTube search for the title, even without a match.",["search-google"]="A Google search for the title, even without a match.",
+        ["anilist-profile"]="Your connected AniList profile, for any media. Your account name becomes public on the card. Left off while AniList is not connected.",
+        ["lastfm-profile"]="Your connected Last.fm profile, for any media. Your account name becomes public on the card. Left off while Last.fm is not connected."}
     local layout_sites={all={"anilist","myanimelist","tmdb","imdb","tvmaze","wikidata","lastfm","musicbrainz","stream"},
         anime={"anilist","myanimelist"},movie={"tmdb","imdb","wikidata"},tv={"tmdb","imdb","tvmaze"},
         recording={"lastfm","musicbrainz"},audio={"lastfm"},video={},stream={"stream"}}
@@ -52,6 +55,7 @@ return function(make_sheet, send, options, help)
         local values={"off","provider"}
         for _,site in ipairs(layout_sites[layout] or {}) do values[#values+1]=site end
         values[#values+1]="search-youtube"; values[#values+1]="search-google"
+        values[#values+1]="anilist-profile"; values[#values+1]="lastfm-profile"
         if with_custom then values[#values+1]="custom" end
         return values
     end
@@ -571,7 +575,8 @@ return function(make_sheet, send, options, help)
             end
             choice("Site",button_values(true),slot.site or "off",function(v) store({site=v}) end,nil,button_sites,nil,button_site_help)
             if slot.site~="off" then
-                local default=slot.site and slot.site:match("^search%-") and "Search on {site}" or "View on {site}"
+                local default=slot.site and slot.site:match("^search%-") and "Search on {site}"
+                    or slot.site and slot.site:match("%-profile$") and "My {site}" or "View on {site}"
                 row("Label   "..(slot.label or default),function()
                     edit_text({label="Label",value=slot.label or default,limit=32,extra={"site"},
                         save=function(v) store({label=v~=default and v or ""}) end})

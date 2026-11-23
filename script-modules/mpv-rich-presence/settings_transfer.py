@@ -14,7 +14,9 @@ MAX_BYTES = 8 * 1024 * 1024
 SOURCES = frozenset("auto anime movie-tv movie tv original local tmdb-movie tmdb-tv tvmaze wikidata musicbrainz acoustid stream".split())
 POSITIONS = frozenset(f"{side}-{edge}" for side in ("top", "bottom") for edge in ("left", "center", "right"))
 BUTTON_SITES = frozenset(
-    "off provider custom anilist myanimelist tmdb imdb tvmaze wikidata musicbrainz lastfm stream search-youtube search-google".split())
+    "off provider custom anilist myanimelist tmdb imdb tvmaze wikidata musicbrainz lastfm stream search-youtube search-google"
+    " anilist-profile lastfm-profile".split())
+PROFILE_SITES = {"anilist-profile", "lastfm-profile"}
 LAYOUTS = frozenset(f"{name}_layout" for name in "anime audio video movie tv recording stream".split())
 APPEARANCE = {
     "preset": {"original", "clean", "detailed", "private"},
@@ -156,6 +158,8 @@ def split_fields(category, value, legacy):
         elif key in rules and (item is not None or category=="provider") and supports(rules[key], item) and not (
             (legacy and INTRODUCED.get((category, key), (0, 0)) > legacy)
             or (legacy and legacy < (2, 6) and category == "panel-theme" and key == "preset" and item == "contrast")
+            or (legacy and legacy < (2, 7) and key == "button_slots" and any(
+                {slot.get("site"), slot.get("fallback")} & PROFILE_SITES for slot in item))
             or (legacy == (2, 0) and (category in ("watch-retention", "save-scopes") or
                 (category == "panel-theme" and (key == "method" or (key == "strength" and item > 12)))))
         ):

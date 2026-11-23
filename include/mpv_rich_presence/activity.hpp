@@ -14,6 +14,7 @@ namespace mpvrp
         std::string album, channel, title, track_title, artist, anime_title, english, native, romaji;
         std::string episode_label, episode, raw_episode, group, cover;
         std::string plays, loved; // Last.fm play count and "Loved" for card templates
+        std::string anilist_user, lastfm_user; // Connected account names, used only by profile buttons
         int total = 0, anilist_id = 0, mal_id = 0;
         double position = 0, remaining = 0, playtime_left = 0, speed = 1;
         uint64_t now = 0, pause_start = 0, session_start = 0;

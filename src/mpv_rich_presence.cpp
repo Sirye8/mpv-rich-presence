@@ -642,7 +642,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             else if (key == "button_slots")
             {
                 static const std::set<std::string> sites{"off","provider","custom","anilist","myanimelist","tmdb","imdb",
-                    "tvmaze","wikidata","musicbrainz","lastfm","stream","search-youtube","search-google"};
+                    "tvmaze","wikidata","musicbrainz","lastfm","stream","search-youtube","search-google",
+                    "anilist-profile","lastfm-profile"};
                 if (!val.is_array() || val.size()>2) return false;
                 for (auto& slot : val)
                 {
@@ -1508,6 +1509,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     chrono::steady_clock::time_point next_data_read{}, next_lease_check{};
     nlohmann::json pin_cache = nlohmann::json::object(), auto_cache = nlohmann::json::object(),
         lastfm_track_cache = nlohmann::json::object();
+    std::string anilist_user_cache, lastfm_user_cache;
     // Main event loop
 
     while (true)
@@ -1699,7 +1701,11 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             pin_cache = state.store->get("pin","current");
             auto_cache = state.store->get("auto",state.instance_id);
             lastfm_track_cache = state.lastfm_fields ? state.store->get("lastfm-track", state.instance_id) : nlohmann::json::object();
+            anilist_user_cache = state.store->get("account","current").value("name",std::string{});
+            lastfm_user_cache = state.store->get("lastfm-account","current").value("name",std::string{});
         }
+        media.anilist_user = anilist_user_cache;
+        media.lastfm_user = lastfm_user_cache;
         if (state.store)
         {
             const auto& pin = pin_cache;
