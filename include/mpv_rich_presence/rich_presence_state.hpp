@@ -52,6 +52,7 @@ namespace mpvrp
         bool store_failed = false, hidden_until_exit = false;
         std::string appearance_scope = "configuration", match_scope = "configuration", source_scope = "configuration";
         int store_version = -1;
+        int settings_revision = -1;
         std::string cache_epoch, episode_label, scope_path, hidden_reason, last_sdk = "Waiting";
         bool hard_block = false;
         bool pinned_elsewhere = false, pinned_here = false;

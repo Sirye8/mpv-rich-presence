@@ -194,6 +194,14 @@ int main(int argc, char** argv)
     const auto database = directory / std::filesystem::u8path("日本語.sqlite3");
     {
         profile_store store(database);
+        const int first_revision = store.settings_revision();
+        store.put("watch","1/2/3/0",{{"elapsed",1.0}});
+        store.put("listen","window",{{"credited",1.0}});
+        if (store.settings_revision() != first_revision) return 1;
+        store.put("scrobbling","global",{{"enabled",true}});
+        if (store.settings_revision() != first_revision + 1) return 1;
+        store.clear("scrobbling","global");
+        if (store.settings_revision() != first_revision + 2) return 1;
         store.put("appearance","global",{{"audio_layout",{{"headline","Old"},{"preset","original"}}}});
         store.save("appearance","global",{{"audio_layout",{{"preset","clean"}}}});
         if (store.get("appearance","global").at("audio_layout").contains("headline")) return 1;

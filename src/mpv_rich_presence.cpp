@@ -138,6 +138,7 @@ static void read_profiles(rich_presence_state& state)
     if (state.store)
     {
         state.store_version = state.store->version();
+        state.settings_revision = state.store->settings_revision();
         state.privacy = state.store->effective("privacy", state.scope_path);
         state.hard_block = state.store->blocked(state.scope_path);
         state.appearance = state.store->effective("appearance", state.scope_path, &state.appearance_scope);
@@ -1726,35 +1727,41 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 state.cache_epoch = epoch;
                 clear_anilist_cache();
             }
-            auto old = state.correction;
-            auto old_appearance = state.appearance;
-            auto old_privacy = state.privacy;
-            bool old_block = state.hard_block;
-            auto old_provider = state.provider;
-            auto old_sources = state.sources;
-            auto old_filter = state.folder_filter;
-            bool was_allowed = lookup_allowed(state);
-            read_profiles(state);
-            if (old_filter != state.folder_filter)
+            state.store_version = data_version;
+            // Progress writes from the helper change the database every second. Settings are
+            // read again only when the revision kept by the database triggers moves.
+            if (state.store->settings_revision() != state.settings_revision)
             {
-                state.folder_exception.clear();
-                state.folder_session_exception = false;
-            }
-            if (old_sources != state.sources || old != state.correction)
-            {
-                ++state.file_load_id;
-                std::lock_guard lock(state.anime_mutex);
-                state.is_anime = false;
-                state.anime_anilist_id = 0;
-                state.anime_mal_id = 0;
-                state.episode_review.clear();
-            }
-            if (old_sources != state.sources || old != state.correction ||
-                was_allowed != lookup_allowed(state)) on_eligibility_changed(state);
-            if (old_block != state.hard_block || old_appearance != state.appearance || old_privacy != state.privacy || old != state.correction || old_provider != state.provider || old_sources != state.sources)
-            {
-                state.force_update = true;
-                continue;
+                auto old = state.correction;
+                auto old_appearance = state.appearance;
+                auto old_privacy = state.privacy;
+                bool old_block = state.hard_block;
+                auto old_provider = state.provider;
+                auto old_sources = state.sources;
+                auto old_filter = state.folder_filter;
+                bool was_allowed = lookup_allowed(state);
+                read_profiles(state);
+                if (old_filter != state.folder_filter)
+                {
+                    state.folder_exception.clear();
+                    state.folder_session_exception = false;
+                }
+                if (old_sources != state.sources || old != state.correction)
+                {
+                    ++state.file_load_id;
+                    std::lock_guard lock(state.anime_mutex);
+                    state.is_anime = false;
+                    state.anime_anilist_id = 0;
+                    state.anime_mal_id = 0;
+                    state.episode_review.clear();
+                }
+                if (old_sources != state.sources || old != state.correction ||
+                    was_allowed != lookup_allowed(state)) on_eligibility_changed(state);
+                if (old_block != state.hard_block || old_appearance != state.appearance || old_privacy != state.privacy || old != state.correction || old_provider != state.provider || old_sources != state.sources)
+                {
+                    state.force_update = true;
+                    continue;
+                }
             }
         }
         const bool watch = lookup_allowed(state) && state.tracking.value("mode", std::string("off")) != "off";

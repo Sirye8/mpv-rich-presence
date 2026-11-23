@@ -64,6 +64,21 @@ namespace mpvrp
             const bool initialize = sqlite3_column_int(version.get(), 0) == 0;
             version.reset();
             execute(db, "CREATE TABLE IF NOT EXISTS main.records(category TEXT, scope TEXT, value TEXT NOT NULL, PRIMARY KEY(category,scope))", {});
+            // Every writer bumps the settings revision through these triggers, so windows reload
+            // their settings only when one changes rather than after each progress write.
+            check(db, sqlite3_exec(db,
+                "CREATE TABLE IF NOT EXISTS main.revisions(name TEXT PRIMARY KEY, value INTEGER NOT NULL);"
+                "INSERT OR IGNORE INTO main.revisions VALUES('settings',0);"
+                "CREATE TRIGGER IF NOT EXISTS main.settings_inserted AFTER INSERT ON records "
+                "WHEN new.category IN ('privacy','exclude','appearance','match','provider','recognition-options','sources','tracking','scrobbling','folder-filter','panel') "
+                "BEGIN UPDATE revisions SET value=value+1 WHERE name='settings'; END;"
+                "CREATE TRIGGER IF NOT EXISTS main.settings_updated AFTER UPDATE ON records "
+                "WHEN new.category IN ('privacy','exclude','appearance','match','provider','recognition-options','sources','tracking','scrobbling','folder-filter','panel') OR old.category IN ('privacy','exclude','appearance','match','provider','recognition-options','sources','tracking','scrobbling','folder-filter','panel') "
+                "BEGIN UPDATE revisions SET value=value+1 WHERE name='settings'; END;"
+                "CREATE TRIGGER IF NOT EXISTS main.settings_deleted AFTER DELETE ON records "
+                "WHEN old.category IN ('privacy','exclude','appearance','match','provider','recognition-options','sources','tracking','scrobbling','folder-filter','panel') "
+                "BEGIN UPDATE revisions SET value=value+1 WHERE name='settings'; END;",
+                nullptr, nullptr, nullptr));
             if (migrate && initialize)
             {
                 // Session-only tokens and jobs belong to the old process.
@@ -116,6 +131,12 @@ namespace mpvrp
         auto stmt = prepare(db, "PRAGMA data_version");
         if (sqlite3_step(stmt.get()) != SQLITE_ROW) throw std::runtime_error(sqlite3_errmsg(db));
         return sqlite3_column_int(stmt.get(), 0);
+    }
+
+    int profile_store::settings_revision() const
+    {
+        auto stmt = prepare(db, "SELECT value FROM revisions WHERE name='settings'");
+        return sqlite3_step(stmt.get()) == SQLITE_ROW ? sqlite3_column_int(stmt.get(), 0) : -1;
     }
 
     static constexpr auto saved_records = " FROM records WHERE (category IN "
