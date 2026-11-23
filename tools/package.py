@@ -172,7 +172,7 @@ def package(build, output):
         for chunk in iter(lambda: archive.read(1024 * 1024), b""):
             digest.update(chunk)
     checksum = digest.hexdigest()
-    output.with_suffix(output.suffix + ".sha256").write_text(f"{checksum}  {output.name}\n", encoding="ascii")
+    output.with_suffix(output.suffix + ".sha256").write_text(f"{checksum}  {output.name}\n", encoding="ascii", newline="\n")
 
 
 if __name__ == "__main__":
