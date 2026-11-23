@@ -65,13 +65,18 @@ std::string path_utf8(const fs::path& path)
     return {reinterpret_cast<const char*>(utf8.data()), utf8.size()};
 }
 
+fs::path utf8_path(std::string_view text)
+{
+    return fs::path(std::u8string(text.begin(), text.end()));
+}
+
 std::string normalize_path(const std::string& path_str)
 {
     if (path_str.empty())
         return {};
 
     std::error_code ec;
-    auto input = fs::u8path(path_str);
+    auto input = utf8_path(path_str);
     fs::path p = fs::weakly_canonical(input, ec);
     if (ec)
         p = input.lexically_normal();

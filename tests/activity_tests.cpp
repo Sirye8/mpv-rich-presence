@@ -246,7 +246,7 @@ int main(int argc, char** argv)
 
     const auto directory = std::filesystem::temp_directory_path() /
         ("mpvrp-store-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    const auto database = directory / std::filesystem::u8path("日本語.sqlite3");
+    const auto database = directory / std::filesystem::path(u8"\u65E5\u672C\u8A9E.sqlite3");
     {
         profile_store store(database);
         const int first_revision = store.settings_revision();

@@ -583,12 +583,12 @@ static void on_eligibility_changed(rich_presence_state& state)
             if (needs_lookup)
             {
                 int current_load_id = ++state.file_load_id;
-                std::string filename_str = path_utf8(fs::u8path(state.current_file_path).filename());
+                std::string filename_str = path_utf8(utf8_path(state.current_file_path).filename());
                 {
                     std::lock_guard<std::mutex> lock(state.worker_mutex);
                     state.pending_load_id = current_load_id;
                     state.pending_filename = filename_str;
-                    state.pending_folder = path_utf8(fs::u8path(state.current_file_path).parent_path().filename());
+                    state.pending_folder = path_utf8(utf8_path(state.current_file_path).parent_path().filename());
                     state.pending_duration = 0;
                     mpv_get_property(state.mpv, "duration", MPV_FORMAT_DOUBLE, &state.pending_duration);
                     state.pending_embedded_title = get_mpv_string(state.mpv, "metadata/by-key/title");
@@ -801,8 +801,8 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 if (!state.store)
                 {
                     state.store_failed = true;
-                    auto path = fs::u8path(req.at("database").get<std::string>());
-                    auto legacy = fs::u8path(req.value("legacy_database", std::string{}));
+                    auto path = utf8_path(req.at("database").get<std::string>());
+                    auto legacy = utf8_path(req.value("legacy_database", std::string{}));
                     state.store = std::make_unique<profile_store>(path, legacy);
                     try { state.store->prune_expired(std::time(nullptr)); } catch (...) {}
                     {
@@ -928,7 +928,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                         auto path = item.get<std::string>();
                         if (path.size() == 2 && path.back() == ':') path += '/';
                         if (path.size() > 4096 || path.find('\0') != std::string::npos ||
-                            !fs::u8path(path).is_absolute()) return;
+                            !utf8_path(path).is_absolute()) return;
                         const auto normalized = normalize_path(path);
                         const auto folder = normalized.empty() ? "/" : normalized;
                         if (std::find(folders.begin(), folders.end(), folder) == folders.end()) folders.push_back(folder);
@@ -1010,7 +1010,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 if (scope == "file" && !state.scope_path.empty()) scope = "file:" + state.scope_path;
                 else if (scope == "folder" && !state.scope_path.starts_with("stream-"))
                 {
-                    auto folder = path_utf8(fs::u8path(state.scope_path).parent_path());
+                    auto folder = path_utf8(utf8_path(state.scope_path).parent_path());
                     if (folder.empty()) return;
                     scope = "folder:" + folder;
                 }
@@ -1218,7 +1218,7 @@ static void handle_file_loaded(rich_presence_state& state)
     std::string filename_str = get_mpv_string(state.mpv, "filename");
     if (filename_str.empty() && !state.current_file_path.empty())
     {
-        filename_str = path_utf8(fs::u8path(state.current_file_path).filename());
+        filename_str = path_utf8(utf8_path(state.current_file_path).filename());
     }
 
     // Bump file ID and reset anime state
@@ -1260,7 +1260,7 @@ static void handle_file_loaded(rich_presence_state& state)
         std::lock_guard<std::mutex> lock(state.worker_mutex);
         state.pending_load_id = current_load_id;
         state.pending_filename = filename_str;
-        state.pending_folder = path_utf8(fs::u8path(state.current_file_path).parent_path().filename());
+        state.pending_folder = path_utf8(utf8_path(state.current_file_path).parent_path().filename());
         state.pending_duration = 0;
         mpv_get_property(state.mpv, "duration", MPV_FORMAT_DOUBLE, &state.pending_duration);
         state.pending_embedded_title = get_mpv_string(state.mpv, "metadata/by-key/title");
@@ -1927,7 +1927,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 sample["duration"] = duration_s;
                 if (source == "auto" && media.video && !sample["remote"].get<bool>())
                 {
-                    const auto folder = path_utf8(fs::u8path(state.current_file_path).parent_path().filename());
+                    const auto folder = path_utf8(utf8_path(state.current_file_path).parent_path().filename());
                     if (const auto fallback = video_name_from_folder(sample["filename"].get<std::string>(), folder,
                         duration_s, get_mpv_string(state.mpv, "metadata/by-key/title")))
                     {
@@ -2031,14 +2031,14 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"match_scope",state.match_scope},{"source_scope",state.source_scope},
                 {"has_file", !state.scope_path.empty()},
                 {"has_local_folder", !state.scope_path.empty() && !state.scope_path.starts_with("stream-") &&
-                    !fs::u8path(state.scope_path).parent_path().empty()},
+                    !utf8_path(state.scope_path).parent_path().empty()},
                 {"folder_filter", {
                     {"mode",state.folder_filter.value("mode",state.folder_filter_mode)},
                     {"folders",state.folder_filter.contains("folders") ? state.panel_folders : state.folder_list},
                     {"inherited",state.folder_filter.empty()},
                     {"passes",passes_configured_folders(state)},
                     {"current",state.scope_path.empty() || state.scope_path.starts_with("stream-") ? "" :
-                        path_utf8(fs::u8path(state.scope_path).parent_path())},
+                        path_utf8(utf8_path(state.scope_path).parent_path())},
                     {"exception",state.folder_session_exception ? "window" : folder_exception_active(state) ? "file" : "off"}
                 }},
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},

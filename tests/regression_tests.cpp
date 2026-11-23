@@ -154,6 +154,17 @@ static void test_safe_to_lower()
     TEST_CHECK(!lower_accents.empty());
 }
 
+static void test_utf8_paths()
+{
+    // Japanese, an accent and an emoji must survive a round trip through a path.
+    const std::string text = "Anime/\xE6\x97\xA5\xE6\x9C\xAC/Caf\xC3\xA9 \xF0\x9F\x8E\xB5.mkv";
+    const auto path = utf8_path(text);
+    TEST_CHECK_EQ(path_utf8(path), text);
+    TEST_CHECK_EQ(path_utf8(path.filename()), "Caf\xC3\xA9 \xF0\x9F\x8E\xB5.mkv");
+    TEST_CHECK_EQ(path_utf8(path.parent_path().filename()), "\xE6\x97\xA5\xE6\x9C\xAC");
+    TEST_CHECK(utf8_path("").empty());
+}
+
 static void test_folder_filtering()
 {
     // Empty whitelist blocks everything
@@ -736,6 +747,7 @@ int main(int argc, char* argv[])
 
     run_test("test_utf8_truncation", test_utf8_truncation);
     run_test("test_safe_to_lower", test_safe_to_lower);
+    run_test("test_utf8_paths", test_utf8_paths);
     run_test("test_folder_filtering", test_folder_filtering);
     run_test("test_anilist_page_parsing", test_anilist_page_parsing);
     run_test("test_anilist_sequel_ambiguity", test_anilist_sequel_ambiguity);

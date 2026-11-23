@@ -38,3 +38,5 @@ std::string format_time_duration(double pos_s, double total_s);
 
 bool passes_folder_filter(const std::string& file_path, const std::string& mode, const std::vector<std::string>& folders);
 std::string path_utf8(const std::filesystem::path& path);
+// Builds a path from UTF-8 text. Replaces std::filesystem::u8path, deprecated in C++20.
+std::filesystem::path utf8_path(std::string_view text);
