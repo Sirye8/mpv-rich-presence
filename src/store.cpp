@@ -286,6 +286,14 @@ namespace mpvrp
                         "ORDER BY json_extract(value,'$.expires') DESC LIMIT -1 OFFSET 1024)",{});
     }
 
+    int profile_store::prune_expired(int64_t now)
+    {
+        // Expired lookups are never served, so they only take space.
+        execute(db, "DELETE FROM records WHERE category IN ('cache','flight') "
+                    "AND json_extract(value,'$.expires') < CAST(? AS INTEGER)", {std::to_string(now)});
+        return sqlite3_changes(db);
+    }
+
     void profile_store::clear_catalog()
     {
         execute(db,"DELETE FROM records WHERE category='cache' AND "

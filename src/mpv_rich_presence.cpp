@@ -174,6 +174,16 @@ static std::atomic<uint64_t> cache_generation{0};
 static std::unordered_map<std::string, cache_record<std::vector<anilist_media>>> anilist_page_cache;
 static std::unordered_map<int, cache_record<anilist_media>> anilist_id_cache;
 
+// Long sessions look up many titles, so each in-memory map keeps at most this many entries.
+static constexpr size_t ANILIST_CACHE_LIMIT = 512;
+template<typename Map> static void make_room(Map& map)
+{
+    if (map.size() < ANILIST_CACHE_LIMIT) return;
+    const auto now = chrono::steady_clock::now();
+    std::erase_if(map, [&](const auto& item) { return item.second.expires <= now; });
+    while (map.size() >= ANILIST_CACHE_LIMIT) map.erase(map.begin());
+}
+
 static void clear_anilist_cache()
 {
     std::lock_guard lock(anilist_cache_mutex);
@@ -293,7 +303,11 @@ static std::vector<anilist_media> search_anilist_page(const std::string& search,
                 auto now = chrono::steady_clock::now();
                 const auto ttl = hours>0 ? chrono::hours(hours) : 24h;
                 for (const auto& item : results)
+                {
+                    make_room(anilist_id_cache);
                     anilist_id_cache[item.id] = {item, now + ttl};
+                }
+                make_room(anilist_page_cache);
                 anilist_page_cache[search] = {results, now + (results.empty() ? 5min : ttl)};
                 save_catalog(cache,key,j,results.empty() ? 300 : hours*3600,epoch);
                 for (const auto& media : j.at("data").at("Page").at("media"))
@@ -359,6 +373,7 @@ static std::optional<anilist_media> fetch_anilist_by_id(int id, profile_store* c
                 {
                     std::lock_guard<std::mutex> lock(anilist_cache_mutex);
                     if (generation != cache_generation.load()) return {};
+                    make_room(anilist_id_cache);
                     anilist_id_cache[result->id] = {*result,chrono::steady_clock::now()+(hours>0 ? chrono::hours(hours) : 24h)};
                     save_catalog(cache,key,j["data"]["Media"],hours*3600,epoch);
                 }
@@ -755,6 +770,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     auto path = fs::u8path(req.at("database").get<std::string>());
                     auto legacy = fs::u8path(req.value("legacy_database", std::string{}));
                     state.store = std::make_unique<profile_store>(path, legacy);
+                    try { state.store->prune_expired(std::time(nullptr)); } catch (...) {}
                     {
                         std::lock_guard lock(state.worker_mutex);
                         state.database_path = path;

@@ -218,7 +218,10 @@ int main(int argc, char** argv)
         store.put("account","current",{{"persistent",false},{"id",7}});
         store.put("watch","7/18/2/0",{{"elapsed",73.0}});
         store.put("watch","8/18/2/0",{{"elapsed",12.0}});
+        store.put("cache","v3:auto:old/hash",{{"expires",10}});
+        store.put("flight","v3:auto:old/hash",{{"expires",10}});
         store.put("cache","v3:auto:wikidata/hash",{{"expires",1000}});
+        if (store.prune_expired(500) != 2 || store.get("cache","v3:auto:wikidata/hash").empty()) return 1;
         const auto counts = store.record_counts();
         if (counts.value("watch",0) != 1 || counts.value("cache",0) != 1) return 1;
         const auto caches = store.records("cache");

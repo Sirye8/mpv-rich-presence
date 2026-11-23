@@ -29,6 +29,7 @@ namespace mpvrp
         void put_catalog(const std::string& key, const nlohmann::json& value, int64_t expires,
                          const nlohmann::json& epoch);
         void clear_catalog();
+        int prune_expired(int64_t now);
         nlohmann::json record_counts() const;
         nlohmann::json records(const std::string& category) const;
         nlohmann::json pending() const;
