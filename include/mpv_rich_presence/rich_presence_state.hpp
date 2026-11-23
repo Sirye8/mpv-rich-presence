@@ -53,6 +53,10 @@ namespace mpvrp
         std::string appearance_scope = "configuration", match_scope = "configuration", source_scope = "configuration";
         int store_version = -1;
         int settings_revision = -1;
+        std::string privacy_scope = "configuration";
+        // The last saved-data error in the main loop; passes retry until one succeeds.
+        std::string store_error;
+        std::chrono::steady_clock::time_point store_error_time{};
         std::string cache_epoch, episode_label, scope_path, hidden_reason, last_sdk = "Waiting";
         bool hard_block = false;
         bool pinned_elsewhere = false, pinned_here = false;

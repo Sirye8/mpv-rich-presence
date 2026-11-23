@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import threading
 import time
+import urllib.error
 
 # mpv starts Python in isolated mode. Load siblings only from this installation.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -60,6 +61,52 @@ def tv_rule_matches(rule, titles, year, provider_id, provider):
     if year and rule.get("year") and str(rule["year"]) != str(year):
         return False
     return all(title in rule["titles"] for title in titles) if titles else rule.get("dedicated", False)
+
+
+JOB_LABELS = {
+    "read": "Reading your AniList entry",
+    "write": "Updating AniList",
+    "accept": "Updating AniList",
+    "skip": "Skipping the update",
+    "rearm": "Starting a new viewing cycle",
+    "connect": "Connecting AniList",
+    "disconnect": "Disconnecting AniList",
+    "reset": "Resetting saved data",
+    "reset-watch": "Clearing watch data",
+    "clear": "Clearing saved records",
+    "search": "Searching",
+    "select": "Saving the match",
+    "export-settings": "Exporting settings",
+    "import-settings": "Importing settings",
+    "lastfm-connect": "Connecting Last.fm",
+    "lastfm-disconnect": "Disconnecting Last.fm",
+    "lastfm-love": "Loving the track on Last.fm",
+    "lastfm-unlove": "Removing the love on Last.fm",
+    "lastfm-send": "Sending queued scrobbles",
+}
+
+
+def failure_message(job, exc):
+    """Say which action failed and what to try, without internal error text."""
+    action = JOB_LABELS.get((job or {}).get("op"), "The request")
+    if isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower():
+        advice = "Saved data is busy in another mpv window. Try again in a moment."
+    elif isinstance(exc, urllib.error.HTTPError):
+        if exc.code in (401, 403):
+            advice = "The service refused the sign-in. Reconnect the account and try again."
+        elif exc.code == 429:
+            advice = "The service is limiting requests. Try again in a minute."
+        elif exc.code >= 500:
+            advice = "The service is having problems. Try again later."
+        else:
+            advice = f"The service answered with error {exc.code}."
+    elif isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
+        advice = "The service could not be reached. Check the internet connection and try again."
+    elif isinstance(exc, (OSError, sqlite3.Error)):
+        advice = "Saved data could not be read or written. Check free disk space and try again."
+    else:
+        advice = "Try again. If it keeps failing, check Diagnostics."
+    return f"{action} failed. {advice}"
 
 
 @contextlib.contextmanager
@@ -2374,11 +2421,9 @@ class Worker:
                     ).get("generation"):
                         continue
                 self.reply(message=str(exc), offline=True)
-            except Exception:
+            except Exception as exc:
                 if not job or not job.get("quiet"):
-                    self.reply(
-                        message="Operation failed. Check the connection and settings."
-                    )
+                    self.reply(message=failure_message(job, exc))
             time.sleep(0.25)
 
     def background_lookup(self,p,attempts,epochs):

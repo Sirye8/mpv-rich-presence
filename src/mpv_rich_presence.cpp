@@ -121,6 +121,39 @@ static bool local_permission(const rich_presence_state& state)
         && (folder_exception_active(state) || passes_configured_folders(state));
 }
 
+static std::string rule_scope(const std::string& scope)
+{
+    return scope == "file override" ? "this file" : scope == "folder profile" ? "this folder" :
+        scope == "global" ? "all files" : "the configuration";
+}
+
+// Names the rule that decides whether this window shares, in the order the checks apply.
+static std::string discord_status(const rich_presence_state& state, bool active, bool ready)
+{
+    if (!state.config_received) return "Waiting for configuration";
+    if (state.store_failed) return "Saved data unavailable";
+    if (!state.store_error.empty() && chrono::steady_clock::now() - state.store_error_time < 5s)
+        return "Saved data busy · retrying";
+    if (state.private_session) return "Private session";
+    if (!state.is_enabled.value_or(false)) return "Sharing off";
+    if (!state.application_id) return "Set a Discord application ID";
+    if (!state.scope_path.empty() && !folder_exception_active(state) && !passes_configured_folders(state))
+        return "Blocked by folder filter";
+    if (state.hard_block) return "Blocked by an exclusion";
+    if (state.privacy.value("block_lookup", false)) return "Blocked by privacy for " + rule_scope(state.privacy_scope);
+    if (!local_permission(state)) return "No eligible media";
+    if (state.hidden_file) return "Hidden for this file";
+    if (state.hidden_until_exit) return "Hidden until this window closes";
+    if (const auto left = state.hide_until - chrono::steady_clock::now(); left > 0s)
+        return std::format("Hidden for {} more min", chrono::duration_cast<chrono::minutes>(left + 59s).count());
+    if (state.privacy.value("mode", std::string("full")) == "hidden") return "Hidden by privacy for " + rule_scope(state.privacy_scope);
+    if (state.pinned_elsewhere) return "Another window is pinned";
+    if (!active) return "Another window owns Discord";
+    if (state.rpc_hidden_by_timeout) return "Pause timeout";
+    if (!ready) return "Waiting for Discord SDK";
+    return "Sharing";
+}
+
 static bool is_window_eligible(const rich_presence_state& state)
 {
     return local_permission(state) && state.is_enabled.value_or(false) && state.application_id && !sharing_hidden(state) && !state.pinned_elsewhere;
@@ -139,7 +172,7 @@ static void read_profiles(rich_presence_state& state)
     {
         state.store_version = state.store->version();
         state.settings_revision = state.store->settings_revision();
-        state.privacy = state.store->effective("privacy", state.scope_path);
+        state.privacy = state.store->effective("privacy", state.scope_path, &state.privacy_scope);
         state.hard_block = state.store->blocked(state.scope_path);
         state.appearance = state.store->effective("appearance", state.scope_path, &state.appearance_scope);
         state.correction = state.store->effective("match", state.scope_path, &state.match_scope);
@@ -1475,6 +1508,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
 
     while (true)
     {
+        // A locked or failing database ends only this pass. The next pass retries.
+        try
+        {
         const auto wait = state.publish_pending ? 20ms : SLEEP_DURATION;
         auto* event = mpv_wait_event(state.mpv, wait.count() * 1e-3);
         bool should_shutdown = false;
@@ -2027,13 +2063,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"record_counts",state.store && (state.panel_page.starts_with("Saved ") || !state.panel_records.empty()) ?
                     state.store->record_counts() : nlohmann::json::object()},
                 {"records",state.store && !state.panel_records.empty() ? state.store->records(state.panel_records) : nlohmann::json::array()},
-                {"reason", !state.config_received ? "Waiting for configuration" : state.store_failed ? "Saved data unavailable" :
-                    state.private_session ? "Private session" : !state.is_enabled.value_or(false) ? "Sharing off" :
-                    !state.application_id ? "Set a Discord application ID" :
-                    !state.scope_path.empty() && !folder_exception_active(state) && !passes_configured_folders(state) ? "Blocked by folder filter" :
-                    !local_permission(state) ? "No eligible media" :
-                    sharing_hidden(state) ? "Hidden" : state.pinned_elsewhere ? "Another window is pinned" : !currently_active ? "Another window owns Discord" :
-                    state.rpc_hidden_by_timeout ? "Pause timeout" : !is_ready ? "Waiting for Discord SDK" : "Sharing"},
+                {"reason", discord_status(state, currently_active, is_ready)},
                 {"card", format_activity(media, draft)}, {"nonce", state.snapshot_request}
             }.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
             const char* args[] = {"script-message-to", "mpv_rich_presence", "snapshot", snapshot.c_str(), nullptr};
@@ -2159,6 +2189,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         auto context = new presence_request{state,++state.publish_generation};
         publish_activity(state, card, on_discord_update_rich_presence, context,
             [](void* data) { delete static_cast<presence_request*>(data); });
+        state.store_error.clear();
+        }
+        catch (const std::exception& e)
+        {
+            if (state.store_error != e.what())
+                mpv_print(state.mpv, std::format("Retrying after an error: {}", e.what()));
+            state.store_error = e.what();
+            state.store_error_time = chrono::steady_clock::now();
+        }
     }
 
     // Shut down gracefully

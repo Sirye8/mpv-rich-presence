@@ -25,7 +25,7 @@ from account import (
     read_entry,
     save_progress,
 )
-from backend import Worker
+from backend import Worker, failure_message
 from providers import candidate_by_id, details, fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
 from settings_transfer import export_settings, import_settings
 
@@ -1795,6 +1795,20 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual(self.worker.get("response", "other"), {"search": {"id": "search"}})
         self.assertFalse(self.worker.get("job", "stale"))
         self.assertEqual(self.worker.get("job", "keep")["op"], "export-settings")
+
+
+
+class FailureMessageTests(unittest.TestCase):
+    def test_messages_name_the_action_and_the_fix(self):
+        import urllib.error
+        busy = failure_message({"op": "write"}, sqlite3.OperationalError("database is locked"))
+        self.assertEqual(busy, "Updating AniList failed. Saved data is busy in another mpv window. Try again in a moment.")
+        offline = failure_message({"op": "lastfm-send"}, urllib.error.URLError("offline"))
+        self.assertTrue(offline.startswith("Sending queued scrobbles failed. The service could not be reached."))
+        limited = failure_message({"op": "search"}, urllib.error.HTTPError("u", 429, "", {}, None))
+        self.assertIn("limiting requests", limited)
+        self.assertEqual(failure_message(None, ValueError("x")),
+                         "The request failed. Try again. If it keeps failing, check Diagnostics.")
 
 
 if __name__ == "__main__":
