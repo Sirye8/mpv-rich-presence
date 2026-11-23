@@ -8,6 +8,8 @@
 using namespace mpvrp;
 using nlohmann::json;
 
+static const discord_api_importer* mpvrp_test_api = nullptr;
+
 int main(int argc, char** argv)
 {
     if (argc != 3) return 1;
@@ -55,6 +57,39 @@ int main(int argc, char** argv)
                 if (draft != card) return 1;
             }
         }
+    }
+    {
+        // Publish results come later from RunCallbacks, in order, and free their data once.
+        auto& set_next_result = sdk.get<void(bool,int32_t)>("set_next_result");
+        auto& pending_callbacks = sdk.get<int()>("pending_callbacks");
+        struct outcome { int order; bool success; int32_t code; int freed = 0; };
+        static std::vector<outcome*> delivered;
+        delivered.clear();
+        auto callback = [](Discord_ClientResult* result, void* data) {
+            auto* item = static_cast<outcome*>(data);
+            item->success = mpvrp_test_api->Discord_ClientResult_Successful(result);
+            item->code = item->success ? 0 : mpvrp_test_api->Discord_ClientResult_ErrorCode(result);
+            delivered.push_back(item);
+        };
+        auto release = [](void* data) { ++static_cast<outcome*>(data)->freed; };
+        mpvrp_test_api = state.discord_api.get();
+        playback m;
+        m.title = "Film";
+        const auto card = format_activity(m, json::object());
+        outcome first{1}, second{2};
+        publish_activity(state, card, callback, &first, release);
+        publish_activity(state, card, callback, &second, release);
+        if (!delivered.empty() || pending_callbacks() != 2) return 1;
+        set_next_result(false, 4000);
+        state.discord_api->Discord_RunCallbacks();
+        if (delivered.size() != 2 || delivered[0] != &first || delivered[1] != &second) return 1;
+        if (first.success || first.code != 4000 || first.freed != 1 || second.freed != 1) return 1;
+        set_next_result(true, 0);
+        outcome third{3};
+        publish_activity(state, card, callback, &third, release);
+        state.discord_api->Discord_RunCallbacks();
+        if (!third.success || third.freed != 1 || pending_callbacks() != 0) return 1;
+        take_calls();
     }
     playback music;
     music.video=false;
