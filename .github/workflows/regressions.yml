@@ -12,7 +12,7 @@ jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install JSON headers
         run: sudo apt-get update && sudo apt-get install -y g++-14 nlohmann-json3-dev
       - name: Build native regression tests
@@ -59,10 +59,10 @@ jobs:
       SDK_ARCHIVE_SHA256: ${{ vars.DISCORD_SDK_ARCHIVE_SHA256 }}
       VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-cache
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Find the vcpkg commit
@@ -70,7 +70,7 @@ jobs:
         shell: bash
         run: echo "commit=$(git rev-parse HEAD:thirdparty/vcpkg)" >> "$GITHUB_OUTPUT"
       - name: Restore built vcpkg packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vcpkg-cache
           key: vcpkg-${{ matrix.triplet }}-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('vcpkg.json') }}
