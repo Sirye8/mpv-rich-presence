@@ -1396,7 +1396,6 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     mpv_observe_property(state.mpv, 0, "seeking", MPV_FORMAT_FLAG);
     mpv_observe_property(state.mpv, 0, "speed", MPV_FORMAT_DOUBLE);
     mpv_observe_property(state.mpv, 0, "paused-for-cache", MPV_FORMAT_FLAG);
-    mpv_observe_property(state.mpv, 0, "playtime-remaining", MPV_FORMAT_DOUBLE);
 
     auto hide_rich_presence = [&]() {
         const bool was_wanted = std::exchange(state.presence_wanted,false);
