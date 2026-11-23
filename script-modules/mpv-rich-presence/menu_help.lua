@@ -31,6 +31,21 @@ local help = {
     ["Artwork & badge"]="Choose the large image, the small badge and their hover text.",
     ["Timer & pause"]="Choose the timer style and what the card does while playback is paused.",
     Links="Attach public links to the artwork and the two text lines.",
+    ["Last.fm"]="Connect Last.fm, see the current scrobble and choose when plays are sent.",
+    ["Connect Last.fm"]="Open Last.fm in your browser to approve mpv-rich-presence. The session is kept in the operating system's credential store.",
+    ["Connect Last.fm for this session"]="Connect without saving the session. It ends when mpv closes.",
+    ["Cancel Last.fm sign-in"]="Stop waiting for approval in the browser. A connected account stays connected.",
+    ["Disconnect Last.fm"]="Remove the Last.fm session from this device. Queued scrobbles can be kept for a later connection or cleared.",
+    ["Disconnect and keep queue"]="Remove the session but keep queued scrobbles. They are sent after you connect the same account again.",
+    ["Disconnect and clear queue"]="Remove the session and the queued and recent scrobbles on this device.",
+    ["Love on Last.fm"]="Mark or unmark the current track as loved on your Last.fm profile.",
+    ["Queued scrobbles"]="Plays waiting to reach Last.fm, for example while offline. Select to send them now. They keep their original time.",
+    ["Recent scrobbles"]="The last 20 plays this device scrobbled and whether Last.fm accepted them.",
+    Scrobbling="Send plays from this scope to Last.fm. Music recognition still uses MusicBrainz and AcoustID. Private sessions and excluded folders never scrobble.",
+    ["Scrobble point"]="How much of a track must be heard before it counts. Tracks of 30 seconds or less are never scrobbled.",
+    ["Now Playing updates"]="Show the current track on your Last.fm profile while it plays.",
+    ["Scrobble while hidden"]="Keep scrobbling when Discord sharing is hidden or turned off. Private sessions and excluded folders still block it.",
+    ["Scrobble music videos"]="Also scrobble videos whose tags name an artist and title, such as music videos and concerts.",
     ["Panel look"]="Move the panel and change its colors, opacity and blur. These apply immediately across mpv windows and do not change Discord cards.",
     ["Apply and leave"]="Save the card edits to the selected Save for scope, then continue.",
     ["Discard changes"]="Drop the unsaved card edits and continue. Saved appearance settings stay as they are.",
@@ -275,6 +290,10 @@ local choices = {
 }
 
 local read_only = {
+    ["Last.fm"]={Account="The connected Last.fm account.",["Now listening"]="The artist and title that Last.fm receives for this file.",
+        ["Scrobble progress"]="Real listening time toward the scrobble point. Pauses, buffering and seeks add no time.",
+        ["Last problem"]="The most recent error from Last.fm. Queued scrobbles are retried automatically."},
+    ["Recent scrobbles"]={["No scrobbles yet"]="Scrobbles appear here once a track reaches its scrobble point."},
     ["Privacy & windows"]={["Hidden until"]="When this window's Discord hide ends."},
     ["Unapplied changes"]={["Unapplied summary"]="Card edits stay in the preview until you apply them."},
     ["Edit text"]={Check="Shows placeholders this media layout cannot fill. Fix them before keeping the text.",
@@ -343,6 +362,7 @@ return function(label, page, action, values, current, key)
         elseif page:match("^Saved") then description=key=="Scope" and "Where this saved rule applies." or help[key]
         elseif page=="Card preview" and key:match("^Public button %d+$") then description=fields["Public button"]
         elseif page=="Pending updates" and key:match("^Proposal ") then description=fields.Proposal
+        elseif page=="Recent scrobbles" and key:match("^Recent scrobble ") then description="A play this device scrobbled, with its time and whether Last.fm accepted it."
         elseif page=="Diagnostics" then description=help[key]
         elseif page=="Confirm" then description="Review the proposed action before you confirm."
         elseif page=="Providers" then description=description or "Provider attribution or setup information." end

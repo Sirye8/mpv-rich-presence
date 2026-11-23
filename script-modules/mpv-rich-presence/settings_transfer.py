@@ -40,7 +40,9 @@ APPEARANCE = {
     ),
 }
 # Settings added after v2.0.0, with the first release that reads them.
-INTRODUCED = {("appearance", key): (2, 3) for key in
+INTRODUCED = {**{("scrobbling", key): (2, 4) for key in ("enabled", "now_playing", "while_hidden", "videos", "threshold")},
+              ("save-scopes", "Last.fm"): (2, 4)}
+INTRODUCED |= {("appearance", key): (2, 3) for key in
               "button_slots large_image small_image large_image_url large_text_template small_text_template while_paused pause_timeout".split()}
 
 
@@ -55,6 +57,8 @@ def strings(value):
 FIELDS = {
     "appearance": APPEARANCE,
     "exclude": {"blocked": bool},
+    "scrobbling": {**dict.fromkeys(("enabled", "now_playing", "while_hidden", "videos"), bool),
+                   "threshold": lambda value: type(value) is int and (value == 0 or 10 <= value <= 100)},
     "privacy": {"mode": {"full", "hidden", "generic"}, "block_lookup": bool},
     "sources": {"source": SOURCES},
     "tracking": {
@@ -77,7 +81,7 @@ FIELDS = {
               "episode": integer(1, 9999), "not_anime": bool},
     "watch-retention": {"months": integer(0, 120)},
     "save-scopes": {page: {"global", "folder", "file"} for page in
-                    ("Appearance", "Recognition & folders", "Privacy & windows", "AniList")},
+                    ("Appearance", "Recognition & folders", "Privacy & windows", "AniList", "Last.fm")},
 }
 GLOBAL_ONLY = {"panel", "panel-theme", "folder-filter", "recognition-options", "watch-retention", "save-scopes"}
 PIN_FIELDS = {
@@ -91,7 +95,7 @@ PIN_FIELDS = {
 }
 TV_FIELDS = {"provider": {"tmdb-tv", "tvmaze"}, "hit": dict, "year": str, "dedicated": bool, "titles": strings}
 CATEGORIES = frozenset(FIELDS) | {"provider", "tv-rule"}
-PRIVATE_CATEGORIES = frozenset("account watch cycle history pending skipped entry cache rate job player auto response pin write-intent flight generation watch-completed watch-sweep watch-finished watch-eof cancel refresh search-request signin-request signin-cancel".split())
+PRIVATE_CATEGORIES = frozenset("account watch cycle history pending skipped entry cache rate job player auto response pin write-intent flight generation watch-completed watch-sweep watch-finished watch-eof cancel refresh search-request signin-request signin-cancel listen lastfm-account lastfm-queue lastfm-history lastfm-status lastfm-track lastfm-cancel".split())
 
 
 def data_path(path):

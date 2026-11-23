@@ -33,6 +33,8 @@ jobs:
           python3 -B tests/recognition_suite.py "$RUNNER_TEMP/recognition-replay"
       - name: Run account and multi-process tracking tests
         run: python3 -B tests/account_tests.py
+      - name: Run Last.fm scrobbling tests
+        run: python3 -B tests/lastfm_tests.py
       - name: Test the public AniList handoff
         run: node --test tests/cloudflare.test.mjs
       - name: Exercise the Lua panel in mpv

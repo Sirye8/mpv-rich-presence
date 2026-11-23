@@ -12,6 +12,7 @@ Press **Alt+p** to open the panel. Use the mouse or the arrow keys, Enter and Es
 | --- | --- |
 | Now playing | Preview the Discord card, correct a match or choose which window shares. |
 | AniList | Connect an account, see watch time and review or edit progress. |
+| Last.fm | Connect an account, scrobble music, love tracks and review queued plays. |
 | Appearance | Preview presets and edit card text, artwork, links and timers. |
 | Recognition & folders | Pick a provider, pin a match or adjust episode numbering. |
 | Privacy & windows | Hide a file or folder, start a private session or pin a window. |
@@ -27,6 +28,7 @@ Click a setting with a dropdown arrow to open its choices over the current page.
 ### Sharing and privacy
 
 - Anime cards can show the episode, release group, cover art and AniList link. Movie and TV cards use the matched title and available artwork. Music uses a Listening activity and links to Last.fm.
+- Scrobble music to Last.fm with **Last.fm → Scrobbling**. Recognition still uses MusicBrainz, and plays made offline are sent later. See [Scrobble to Last.fm](docs/user-guide.md#scrobble-to-lastfm).
 - Choose up to two card buttons for each media type in **Appearance → Buttons**, with a fallback site and your own label or link.
 - Paused presence hides after 30 minutes by default. Folder exclusions and private sessions also block metadata lookups and tracking.
 - **Track while hidden** can keep AniList tracking active while Discord sharing is off. See [privacy and saved data](docs/user-guide.md#manage-privacy-and-saved-data).

@@ -237,6 +237,7 @@ if(mpv-rich-presence_BUILD_TESTS)
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(NAME account-and-tracking COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/account_tests.py")
+        add_test(NAME lastfm-scrobbling COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/lastfm_tests.py")
     endif()
 
     add_executable(recognition-replay tests/recognition_replay.cpp

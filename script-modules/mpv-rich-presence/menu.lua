@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 return function(make_sheet, send, options, help)
-    local sections={"Now playing","AniList","Appearance","Recognition & folders","Privacy & windows","Saved data","Diagnostics"}
+    local sections={"Now playing","AniList","Last.fm","Appearance","Recognition & folders","Privacy & windows","Saved data","Diagnostics"}
     local sources={
         {"auto","Automatic"},{"anime","Anime"},{"movie-tv","Movies & TV"},{"movie","Movies"},{"tv","TV"},
         {"original","Original"},{"local","Local only"},{"tmdb-movie","TMDB movies"},{"tmdb-tv","TMDB TV"},{"tvmaze","TVmaze"},
@@ -77,14 +77,15 @@ return function(make_sheet, send, options, help)
         return opts
     end
     -- Placeholders that the card can fill for each media layout (see format_activity in activity.cpp).
-    local layout_fields={all={"title","artist","album","episode","original","group","channel","year","details","state"},
-        anime={"title","episode","original","group","details","state"},audio={"title","artist","album","details","state"},
-        recording={"title","artist","album","year","details","state"},video={"title","details","state"},
+    local layout_fields={all={"title","artist","album","episode","original","group","channel","year","plays","loved","details","state"},
+        anime={"title","episode","original","group","details","state"},audio={"title","artist","album","plays","loved","details","state"},
+        recording={"title","artist","album","year","plays","loved","details","state"},video={"title","details","state"},
         movie={"title","year","details","state"},tv={"title","year","details","state"},stream={"title","channel","details","state"}}
     local field_help={title="Title of the anime, film, show, song or stream.",artist="Track artist.",album="Album or release.",
         episode="Episode number used for AniList.",original="Episode number from the filename.",group="Release group.",
         channel="Stream channel.",year="Release year.",details="The card's first text line before templates.",
-        state="The card's second text line before templates.",status="Playback status, such as Playing or Paused (01:23).",site="Name of the site the button links to."}
+        state="The card's second text line before templates.",status="Playback status, such as Playing or Paused (01:23).",
+        plays="Your Last.fm play count for this track. Needs a connected Last.fm account.",loved="Shows Loved when you loved this track on Last.fm.",site="Name of the site the button links to."}
     -- Pages that edit or show the Appearance draft, so the preview includes unapplied changes.
     local draft_pages={Appearance=true,["Card preview"]=true,["Card buttons"]=true,["Button 1"]=true,["Button 2"]=true,
         ["Edit text"]=true,["Card text"]=true,["Artwork & badge"]=true,["Timer & pause"]=true,["Card links"]=true}
@@ -132,10 +133,11 @@ return function(make_sheet, send, options, help)
     local last_read
     local record
     local saved_groups={
-        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","panel","panel-theme","folder-filter","recognition-options","save-scopes","watch-retention"}},
+        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","scrobbling","panel","panel-theme","folder-filter","recognition-options","save-scopes","watch-retention"}},
         {"Saved matches",{"match","provider","tv-rule"}},
         {"Saved caches",{"cache"}},
         {"Saved AniList data",{"watch","pending","skipped","history","entry"}},
+        {"Saved Last.fm data",{"lastfm-queue","lastfm-history"}},
     }
     local saved_categories={
         appearance={"Appearance profiles","Card appearance saved for all files, a folder, or a file. Removing a profile restores the inherited layout."},
@@ -157,6 +159,9 @@ return function(make_sheet, send, options, help)
         pending={"Pending proposals","Eligible episode updates waiting for review. Clearing these removes local proposals."},
         skipped={"Skipped episodes","Local decisions to skip an episode's update. Clearing a skip lets the episode qualify again."},
         history={"Completed updates","Local records of progress already accounted for. Your remote AniList progress is stored separately."},
+        scrobbling={"Scrobbling preferences","Last.fm scrobbling choices saved for all files, a folder or a file."},
+        ["lastfm-queue"]={"Queued scrobbles","Scrobbles waiting to reach Last.fm, for example while offline. Clearing them means those plays are never sent."},
+        ["lastfm-history"]={"Recent scrobbles","The local list of the last 20 scrobbles and their status. Your Last.fm profile is not changed."},
         entry={"Cached list entries","The last local copy of AniList progress and status. The player refreshes it from AniList when needed."},
     }
     local function category_for(page)
@@ -432,6 +437,14 @@ return function(make_sheet, send, options, help)
                     end)
                 end)
             end
+            local lastfm_state=snap.lastfm or {}
+            local listening=(lastfm_state.listen or {}).track
+            if (lastfm_state.account or {}).name and listening and ((lastfm_state.listen or {}).identity or {})[1]==snap.session then
+                local loved=(lastfm_state.track or {}).loved
+                row(loved and "Remove love on Last.fm" or "Love on Last.fm",function()
+                    service(loved and "lastfm-unlove" or "lastfm-love"); refresh()
+                end,false,nil,"Love on Last.fm")
+            end
             row(snap.hidden_file and "Share this file" or "Hide this file",function() request("hide_file"); refresh() end)
             row("Use this window for Discord",function() request("claim"); refresh() end)
             if snap.match and snap.match>0 then row(valid_entry and ("AniList progress   "..entry.progress) or "View AniList progress",function() pick("AniList") end) end
@@ -572,6 +585,79 @@ return function(make_sheet, send, options, help)
                 ui.back(true); if leave then leave() end; refresh()
             end)
             row("Keep editing",function() unapplied=nil; ui.back(true) end)
+        elseif page=="Last.fm" then
+            local lastfm_state=snap.lastfm or {}
+            local profile=lastfm_state.account or {}
+            if profile.name then
+                link("Account",profile.url or ("https://www.last.fm/user/"..profile.name),"Open the connected Last.fm profile.",profile.name)
+                if profile.avatar and profile.avatar~="" then list[#list].avatar=profile.avatar end
+                local item=row("Connection   "..(profile.expired and "Needs reconnecting" or profile.persistent and "Saved on this device" or "This session only"))
+                item.tip="Read only. Saved connections use the operating system's credential store. Session-only connections end when mpv closes."
+            else
+                row("Account   Not connected")
+            end
+            if answer.lastfm_signin then
+                row("Cancel browser sign-in",function() request("lastfm_cancel"); refresh() end,false,nil,"Cancel Last.fm sign-in")
+                link("Approval page",answer.lastfm_signin,"Approve mpv-rich-presence on Last.fm if the browser did not open.","Open again")
+            else
+                row(profile.name and (profile.expired and "Reconnect Last.fm" or "Switch Last.fm account") or "Connect Last.fm",
+                    function() service("lastfm-connect") end,not profile.name,nil,"Connect Last.fm")
+                if not profile.name then
+                    row("Connect for this session",function() service("lastfm-connect",{session_only=true}) end,false,nil,"Connect Last.fm for this session")
+                end
+            end
+            if profile.name then row("Disconnect",function() ui.push("Disconnect Last.fm") end,false,nil,"Disconnect Last.fm") end
+            local listen=lastfm_state.listen or {}
+            if listen.track and (listen.identity or {})[1]==snap.session then
+                row("Now listening   "..listen.track.artist.." – "..listen.track.track,nil,false,nil,"Now listening")
+                local progress=listen.scrobbled and "Scrobbled" or listen.point and
+                    (duration(listen.credited or 0).." of "..duration(listen.point)) or "Too short to scrobble"
+                row("Scrobble progress   "..progress,nil,false,nil,"Scrobble progress")
+                if profile.name then
+                    local loved=(lastfm_state.track or {}).loved
+                    row(loved and "Remove love on Last.fm" or "Love on Last.fm",function()
+                        service(loved and "lastfm-unlove" or "lastfm-love"); refresh()
+                    end,false,nil,"Love on Last.fm")
+                end
+            else
+                row("Now listening   "..(snap.scrobble_allowed and "Waiting for an artist and title" or "Scrobbling is off here"),nil,false,nil,"Now listening")
+            end
+            local queued=tonumber(lastfm_state.queued) or 0
+            row("Queued scrobbles   "..queued,profile.name and queued>0 and function() service("lastfm-send"); refresh() end or nil,
+                false,nil,"Queued scrobbles")
+            local status=lastfm_state.status or {}
+            if status.error then row("Last problem   "..status.error,nil,false,nil,"Last problem") end
+            row("Recent scrobbles",function() ui.push("Recent scrobbles") end)
+            scope_row()
+            local settings=snap.scrobbling or {}
+            switch("Scrobbling",settings.enabled==true,function() apply("scrobbling",{enabled=not settings.enabled}) end)
+            choice("Scrobble point",{"0","25","50","75","90"},tostring(settings.threshold or 0),function(v)
+                apply("scrobbling",{threshold=tonumber(v)})
+            end,nil,{["0"]="Last.fm default",["25"]="25% of the track",["50"]="Half the track",["75"]="75% of the track",["90"]="90% of the track"},nil,
+                {["0"]="Half the track or four minutes, whichever comes first, as Last.fm recommends.",
+                ["25"]="Count a play after a quarter of the track.",["50"]="Count a play after half of the track, however long it is.",
+                ["75"]="Count a play after three quarters of the track.",["90"]="Count a play only when nearly the whole track was heard."})
+            switch("Now Playing updates",settings.now_playing~=false,function() apply("scrobbling",{now_playing=settings.now_playing==false}) end)
+            switch("Scrobble while hidden",settings.while_hidden==true,function() apply("scrobbling",{while_hidden=not settings.while_hidden}) end)
+            switch("Scrobble music videos",settings.videos==true,function() apply("scrobbling",{videos=not settings.videos}) end)
+        elseif page=="Recent scrobbles" then
+            local tracks=((snap.lastfm or {}).history or {}).tracks or {}
+            if #tracks==0 then row("No scrobbles yet",nil,false,nil,"No scrobbles yet") end
+            for i,track in ipairs(tracks) do
+                row(os.date("%d %b %H:%M",math.floor(track.timestamp)).."   "..track.artist.." – "..track.track.." · "..track.status,
+                    nil,false,nil,"Recent scrobble "..i)
+            end
+        elseif page=="Disconnect Last.fm" then
+            local name=((snap.lastfm or {}).account or {}).name or "Last.fm"
+            row("Disconnect "..name.." and keep queued scrobbles",function()
+                service("lastfm-disconnect"); ui.back(); refresh()
+            end,false,nil,"Disconnect and keep queue")
+            row("Disconnect and clear queued scrobbles",function()
+                confirm("Disconnect "..name.." and clear queued and recent scrobbles on this device?",function()
+                    service("lastfm-disconnect",{forget_queue=true}); refresh()
+                end)
+            end,false,nil,"Disconnect and clear queue")
+            row("Cancel",ui.back)
         elseif page=="Card text" then
             local opts=appearance_opts()
             for _,item in ipairs({{"Title language","language",{"original","english","romaji","native"}},
@@ -773,6 +859,7 @@ return function(make_sheet, send, options, help)
             link("Wikidata","https://www.wikidata.org/","Supplies film titles and release years if TMDB cannot resolve a movie.","Movie fallback")
             link("MusicBrainz","https://musicbrainz.org/","Matches recording and album tags. The plugin checks artist credits and runtime before selecting a recording.","Music metadata")
             link("Cover Art Archive","https://coverartarchive.org/","Supplies artwork for identified MusicBrainz releases and release groups.","Album artwork")
+            link("Last.fm","https://www.last.fm/","Receives scrobbles, Now Playing updates and loves after you connect an account. Recognition does not use Last.fm.","Scrobbling")
             link("AcoustID","https://acoustid.org/","Identifies local audio using a fingerprint. Only the fingerprint and duration are sent. The package includes an application key.",
                 options.bundled_fpcalc and "Fingerprinting included" or "Uses fpcalc on PATH")
         elseif page=="Search results" then

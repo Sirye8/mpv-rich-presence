@@ -272,7 +272,8 @@ namespace mpvrp
         {
             fields={{"title",m.anime ? title : m.title},{"artist",m.artist},{"group",m.group},
                          {"episode",m.episode},{"original",m.raw_episode},{"album",m.album},{"state",state},
-                         {"details",details},{"channel",m.channel},{"year",m.provider.value("year",std::string{})}};
+                         {"details",details},{"channel",m.channel},{"year",m.provider.value("year",std::string{})},
+                    {"plays",m.plays},{"loved",m.loved}};
             if (options.contains("headline")) name = render_template(options.at("headline"),fields);
             if (options.contains("details_template")) details = render_template(options.at("details_template"),fields);
             if (options.contains("state_template")) state = render_template(options.at("state_template"),fields);

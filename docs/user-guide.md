@@ -125,6 +125,21 @@ The project uses a Cloudflare relay and a Netlify function for the authorization
 
 To use a personal app, register a separate client in [AniList developer settings](https://anilist.co/settings/developer) with the redirect `http://127.0.0.1:47653/callback`. Set `anilist_personal_client=yes` and `anilist_client_id` to its public ID. Enter the secret on the local callback page. Keep secrets and access tokens out of the conf file. The bundled client ID uses the public callback.
 
+## Scrobble to Last.fm
+
+Open **Alt+p → Last.fm → Connect Last.fm** and approve mpv-rich-presence in your browser. The session is kept in the operating system's credential store. Choose **Connect for this session** to clear it when mpv closes. Scrobbling starts **Off**. Turn on **Scrobbling** for all files, a folder or a file with **Save for**.
+
+Recognition is unchanged. Last.fm receives the artist, title and album that MusicBrainz or AcoustID matched, with their MusicBrainz IDs, or the file's tags when there is no match.
+
+- A track longer than 30 seconds scrobbles after half its length or four minutes of real listening, whichever comes first. **Scrobble point** can require 25, 50, 75 or 90 percent instead. Pauses, buffering and seeks add no time.
+- **Now Playing updates** shows the current track on your profile. **Scrobble while hidden** keeps scrobbling when Discord sharing is hidden or off. **Scrobble music videos** includes videos tagged with an artist and title.
+- Private sessions, excluded folders and the folder filter always block scrobbling.
+- Plays made offline wait in **Queued scrobbles** and are sent later with their original time. Select the row to send them now. **Recent scrobbles** lists the last 20 plays and whether Last.fm accepted them.
+- **Love on Last.fm** appears on **Now playing** and the Last.fm page for the current track.
+- Card templates can use `{plays}` for your play count and `{loved}`, which shows Loved for a loved track. They are read from Last.fm only when a template uses them.
+
+**Disconnect** removes the session from this device. You can keep queued scrobbles for a later connection with the same account or clear them.
+
 ## Track episodes and rewatches
 
 | Tracking mode | Behavior |

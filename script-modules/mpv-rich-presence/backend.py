@@ -46,6 +46,7 @@ from providers import (
     generic_clip,
 )
 from settings_transfer import export_settings, import_settings, summary as import_summary
+import lastfm
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
 MUSIC_RETRY_DELAYS = (5, 15)
@@ -101,6 +102,9 @@ class Worker:
         self.lookup_pool = None
         self.artwork_pool = None
         self.lookup_valid = None
+        self.listen_previous = None
+        self.lastfm_retry = 0
+        self.lastfm_backoff = 0
 
     def get(self, category, scope, default=None):
         row = self.db.execute(
@@ -615,6 +619,42 @@ class Worker:
             except (OSError, sqlite3.Error, ValueError, RecursionError) as exc:
                 raise AccountError(f"Settings transfer failed. {exc}") from exc
             self.reply(message=message)
+        elif op == "lastfm-connect":
+            self.lastfm_connect(job)
+        elif op == "lastfm-disconnect":
+            with serialized(self.directory):
+                current = self.get("lastfm-account", "current")
+                if current.get("generation"):
+                    self.vault.forget("lastfm-" + current["generation"], current.get("persistent"))
+                with self.transaction():
+                    self.delete("lastfm-account", "current")
+                    if job.get("forget_queue"):
+                        self.db.execute("DELETE FROM records WHERE category IN ('lastfm-queue','lastfm-history')")
+            self.reply(message="Disconnected Last.fm.")
+        elif op in ("lastfm-love", "lastfm-unlove"):
+            current = self.get("lastfm-account", "current")
+            state = self.get("listen", self.window)
+            if not current.get("name") or not state.get("track"):
+                raise AccountError("Play a track with an artist and title, and connect Last.fm first.")
+            try:
+                lastfm.love(self.lastfm_session(current), state["track"], op == "lastfm-love")
+            except lastfm.LastfmError as exc:
+                raise AccountError(f"Last.fm did not update the track. {exc}") from None
+            with self.transaction():
+                info = self.get("lastfm-track", self.window)
+                self.put("lastfm-track", self.window, dict(info, session=p.get("session"), loved=op == "lastfm-love"))
+            self.reply(message="Loved on Last.fm." if op == "lastfm-love" else "Removed the love on Last.fm.")
+        elif op == "lastfm-send":
+            current = self.get("lastfm-account", "current")
+            if not current.get("name"):
+                raise AccountError("Connect Last.fm first.")
+            self.lastfm_retry = self.lastfm_backoff = 0
+            try:
+                self.lastfm_flush(current)
+            except lastfm.LastfmError as exc:
+                self.lastfm_failed(current, exc)
+                raise AccountError(f"Queued scrobbles stay saved. {exc}") from None
+            self.reply(message="Sent queued scrobbles.")
         elif op == "connect":
             broker = self.settings.get("broker", "")
             if not broker and not self.settings.get("personal"):
@@ -699,6 +739,9 @@ class Worker:
                                 (category, str(account["id"]) + "/%"),
                             )
                     if op == "reset":
+                        lastfm_account = self.get("lastfm-account", "current")
+                        if lastfm_account.get("generation"):
+                            self.vault.forget("lastfm-" + lastfm_account["generation"], lastfm_account.get("persistent"))
                         self.db.execute("DELETE FROM records WHERE category!='player'")
                         self.put("generation", "cache", {"id": secrets.token_hex(16)})
                         self.put("generation", "data", {"id": secrets.token_hex(12)})
@@ -1672,7 +1715,7 @@ class Worker:
         prev = self.previous
         key = (
             self.cycle(a, p)
-            if a.get("id") and p.get("watch_episode") and p.get("active") and
+            if a.get("id") and p.get("watch", True) and p.get("watch_episode") and p.get("active") and
             not self.completed_in_window(f"{a['id']}/{p['media']}",p)
             else None
         )
@@ -1985,11 +2028,199 @@ class Worker:
                         counter.previous = None
                         counter.data_generation = epoch
                     counter.sample(credit_only=True)
+                    counter.listen()
                 except (AccountError, sqlite3.Error, KeyError, ValueError):
                     counter.previous = None
+                    counter.listen_previous = None
                 stop.wait(0.25)
         finally:
             counter.db.close()
+
+    # Last.fm -------------------------------------------------------------------
+
+    def listened_track(self, p):
+        """Artist, title and album to report: the recognized recording, else the file's tags."""
+        auto = self.get("auto", self.window)
+        hit = auto.get("hit") or {}
+        if auto.get("session") == p.get("session") and hit.get("kind") == "recording" and hit.get("name"):
+            mbid = hit.get("recording") or (hit.get("id") if hit.get("provider") in ("musicbrainz", "acoustid") else "")
+            track = dict(artist=hit.get("artist") or p.get("artist", ""), track=hit["name"],
+                         album=hit.get("album") or p.get("album", ""),
+                         mbid=mbid if re.fullmatch(r"[0-9a-f-]{36}", str(mbid or "")) else "")
+        else:
+            track = dict(artist=p.get("artist", ""), track=p.get("track_title") or p.get("title", ""),
+                         album=p.get("album", ""), mbid="")
+        if not track["artist"] or not track["track"]:
+            return None
+        if p.get("duration"):
+            track["duration"] = round(p["duration"])
+        return track
+
+    def listen(self):
+        p = self.get("player", self.window)
+        previous = self.listen_previous
+        if previous and previous.get("time") == p.get("time"):
+            return
+        self.listen_previous = p
+        account = self.get("lastfm-account", "current")
+        if not account.get("name") or not p.get("scrobble"):
+            return
+        track = self.listened_track(p)
+        if not track:
+            return
+        with self.transaction():
+            state = self.get("listen", self.window)
+            # A new file or new stream metadata starts a new listen. A recognition result for the
+            # same tags only corrects the names, keeps the time and resends Now Playing.
+            identity = [p["session"], p.get("artist", ""), p.get("track_title") or p.get("title", "")]
+            if state.get("identity") != identity:
+                state = dict(identity=identity, track=track, credited=0.0, start=p["wall"] / 1000,
+                             now_playing=False, scrobbled=False, info=False)
+            names = (track["artist"], track["track"], track.get("album"))
+            if names != (state["track"]["artist"], state["track"]["track"], state["track"].get("album")) and not state["scrobbled"]:
+                state.update(now_playing=False, info=False)
+            state["track"] = dict(track, duration=track.get("duration") or state["track"].get("duration"))
+            if (previous and previous.get("session") == p["session"] and previous.get("active") and p.get("active")
+                    and not state["scrobbled"]):
+                dt = p["time"] - previous["time"]
+                if 0 < dt <= 2.5:
+                    state["credited"] += dt
+                point = lastfm.scrobble_point(p.get("duration"), (p.get("scrobbling") or {}).get("threshold"))
+                state["point"] = point
+                if point and state["credited"] >= point:
+                    state["scrobbled"] = True
+                    entry = dict(state["track"], timestamp=int(state["start"]), account=account["generation"])
+                    self.put("lastfm-queue", f"{account['generation']}/{int(state['start'])}/{self.window}", entry)
+                    self.lastfm_history(entry, "queued")
+            self.put("listen", self.window, state)
+
+    def lastfm_history(self, track, status):
+        history = self.get("lastfm-history", "global").get("tracks", [])
+        key = (track["artist"], track["track"], track["timestamp"])
+        history = [h for h in history if (h["artist"], h["track"], h["timestamp"]) != key]
+        history.insert(0, dict(artist=track["artist"], track=track["track"], timestamp=track["timestamp"], status=status))
+        self.put("lastfm-history", "global", {"tracks": history[:20]})
+
+    def lastfm_session(self, account):
+        if account.get("expired"):
+            raise AccountError("Reconnect Last.fm to scrobble again.")
+        key = self.vault.read("lastfm-" + account.get("generation", ""))
+        if not key:
+            raise AccountError("Reconnect Last.fm in this window.")
+        return key
+
+    def lastfm_failed(self, account, exc):
+        if exc.code in lastfm.INVALID_SESSION:
+            with self.transaction():
+                current = self.get("lastfm-account", "current")
+                if current.get("generation") == account.get("generation"):
+                    self.put("lastfm-account", "current", dict(current, expired=True))
+        self.lastfm_backoff = min(900, max(30, self.lastfm_backoff * 2))
+        self.lastfm_retry = time.monotonic() + self.lastfm_backoff
+        self.put("lastfm-status", "global", {"error": str(exc), "time": time.time()})
+
+    def lastfm_tick(self, p):
+        """Send Now Playing, track details and queued scrobbles from the operations thread."""
+        account = self.get("lastfm-account", "current")
+        if not account.get("name") or account.get("expired") or time.monotonic() < self.lastfm_retry:
+            return
+        state = self.get("listen", self.window)
+        live = state and p.get("scrobble") and state.get("identity", [None])[0] == p.get("session")
+        try:
+            if live and p.get("active") and not state.get("now_playing"):
+                if (p.get("scrobbling") or {}).get("now_playing", True):
+                    lastfm.now_playing(self.lastfm_session(account), state["track"])
+                with self.transaction():
+                    current = self.get("listen", self.window)
+                    if current.get("identity") == state["identity"]:
+                        self.put("listen", self.window, dict(current, now_playing=True))
+            if live and p.get("lastfm_info") and not state.get("info"):
+                info = lastfm.track_info(account["name"], state["track"])
+                with self.transaction():
+                    self.put("lastfm-track", self.window, dict(info, session=p["session"]))
+                    current = self.get("listen", self.window)
+                    if current.get("identity") == state["identity"]:
+                        self.put("listen", self.window, dict(current, info=True))
+            if time.monotonic() >= getattr(self, "lastfm_next_flush", 0):
+                self.lastfm_next_flush = time.monotonic() + 5
+                self.lastfm_flush(account)
+            self.lastfm_backoff = 0
+        except lastfm.LastfmError as exc:
+            self.lastfm_failed(account, exc)
+
+    def lastfm_flush(self, account):
+        rows = self.db.execute(
+            "SELECT scope,value FROM records WHERE category='lastfm-queue' AND scope LIKE ? ORDER BY scope LIMIT 50",
+            (account["generation"] + "/%",),
+        ).fetchall()
+        if not rows:
+            return
+        session = self.lastfm_session(account)
+        with serialized(self.directory):
+            # Claim the rows first so two windows never send the same scrobble.
+            with self.transaction():
+                claimed = [(scope, json.loads(value)) for scope, value in rows if self.get("lastfm-queue", scope)]
+                for scope, _ in claimed:
+                    self.delete("lastfm-queue", scope)
+            if not claimed:
+                return
+            try:
+                accepted, ignored = lastfm.scrobble(session, [entry for _, entry in claimed])
+            except lastfm.LastfmError as exc:
+                with self.transaction():
+                    for scope, entry in claimed:
+                        if exc.retry or exc.code in lastfm.INVALID_SESSION:
+                            self.put("lastfm-queue", scope, entry)
+                        else:
+                            self.lastfm_history(entry, "rejected")
+                raise
+            with self.transaction():
+                for _, entry in claimed:
+                    self.lastfm_history(entry, "sent" if not ignored else "sent or ignored")
+                self.put("lastfm-status", "global", {"sent": time.time(), "accepted": accepted, "ignored": ignored})
+
+    def lastfm_connect(self, job):
+        started = time.time()
+
+        def cancelled():
+            return self.get("lastfm-cancel", self.window).get("time", 0) >= started
+
+        token = lastfm.request_token()
+        url = lastfm.approval_url(token)
+        self.reply(lastfm_signin=url, message="Approve mpv-rich-presence on Last.fm in your browser.")
+        try:
+            import webbrowser
+            webbrowser.open(url)
+            deadline = time.monotonic() + 300
+            while True:
+                if cancelled():
+                    raise AccountError("Last.fm sign-in cancelled.")
+                if time.monotonic() > deadline:
+                    raise AccountError("Last.fm sign-in timed out. Connect again.")
+                try:
+                    session = lastfm.session_for(token)
+                    break
+                except lastfm.LastfmError as exc:
+                    if exc.code != 14:  # 14: the viewer has not approved the token yet
+                        raise AccountError(f"Last.fm sign-in failed. {exc}") from None
+                time.sleep(3)
+            try:
+                details = lastfm.profile(session["name"])
+            except lastfm.LastfmError:
+                details = {"name": session["name"], "url": f"https://www.last.fm/user/{session['name']}", "avatar": ""}
+            with serialized(self.directory):
+                previous = self.get("lastfm-account", "current")
+                generation = secrets.token_hex(16)
+                persistent = self.vault.write("lastfm-" + generation, session["key"], remember=not job.get("session_only"))
+                with self.transaction():
+                    self.put("lastfm-account", "current", dict(details, generation=generation, persistent=persistent))
+                if previous.get("generation"):
+                    self.vault.forget("lastfm-" + previous["generation"], previous.get("persistent"))
+            self.lastfm_backoff, self.lastfm_retry = 0, 0
+            self.reply(message=f"Connected Last.fm as {details['name']}." if persistent else
+                       f"Connected Last.fm as {details['name']} for this session.")
+        finally:
+            self.reply(lastfm_signin=None)
 
     def defer_artwork(self,p,refresh,hit,include_album,sources=None):
         def render():
@@ -2119,6 +2350,7 @@ class Worker:
                             retry_at=None
                     a = self.get("account", "current")
                     self.propose(a, p)
+                    self.lastfm_tick(p)
                     if time.monotonic() >= getattr(self,"next_completion_check",0):
                         self.next_completion_check=time.monotonic()+5
                         self.finish_watched_episode()

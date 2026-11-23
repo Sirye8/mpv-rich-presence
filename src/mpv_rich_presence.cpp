@@ -149,11 +149,14 @@ static void read_profiles(rich_presence_state& state)
         state.recognition_options = state.store->get("recognition-options","global");
         state.sources = state.store->effective("sources", state.scope_path, &state.source_scope);
         state.tracking = state.store->effective("tracking", state.scope_path);
+        state.scrobbling = state.store->effective("scrobbling", state.scope_path);
         state.folder_filter = state.store->get("folder-filter", "global");
         state.yield_idle_pin = state.store->get("panel","global").value("yield_idle_pin",false);
         state.panel_folders = state.folder_filter.value("folders", std::vector<std::string>{});
     }
     if (!state.appearance.contains("preset")) state.appearance["preset"] = state.config_preset;
+    const auto templates = state.appearance.dump();
+    state.lastfm_fields = templates.find("{plays}") != std::string::npos || templates.find("{loved}") != std::string::npos;
     if (!state.sources.contains("source")) state.sources["source"] = state.config_source;
 }
 
@@ -616,7 +619,7 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
         if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
             val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
         if (category == "watch-retention" && !(key=="months" && val.is_number_integer() && val>=0 && val<=120)) return false;
-        if (category == "save-scopes" && !((key=="Appearance" || key=="Recognition & folders" || key=="Privacy & windows" || key=="AniList") &&
+        if (category == "save-scopes" && !((key=="Appearance" || key=="Recognition & folders" || key=="Privacy & windows" || key=="AniList" || key=="Last.fm") &&
             (val=="global" || val=="folder" || val=="file"))) return false;
         if (category=="panel-theme")
         {
@@ -634,6 +637,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
             || (key == "episode" && val.is_number_integer() && val > 0 && val <= 9999)
             || (key == "not_anime" && val.is_boolean()))) return false;
         if (category == "exclude" && !(key == "blocked" && val.is_boolean())) return false;
+        if (category == "scrobbling" && !(((key == "enabled" || key == "now_playing" || key == "while_hidden" || key == "videos")
+            && val.is_boolean()) || (key == "threshold" && val.is_number_integer() && (val == 0 || (val >= 10 && val <= 100))))) return false;
         if (category == "privacy" && !(key == "mode" && (val == "hidden" || val == "generic" || val == "full"))) return false;
         if (category == "tracking" && !((key == "mode" && (val == "off" || val == "manual" || val == "ask" || val == "auto"))
             || (key == "threshold" && val.is_number_integer() && val >= 1 && val <= 1440)
@@ -764,6 +769,11 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 return;
             }
             if (req.value("session", state.file_session) != state.file_session) return;
+            if (action=="lastfm_cancel" && state.store)
+            {
+                state.store->put("lastfm-cancel",state.instance_id,{{"time",static_cast<double>(std::time(nullptr))}});
+                return;
+            }
             if (action=="cancel_connect" && state.store)
             {
                 state.store->put("signin-cancel",state.instance_id,{{"id",req.value("id",std::string{})}});
@@ -944,7 +954,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                     }
                     return;
                 }
-                if (category != "appearance" && category != "match" && category != "privacy" && category != "exclude" && category != "sources" && category != "tracking") return;
+                if (category != "appearance" && category != "match" && category != "privacy" && category != "exclude" && category != "sources" && category != "tracking" && category != "scrobbling") return;
                 auto scope = req.value("scope", std::string("global"));
                 if (scope == "file" && !state.scope_path.empty()) scope = "file:" + state.scope_path;
                 else if (scope == "folder" && !state.scope_path.starts_with("stream-"))
@@ -1414,7 +1424,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
     nlohmann::json automatic = nlohmann::json::object();
     uint64_t observed_session = UINT64_MAX;
     bool last_allowed = false;
-    bool last_sample_active = false, last_watch_episode = false;
+    bool last_sample_active = false, last_watch_episode = false, last_scrobble = false;
     uint64_t last_eof_session = UINT64_MAX;
     const auto record_watch_eof = [&] {
         if (!state.store || !lookup_allowed(state) || last_eof_session==state.file_session) return;
@@ -1762,14 +1772,29 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
         if (candidate != automatic) { state.force_update = true; automatic = candidate; }
         const int tracked_media = media.anilist_id;
         const auto tracked_episode = media.episode;
-        const bool advancing = watch && !media.paused && !media.buffering && !is_seeking;
-        if (state.store && ((watch && now_steady >= next_sample) || observed_session != state.file_session
+        // Last.fm counts real listening for eligible files. Private sessions, exclusions and
+        // folder filters block it, and hidden sharing blocks it unless the user allows it.
+        const bool scrobble = local_permission(state) && state.scrobbling.value("enabled", false)
+            && (!media.video || state.scrobbling.value("videos", false))
+            && ((state.is_enabled.value_or(false) && state.application_id && !sharing_hidden(state))
+                || state.scrobbling.value("while_hidden", false));
+        state.scrobble_allowed = scrobble;
+        const bool sampling = watch || scrobble;
+        if (state.lastfm_fields && state.store)
+        {
+            const auto info = state.store->get("lastfm-track", state.instance_id);
+            const bool current = info.value("session", uint64_t{}) == state.file_session;
+            media.plays = current ? info.value("plays", std::string{}) : "";
+            media.loved = current && info.value("loved", false) ? "Loved" : "";
+        }
+        const bool advancing = sampling && !media.paused && !media.buffering && !is_seeking;
+        if (state.store && ((sampling && now_steady >= next_sample) || observed_session != state.file_session || last_scrobble != scrobble
             || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
                 observed_artist != media.artist || observed_album != media.album || observed_channel != media.channel))
             || observed_recognition_options != state.recognition_options
             || last_allowed != allowed || observed != watch || last_sample_id != tracked_media
             || last_sample_episode != tracked_episode || last_watch_episode != watch_episode
-            || (watch && (advancing != last_sample_active || sampled_seek != last_seek || last_sample_speed != media.speed))))
+            || (sampling && (advancing != last_sample_active || sampled_seek != last_seek || last_sample_speed != media.speed))))
         {
             next_sample = now_steady + chrono::seconds(1);
             auto seconds = chrono::duration<double>(now_steady.time_since_epoch()).count();
@@ -1780,13 +1805,16 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"allowed",allowed},{"watch",watch},{"tracking",state.tracking},{"time",seconds},{"wall",media.now},
                 {"match_title",media.anime_title}};
             sample["source"] = source;
-            if (watch_episode)
+            sample["scrobble"] = scrobble;
+            sample["scrobbling"] = state.scrobbling;
+            sample["lastfm_info"] = state.lastfm_fields;
+            if (watch_episode || scrobble)
             {
                 double duration_s=0;
                 mpv_get_property(state.mpv,"duration",MPV_FORMAT_DOUBLE,&duration_s);
                 sample["duration"]=duration_s;
             }
-            if (extra)
+            if (extra || scrobble)
             {
                 sample["title"] = media.title;
                 sample["artist"] = media.artist;
@@ -1848,12 +1876,13 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             last_sample_speed = media.speed;
             last_sample_id = tracked_media;
             last_sample_active = advancing;
+            last_scrobble = scrobble;
             last_sample_episode = tracked_episode;
             last_watch_episode = watch_episode;
             observed_session = state.file_session;
             last_allowed = allowed;
             observed = watch;
-            if ((extra || watch) && !service_started)
+            if ((extra || watch || scrobble) && !service_started)
             {
                 const char* args[] = {"script-message-to","mpv_rich_presence","start-service",state.instance_id.c_str(),nullptr};
                 mpv_command(state.mpv,args);
@@ -1939,6 +1968,15 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"sources",state.sources},{"provider",media.anime ? "anilist" :
                     media.provider.value("provider",std::string(media.track_title.empty() ? "local" : "local tags"))},
                 {"hard_block",state.hard_block},
+                {"scrobbling",state.scrobbling},{"scrobble_allowed",state.scrobble_allowed},
+                {"lastfm",state.store && (state.panel_page=="Last.fm" || state.panel_page=="Now playing" || state.panel_page=="Recent scrobbles")
+                    ? nlohmann::json{{"account",state.store->get("lastfm-account","current")},
+                        {"listen",state.store->get("listen",state.instance_id)},
+                        {"track",state.store->get("lastfm-track",state.instance_id)},
+                        {"history",state.store->get("lastfm-history","global")},
+                        {"status",state.store->get("lastfm-status","global")},
+                        {"queued",state.store->record_counts().value("lastfm-queue",0)}}
+                    : nlohmann::json{{"account",state.store ? state.store->get("lastfm-account","current") : nlohmann::json::object()}}},
                 {"record_counts",state.store && (state.panel_page.starts_with("Saved ") || !state.panel_records.empty()) ?
                     state.store->record_counts() : nlohmann::json::object()},
                 {"records",state.store && !state.panel_records.empty() ? state.store->records(state.panel_records) : nlohmann::json::array()},

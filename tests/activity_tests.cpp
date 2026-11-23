@@ -92,6 +92,14 @@ int main(int argc, char** argv)
     if (literal.at("name") != "{artist} Live by Band" || literal.at("details") != "Band" || literal.contains("state")) return 1;
     if (format_activity(braces, {{"headline","Y"}}).at("name") != "mpv") return 1;
 
+    // Last.fm play count and loved state fill templates; an empty field drops its part.
+    playback counted = braces;
+    counted.title = counted.track_title = "Track";
+    counted.plays = "12";
+    if (format_activity(counted, {{"state_template","{plays} plays|{loved}"}}).at("state") != "12 plays") return 1;
+    counted.loved = "Loved";
+    if (format_activity(counted, {{"state_template","{plays} plays|{loved}"}}).at("state") != "12 plays · Loved") return 1;
+
     // Large image, badge and hover text choices.
     playback episode;
     episode.video = true;

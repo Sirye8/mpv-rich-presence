@@ -111,6 +111,10 @@ namespace mpvrp
         std::chrono::steady_clock::time_point last_activity_update;
 
         int pause_timeout_seconds = 1800;
+        // Last.fm scrobbling settings for the current file, and whether card templates use Last.fm fields.
+        nlohmann::json scrobbling = nlohmann::json::object();
+        bool lastfm_fields = false;
+        bool scrobble_allowed = false;
         std::chrono::steady_clock::time_point pause_start_time;
         uint64_t pause_start_epoch_ms = 0;
         bool rpc_hidden_by_timeout = false;
