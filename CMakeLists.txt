@@ -50,6 +50,8 @@ if(NOT TARGET anitomy)
   add_library(anitomy STATIC ${ANITOMY_SOURCES})
   target_include_directories(anitomy PUBLIC "${anitomy_SOURCE_DIR}")
 endif()
+# The plugin is a shared library, so code linked into it must be position-independent on Linux.
+set_target_properties(anitomy PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 find_package(unofficial-sqlite3 CONFIG REQUIRED)
 find_package(cpr CONFIG REQUIRED)
