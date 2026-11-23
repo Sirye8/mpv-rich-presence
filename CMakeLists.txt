@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 # Project ----------------------------------------------------------------------
 
 project(mpv-rich-presence
-    VERSION 2.5
+    VERSION 2.6
     LANGUAGES CXX C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
