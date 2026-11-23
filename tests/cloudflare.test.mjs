@@ -31,6 +31,26 @@ test("TMDB relay accepts only public metadata requests and keeps the credential 
   assert.equal(upstream.mock.callCount(), 1);
 });
 
+test("the relay names missing setup and outages, and counts routes without titles", async t => {
+  const root = "https://login.example.org";
+  const points = [];
+  const env = { TMDB_READ_TOKEN: "", TMDB_LIMIT: { limit: async () => ({ success: true }) },
+    REQUESTS: { writeDataPoint: point => points.push(point) } };
+  const missing = await relay.fetch(new Request(root + "/metadata/search/movie?query=Secret%20Title"), env);
+  assert.equal(missing.status, 503);
+  assert.equal(missing.headers.get("X-Relay-Reason"), "not-configured");
+  env.TMDB_READ_TOKEN = "test-token";
+  t.mock.method(globalThis, "fetch", async () => { throw new Error("upstream down"); });
+  const outage = await relay.fetch(new Request(root + "/metadata/tv/84958/season/2/episode/4"), env);
+  assert.equal(outage.status, 502);
+  assert.equal(outage.headers.get("X-Relay-Reason"), null);
+  await relay.fetch(new Request(root + "/metadata/movie/157336"), env);
+  assert.deepEqual(points.map(point => point.blobs), [
+    ["/metadata/search", "503"], ["/metadata/episode", "502"], ["/metadata/details", "502"]]);
+  assert.ok(!JSON.stringify(points).includes("Secret"), "A title reached the counters");
+  await relay.fetch(new Request(root + "/metadata/search/movie?query=x"), { ...env, REQUESTS: { writeDataPoint() { throw Error(); } } });
+});
+
 test("TMDB details include a validated IMDb ID in the same request", async t => {
   const env = { TMDB_READ_TOKEN: "test-token", TMDB_LIMIT: { limit: async () => ({ success: true }) } };
   const seen = [];

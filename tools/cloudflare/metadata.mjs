@@ -52,7 +52,8 @@ export async function metadata(request, url, env) {
     // One request returns the IMDb ID for card buttons. TV details have it only under external_ids.
     target.searchParams.set("append_to_response", "external_ids");
   }
-  if (!token) return new Response(null, { status: 503, headers: noStore });
+  // The plugin names these states in Diagnostics: missing setup, throttling and outages differ.
+  if (!token) return new Response(null, { status: 503, headers: { ...noStore, "X-Relay-Reason": "not-configured" } });
 
   try {
     const client = request.headers.get("CF-Connecting-IP") || "unknown";
@@ -79,5 +80,5 @@ export async function metadata(request, url, env) {
   } catch {
     // Keep the fallback available even if the service or limiter is down.
   }
-  return new Response(null, { status: 503, headers: noStore });
+  return new Response(null, { status: 502, headers: noStore });
 }

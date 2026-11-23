@@ -5,8 +5,29 @@ import { metadata } from "./metadata.mjs";
 const upstream = "https://mpv-anilist-login.netlify.app";
 const routes = {"/health":"GET", "/start":"POST", "/callback":"GET", "/redeem":"POST"};
 
+// Counts requests per route and status only. Titles, IDs, tokens and addresses are never written.
+function routeName(path) {
+  if (routes[path]) return path;
+  const relay = path.match(/^\/metadata\/(health|search|movie|tv)(\/\d+)?(\/season\/\d+\/episode\/\d+)?/);
+  if (!relay) return "other";
+  return "/metadata/" + (relay[1] === "tv" && relay[3] ? "episode" : relay[1] === "movie" || relay[1] === "tv" ? "details" : relay[1]);
+}
+
+function count(env, path, status) {
+  try { env.REQUESTS?.writeDataPoint({ blobs: [routeName(path), String(status)], indexes: [routeName(path)] }); }
+  catch { /* Counting never affects the answer. */ }
+}
+
 export default {
   async fetch(request, env = {}) {
+    const response = await answer(request, env);
+    count(env, new URL(request.url).pathname, response.status);
+    return response;
+  }
+};
+
+async function answer(request, env) {
+  {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/metadata/")) return metadata(request, url, env);
     if (routes[url.pathname] !== request.method) return new Response(null, {status:404});
@@ -26,4 +47,4 @@ export default {
         {status:503,headers:{"Cache-Control":"no-store"}});
     }
   }
-};
+}

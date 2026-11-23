@@ -5,6 +5,7 @@
   "workers_dev": true,
   "preview_urls": false,
   "observability": { "enabled": false },
+  "analytics_engine_datasets": [{ "binding": "REQUESTS", "dataset": "mpv_rich_presence_requests" }],
   "vars": { "ANILIST_CLIENT_ID": "55822" },
   "ratelimits": [{
     "name": "TMDB_LIMIT",
