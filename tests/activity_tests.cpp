@@ -216,6 +216,16 @@ int main(int argc, char** argv)
         const auto caches = store.records("cache");
         if (caches.size() != 1 || caches.at(0).value("label",std::string{}) != "v3:auto:wikidata") return 1;
         if (store.records("account").size() != 0 || store.records("watch").size() != 1) return 1;
+        store.put("scrobbling","global",{{"enabled",true}});
+        store.put("lastfm-queue","gen/1700000000/window",{{"artist","A"},{"track","T"},{"timestamp",1700000000}});
+        store.put("lastfm-history","global",{{"tracks",nlohmann::json::array({{{"artist","A"}},{{"artist","B"}}})}});
+        const auto lastfm_counts = store.record_counts();
+        if (lastfm_counts.value("scrobbling",0) != 1 || lastfm_counts.value("lastfm-queue",0) != 1 ||
+            lastfm_counts.value("lastfm-history",0) != 1) return 1;
+        const auto queued = store.records("lastfm-queue");
+        if (queued.size() != 1 || queued.at(0).value("track",std::string{}) != "T" ||
+            queued.at(0).value("timestamp",0.0) != 1700000000.0) return 1;
+        if (store.records("lastfm-history").at(0).value("tracks",0) != 2) return 1;
         if (store.episode_watch(7,18,"2").value("elapsed",0.0) != 73.0) return 1;
         if (store.episode_watch(7,18,"3") != nlohmann::json::object()) return 1;
         store.put("cycle","7/18",{{"number",1}});

@@ -191,6 +191,21 @@ class ScrobbleQueueTests(unittest.TestCase):
         self.assertEqual(self.worker.get("lastfm-account", "current"), {})
         self.assertIsNone(self.worker.vault.session.get("lastfm-" + account["generation"]))
 
+    def test_saved_data_clears_queue_history_and_profiles(self):
+        self.worker.put("lastfm-queue", "gen/1/window", dict(artist="A", track="T", timestamp=1))
+        self.worker.put("lastfm-queue", "gen/2/window", dict(artist="B", track="U", timestamp=2))
+        self.worker.put("lastfm-history", "global", dict(tracks=[dict(artist="A")]))
+        self.worker.put("scrobbling", "folder:/music", dict(enabled=True))
+        clear = dict(op="clear", account=None, session=0)
+        self.worker.handle(dict(clear, category="lastfm-queue", scope="gen/1/window"))
+        self.assertEqual(self.count(), 1)
+        self.worker.handle(dict(clear, category="lastfm-queue"))
+        self.worker.handle(dict(clear, category="lastfm-history", scope="global"))
+        self.worker.handle(dict(clear, category="scrobbling", scope="folder:/music"))
+        self.assertEqual(self.count(), 0)
+        self.assertEqual(self.worker.get("lastfm-history", "global"), {})
+        self.assertEqual(self.worker.get("scrobbling", "folder:/music"), {})
+
     def count(self):
         return self.worker.db.execute("SELECT COUNT(*) FROM records WHERE category='lastfm-queue'").fetchone()[0]
 

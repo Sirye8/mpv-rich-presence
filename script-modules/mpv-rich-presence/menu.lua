@@ -1240,7 +1240,7 @@ return function(make_sheet, send, options, help)
                     ui.text("Filter this category",filter,function(v) filter=v end)
                 end)
                 if filter~="" then row("Clear search",function() filter="" end) end
-                if cat=="cache" or cat=="watch" or cat=="pending" or cat=="skipped" or cat=="history" or cat=="entry" then
+                if cat=="cache" or cat=="watch" or cat=="pending" or cat=="skipped" or cat=="history" or cat=="entry" or cat=="lastfm-queue" then
                     row("Clear all   "..count,function() clear() end).tip=description.." This applies to every record in this category."
                 end
             end
@@ -1254,6 +1254,11 @@ return function(make_sheet, send, options, help)
                         if title=="" then title="Cached result" end
                         value=item.expires and item.expires>0 and
                             (item.expires<os.time() and "Expired" or "Expires "..os.date("%d %b",math.floor(item.expires))) or "Cached"
+                    elseif cat=="lastfm-queue" then
+                        title=(item.artist or "?").." – "..(item.track or "?")
+                        value=item.timestamp and item.timestamp>0 and os.date("%d %b, %H:%M",math.floor(item.timestamp)) or "Queued"
+                    elseif cat=="lastfm-history" then
+                        title,value="Recent scrobbles",tostring(item.tracks or 0)..((item.tracks==1) and " play" or " plays")
                     elseif cat=="watch" or cat=="history" or cat=="pending" or cat=="skipped" or cat=="entry" then
                         local _,media,episode,cycle=item.scope:match("^(%d+)/(%d+)/(%d+)/(%d+)$")
                         if media then title,value="AniList "..media,"Episode "..episode.." · Cycle "..(tonumber(cycle)+1)
@@ -1269,7 +1274,8 @@ return function(make_sheet, send, options, help)
                 end
             end
             if shown==0 then row(count==0 and "No saved records" or filter=="" and "Loading records…" or "No matching records") end
-        elseif page=="Saved profiles" or page=="Saved matches" or page=="Saved caches" or page=="Saved AniList data" then
+        elseif page=="Saved profiles" or page=="Saved matches" or page=="Saved caches" or page=="Saved AniList data"
+            or page=="Saved Last.fm data" then
             local counts=snap.record_counts or {}
             for _,group in ipairs(saved_groups) do
                 if group[1]==page then

@@ -519,6 +519,14 @@ local function verify()
     assert(not find("Saved data","cache:v3:auto:wikidata/abcdef"))
     assert(find("Saved caches","Metadata cache"))
     assert(find("Saved: Metadata cache","cache:v3:auto:wikidata/abcdef").label:find("Expired",1,true))
+    snapshot.record_counts={["lastfm-queue"]=2,["lastfm-history"]=1}
+    snapshot.records={{category="lastfm-queue",scope="gen/1/w",artist="Evanescence",track="Going Under",timestamp=1700000000}}
+    menu.update(snapshot)
+    assert(find("Saved data","Saved Last.fm data").label=="Saved Last.fm data   3")
+    assert(find("Saved Last.fm data","Queued scrobbles").label=="Queued scrobbles   2")
+    local queued=find("Saved: Queued scrobbles","lastfm-queue:gen/1/w")
+    assert(queued.label:find("Evanescence – Going Under",1,true),"Queued scrobble lacks its track")
+    assert(find("Saved: Queued scrobbles","Clear all"),"Queued scrobbles cannot be cleared together")
 
     local popup_model,popup_request
     local ask=dofile(modules.."/ask.lua")(function(value)

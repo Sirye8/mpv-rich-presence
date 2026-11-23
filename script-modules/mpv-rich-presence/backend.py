@@ -880,6 +880,7 @@ class Worker:
                     "tv-rule",
                     "watch-retention",
                     "save-scopes",
+                    "scrobbling",
                 ):
                     removed = self.get(category, job["scope"])
                     if category == "match" and job.get("field"):
@@ -951,6 +952,11 @@ class Worker:
                         f"DELETE FROM records WHERE category=? AND {where}",
                         ((name, target) for name in categories),
                     )
+                elif category in ("lastfm-queue", "lastfm-history"):
+                    if job.get("scope"):
+                        self.delete(category, job["scope"])
+                    else:
+                        self.db.execute("DELETE FROM records WHERE category=?", (category,))
                 elif category == "cache":
                     self.put("generation", "cache", {"id": secrets.token_hex(16)})
                     if job.get("scope"):

@@ -119,7 +119,7 @@ namespace mpvrp
     }
 
     static constexpr auto saved_records = " FROM records WHERE (category IN "
-        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options','save-scopes','watch-retention') "
+        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options','save-scopes','watch-retention','scrobbling','lastfm-queue','lastfm-history') "
         "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)="
         "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT))) ";
 
@@ -143,6 +143,15 @@ namespace mpvrp
         {
             auto row = json{{"category",column(stmt.get(),0)},{"scope",column(stmt.get(),1)}};
             if (row.at("category") == "match") row["fields"] = json::parse(column(stmt.get(),2));
+            if (row.at("category") == "lastfm-queue")
+            {
+                const auto entry = json::parse(column(stmt.get(),2));
+                row["artist"] = entry.value("artist",std::string{});
+                row["track"] = entry.value("track",std::string{});
+                row["timestamp"] = entry.value("timestamp",0.0);
+            }
+            if (row.at("category") == "lastfm-history")
+                row["tracks"] = json::parse(column(stmt.get(),2)).value("tracks",json::array()).size();
             if (row.at("category") == "cache")
             {
                 const auto entry = json::parse(column(stmt.get(),2));
