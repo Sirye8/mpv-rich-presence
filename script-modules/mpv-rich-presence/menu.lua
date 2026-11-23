@@ -134,7 +134,7 @@ return function(make_sheet, send, options, help)
     local last_read
     local record
     local saved_groups={
-        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","scrobbling","panel","panel-theme","folder-filter","recognition-options","save-scopes","watch-retention"}},
+        {"Saved profiles",{"appearance","privacy","exclude","sources","tracking","scrobbling","panel","panel-theme","folder-filter","recognition-options","save-scopes","watch-retention","anilist-updates"}},
         {"Saved matches",{"match","provider","tv-rule"}},
         {"Saved caches",{"cache"}},
         {"Saved AniList data",{"watch","pending","skipped","history","entry"}},
@@ -149,6 +149,7 @@ return function(make_sheet, send, options, help)
         panel={"Panel settings","The saved panel position and optional Discord pin handoff. Clearing this record uses the default for each."},
         ["panel-theme"]={"Panel theme","The saved panel palette, opacity and blur. Clearing this record restores Dark glass."},
         ["save-scopes"]={"Saved scope selections","The Save for choice remembered separately by each settings page. Clearing it restores each page's initial choice."},
+        ["anilist-updates"]={"AniList update settings","Whether progress jumps are sent one episode at a time, and how Review now handles updates already on AniList or changed there. Clearing it restores the defaults."},
         ["watch-retention"]={"Watch retention settings","The number of months local watch records are kept without playback activity. Clearing it restores the three-month default."},
         ["folder-filter"]={"Folder filter override","The saved folder filter mode or list. Removing it restores both values from rich-presence.conf."},
         ["recognition-options"]={"Optional recognition settings","Clear the switches for conditional TV folder rules and local metadata files. Saved rules and the sidecar files stay available."},
@@ -392,7 +393,7 @@ return function(make_sheet, send, options, help)
         end
         local card=snap.card or {}
         local tracking=snap.tracking or {}
-        local function review_update(prop)
+        local function review_update(prop,from_list)
             local base=prop.base or {}
             local episode=tostring(prop.episode)
             local progress=tostring(prop.before).." → "..episode
@@ -414,8 +415,14 @@ return function(make_sheet, send, options, help)
                     message=message.." · Rewatches "..(base["repeat"] or 0).." → "..prop.repeat_count
                 end
                 if prop.start_rewatch and prop.episode<prop.before then message=message.." · Reset progress for a new rewatch"
-                elseif prop.episode>prop.before+1 then message=message.." · Episode gap" end
-                confirm(message,function() service("accept",{proposal=prop.key,keep_status=keep}) end)
+                elseif prop.episode>prop.before+1 then
+                    message=message..((snap.anilist_updates or {}).step==false and " · Episode gap"
+                        or " · Records episodes "..(prop.before+1).." to "..prop.episode.." one at a time")
+                end
+                confirm(message,function()
+                    if from_list then service("apply-pending",{proposal=prop.key,revision=prop.revision,keep_status=keep})
+                    else service("accept",{proposal=prop.key,keep_status=keep}) end
+                end)
             end
             row(action.."   "..progress,function() submit(false) end,true)
             if prop.status=="CURRENT" and base.id then
@@ -1207,6 +1214,10 @@ return function(make_sheet, send, options, help)
             switch("Keep offline proposals",tracking.keep_pending==true,function()
                 apply("tracking",{keep_pending=not tracking.keep_pending})
             end)
+            local updates=snap.anilist_updates or {}
+            switch("Step through episodes",updates.step~=false,function()
+                request("apply",{category="anilist-updates",values={step=updates.step==false},scope="global"}); refresh()
+            end)
             row("Pending updates   "..#(snap.pending or {}),function() ui.push("Pending updates") end)
             switch("Rewatch tracking",tracking.rewatch==true,function() apply("tracking",{rewatch=not tracking.rewatch}) end)
             if tracking.rewatch then
@@ -1243,6 +1254,17 @@ return function(make_sheet, send, options, help)
                 end)
             end)
         elseif page=="Pending updates" then
+            local updates=snap.anilist_updates or {}
+            local function save_update(values) request("apply",{category="anilist-updates",values=values,scope="global"}); refresh() end
+            choice("If already on AniList",{"label","remove"},updates.already_done or "label",
+                function(v) save_update({already_done=v}) end,nil,{label="Label it",remove="Remove it"})
+            choice("If changed on AniList",{"rebuild","conflict"},updates.changed or "rebuild",
+                function(v) save_update({changed=v}) end,nil,{rebuild="Rebuild the update",conflict="Mark as conflict"})
+            -- AniList keeps one progress number per anime, so only the newest update for each can be applied.
+            local newest={}
+            for _,prop in ipairs(snap.pending or {}) do
+                if prop.episode>(newest[prop.media] or 0) then newest[prop.media]=prop.episode end
+            end
             if #(snap.pending or {})>0 then
                 local item=row("Filter updates",function() ui.text("Filter by title or episode",pending_filter,function(value) pending_filter=value end) end)
                 item.tip="Search pending proposals by anime title or episode number. Filtering changes the display only. Open the matching episode to verify and apply an update."
@@ -1257,11 +1279,25 @@ return function(make_sheet, send, options, help)
                     -- One label per update says what it is waiting for.
                     local current=snap.allowed and snap.watch_episode and prop.media==snap.match and prop.episode==tonumber(snap.episode)
                     local listed=valid_entry and prop.media==snap.match and entry.id and (prop.base or {}).progress~=nil
-                    local state=prop.offline and "Needs a refresh"
+                    local review=type(prop.review)=="table" and prop.review or {}
+                    local checked=review.checked and os.time()-review.checked<=600
+                    local older=prop.episode<(newest[prop.media] or 0)
+                    local state=older and "Covered by episode "..newest[prop.media]
+                        or review.state=="done" and "Already on AniList"
+                        or checked and review.state=="conflict" and "Changed on AniList"
+                        or checked and review.state=="ready" and (review.rebuilt and "Rebuilt" or "Checked")
+                        or prop.offline and "Needs a refresh"
                         or (listed and entry.progress~=prop.base.progress) and "Conflict"
                         or prop.needs_review and not current and "Unconfirmed"
                         or current and "Ready" or "Play to apply"
-                    row(label.."   "..state,nil,false,nil,"Proposal "..prop.key).tip=({
+                    local tips={
+                        ["Already on AniList"]="AniList already has episode "..tostring(review.progress or prop.episode).." or later. Nothing will be sent. Remove clears this update.",
+                        ["Changed on AniList"]="Your AniList entry changed after this update was proposed. Play the episode to review it again, or skip it. If changed on AniList can rebuild it instead.",
+                        Checked="AniList still matches this update. Review and apply it below.",
+                        Rebuilt="Your AniList entry changed, so this update was rebuilt from it. Review the new change below before applying.",
+                    }
+                    if older then tips[state]="Applying the update for episode "..newest[prop.media].." records this episode too." end
+                    row(label.."   "..state,nil,false,nil,"Proposal "..prop.key).tip=tips[state] or ({
                         ["Needs a refresh"]="AniList could not be read when this update was proposed. Play the episode or select Check now to read your list again.",
                         Conflict="Your AniList progress changed after this update was proposed. Review it against the current list before applying.",
                         Unconfirmed="An earlier attempt to send this update could not be confirmed. Play the episode to review it against your list.",
@@ -1270,8 +1306,16 @@ return function(make_sheet, send, options, help)
                     if prop.media==snap.match and snap.allowed and (prop.offline or state=="Conflict") then
                         row("Check now",function() service("read"); refresh() end,false,nil,"Check pending "..prop.key)
                     end
-                    if current and not prop.offline then review_update(prop) end
-                    row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
+                    if current and not prop.offline then review_update(prop)
+                    elseif not older and review.state=="done" then
+                        row("Remove "..label,function() service("skip",{proposal=prop.key}) end,false,nil,"Remove "..prop.key)
+                    elseif not older and checked and review.state=="ready" then review_update(prop,true)
+                    elseif not older and not (checked and review.state=="conflict") then
+                        row("Review now",function() service("check-pending",{proposal=prop.key}); refresh() end,false,nil,"Review "..prop.key)
+                    end
+                    if review.state~="done" then
+                        row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
+                    end
                 end
             end
             if #(snap.pending or {})==0 then row("No pending updates") end

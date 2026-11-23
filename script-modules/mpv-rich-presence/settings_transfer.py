@@ -44,6 +44,7 @@ INTRODUCED = {**{("scrobbling", key): (2, 4) for key in ("enabled", "now_playing
               ("save-scopes", "Last.fm"): (2, 4)}
 INTRODUCED |= {("appearance", key): (2, 6) for key in ("stream_channel", "stream_title", "stream_link")}
 INTRODUCED |= {("recognition-options", "fingerprint"): (2, 6)}
+INTRODUCED |= {("anilist-updates", key): (2, 7) for key in ("step", "already_done", "changed")}
 INTRODUCED |= {("appearance", key): (2, 3) for key in
               "button_slots large_image small_image large_image_url large_text_template small_text_template while_paused pause_timeout".split()}
 
@@ -83,10 +84,12 @@ FIELDS = {
     "match": {"id": integer(1, 2**31-1), "offset": integer(-9999, 9999),
               "episode": integer(1, 9999), "not_anime": bool},
     "watch-retention": {"months": integer(0, 120)},
+    "anilist-updates": {"step": bool, "already_done": {"label", "remove"}, "changed": {"rebuild", "conflict"}},
     "save-scopes": {page: {"global", "folder", "file"} for page in
                     ("Appearance", "Recognition & folders", "Privacy & windows", "AniList", "Last.fm")},
 }
-GLOBAL_ONLY = {"panel", "panel-theme", "folder-filter", "recognition-options", "watch-retention", "save-scopes"}
+GLOBAL_ONLY = {"panel", "panel-theme", "folder-filter", "recognition-options", "watch-retention", "save-scopes",
+               "anilist-updates"}
 PIN_FIELDS = {
     **dict.fromkeys("provider kind name title match year numbering genre cover still link imdb artist album notation episode_title stream_title recording group_title release_date show_type".split(), str),
     "id": lambda value: type(value) in (int, str), "live": bool,

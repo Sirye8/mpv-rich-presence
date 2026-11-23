@@ -140,7 +140,7 @@ namespace mpvrp
     }
 
     static constexpr auto saved_records = " FROM records WHERE (category IN "
-        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options','save-scopes','watch-retention','scrobbling','lastfm-queue','lastfm-history') "
+        "('appearance','exclude','privacy','match','tracking','sources','provider','panel','panel-theme','folder-filter','cache','tv-rule','recognition-options','save-scopes','watch-retention','anilist-updates','scrobbling','lastfm-queue','lastfm-history') "
         "OR (category IN ('watch','pending','history','skipped','entry') AND substr(scope,1,instr(scope,'/')-1)="
         "CAST((SELECT json_extract(value,'$.id') FROM records WHERE category='account' AND scope='current') AS TEXT))) ";
 
@@ -214,7 +214,8 @@ namespace mpvrp
                 {"base",std::move(base)},{"revision",proposal.value("revision",std::string{})},
                 {"status",proposal.value("status",json(nullptr))},{"repeat_count",proposal.value("repeat_count",json(nullptr))},
                 {"start_rewatch",proposal.value("start_rewatch",false)},
-                {"needs_review",proposal.value("needs_review",false)}});
+                {"needs_review",proposal.value("needs_review",false)},
+                {"review",proposal.value("review",json(nullptr))}});
         }
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
         return rows;

@@ -669,6 +669,9 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
         if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
             val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
         if (category == "watch-retention" && !(key=="months" && val.is_number_integer() && val>=0 && val<=120)) return false;
+        if (category == "anilist-updates" && !((key=="step" && val.is_boolean()) ||
+            (key=="already_done" && (val=="label" || val=="remove")) ||
+            (key=="changed" && (val=="rebuild" || val=="conflict")))) return false;
         if (category == "save-scopes" && !((key=="Appearance" || key=="Recognition & folders" || key=="Privacy & windows" || key=="AniList" || key=="Last.fm") &&
             (val=="global" || val=="folder" || val=="file"))) return false;
         if (category=="panel-theme")
@@ -979,7 +982,7 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
             {
                 const auto category = req.at("category").get<std::string>();
                 if (category == "panel" || category == "recognition-options" || category=="panel-theme" ||
-                    category=="watch-retention" || category=="save-scopes")
+                    category=="watch-retention" || category=="save-scopes" || category=="anilist-updates")
                 {
                     if (action == "clear")
                     {
@@ -2024,6 +2027,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"appearance", state.appearance}, {"privacy", state.privacy}, {"tracking", state.tracking},
                 {"save_scopes",state.store ? state.store->get("save-scopes","global") : nlohmann::json::object()},
                 {"watch_retention",state.store ? state.store->get("watch-retention","global") : nlohmann::json::object()},
+                {"anilist_updates",state.store ? state.store->get("anilist-updates","global") : nlohmann::json::object()},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
                 {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"version",MPVRP_VERSION},
                 {"hidden_seconds",std::max<int64_t>(0,chrono::duration_cast<chrono::seconds>(

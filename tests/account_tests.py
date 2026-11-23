@@ -25,7 +25,7 @@ from account import (
     read_entry,
     save_progress,
 )
-from backend import Worker, failure_message
+from backend import Worker, failure_message, step_targets
 from providers import candidate_by_id, details, fingerprint_match, music_art, music_art_sources, musicbrainz_match, video_query
 from settings_transfer import export_settings, import_settings
 
@@ -1405,6 +1405,7 @@ class TrackingTests(unittest.TestCase):
         self.worker.db.execute(
             "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
         )
+        self.worker.step_pause = 0
         self.account = dict(id=1, generation="fixture")
         self.worker.put("account", "current", self.account)
         self.player = dict(
@@ -1611,7 +1612,119 @@ class TrackingTests(unittest.TestCase):
                 expected = {"id": 9 if status else 195604, "progress": 4}
                 if not keep:
                     expected["status"] = "CURRENT"
-                self.assertEqual(self.mutations, [expected])
+                if status:
+                    self.assertEqual(self.mutations, [expected])
+                else:
+                    # A new entry starts at 0, so episodes 1 to 4 are recorded one at a time.
+                    self.assertEqual(self.mutations, [{"id": 195604, "progress": 1, "status": "CURRENT"}] +
+                                     [{"id": 10, "progress": n, "status": "CURRENT"} for n in (2, 3, 4)])
+
+    def pending_job(self, op, proposal, **fields):
+        self.worker.handle(dict(op=op, account=self.account["generation"], session=self.player["session"],
+                                proposal=proposal["key"], **fields))
+        return self.worker.get("pending", proposal["key"])
+
+    def stop_playback(self):
+        self.player.update(session=7, media=1, episode="", watch_episode=False, active=False)
+        self.publish()
+
+    def test_steps_cover_every_skipped_episode(self):
+        self.assertEqual(step_targets(1, 4, None), [2, 3, 4])
+        self.assertEqual(step_targets(3, 4, "CURRENT"), [4])
+        self.assertEqual(step_targets(12, 1, "REPEATING"), [1])
+        self.assertEqual(step_targets(5, 3, None), [3])
+
+    def test_a_gap_is_sent_one_episode_at_a_time(self):
+        self.player["tracking"]["mode"] = "ask"
+        self.row["progress"] = 1
+        proposal = self.propose()
+        self.accept(proposal)
+        self.assertEqual(self.mutations, [{"id": 9, "progress": n} for n in (2, 3, 4)])
+        for episode in (2, 3, 4):
+            self.assertEqual(self.worker.get("history", f"1/195604/{episode}/0")["progress"], episode)
+        self.assertFalse(self.worker.get("pending", proposal["key"]))
+        self.assertFalse(self.worker.get("write-intent", "1/195604"))
+
+    def test_stepping_can_be_turned_off(self):
+        self.worker.put("anilist-updates", "global", {"step": False})
+        self.player["tracking"]["mode"] = "ask"
+        self.row["progress"] = 1
+        self.accept(self.propose())
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+
+    def test_a_failed_step_keeps_the_rest_for_review(self):
+        self.player["tracking"]["mode"] = "ask"
+        self.row["progress"] = 1
+        proposal = self.propose()
+        transport = self.transport
+
+        def fail_third(query, args, token):
+            if query.startswith("mutation") and args["progress"] == 3:
+                raise AccountError("AniList rate limit reached. Try again later.")
+            return transport(query, args, token)
+
+        self.transport = fail_third
+        with self.assertRaisesRegex(AccountError, "AniList is at episode 2"):
+            self.accept(proposal)
+        left = self.worker.get("pending", proposal["key"])
+        self.assertEqual((left["before"], left["base"]["progress"], left["episode"]), (2, 2, 4))
+        self.assertNotEqual(left["revision"], proposal["revision"])
+
+    def test_a_pending_update_applies_from_the_list_without_playback(self):
+        self.player["tracking"]["mode"] = "ask"
+        proposal = self.propose()
+        self.assertEqual((proposal["total"], proposal["rewatch"]), (12, False))
+        self.stop_playback()
+        with self.assertRaisesRegex(AccountError, "Review now"):
+            self.pending_job("apply-pending", proposal, revision=proposal["revision"])
+        checked = self.pending_job("check-pending", proposal)
+        self.assertEqual(checked["review"]["state"], "ready")
+        self.pending_job("apply-pending", checked, revision=checked["revision"])
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}])
+        self.assertFalse(self.worker.get("pending", proposal["key"]))
+        self.assertEqual(self.worker.get("history", proposal["key"])["progress"], 4)
+
+    def test_an_update_already_on_anilist_is_labelled_or_removed(self):
+        self.player["tracking"]["mode"] = "ask"
+        proposal = self.propose()
+        self.stop_playback()
+        self.row.update(progress=6, updatedAt=5)
+        checked = self.pending_job("check-pending", proposal)
+        self.assertEqual(checked["review"], dict(checked["review"], state="done", progress=6))
+        with self.assertRaisesRegex(AccountError, "Review now"):
+            self.pending_job("apply-pending", checked, revision=checked["revision"])
+        self.worker.put("anilist-updates", "global", {"already_done": "remove"})
+        self.assertFalse(self.pending_job("check-pending", checked))
+        self.assertEqual(self.mutations, [])
+
+    def test_a_changed_entry_is_rebuilt_or_marked_as_a_conflict(self):
+        self.player["tracking"]["mode"] = "ask"
+        proposal = self.propose()
+        self.stop_playback()
+        self.row.update(progress=2, status="PAUSED", updatedAt=5)
+        self.worker.put("anilist-updates", "global", {"changed": "conflict"})
+        conflict = self.pending_job("check-pending", proposal)
+        self.assertEqual(conflict["review"]["state"], "conflict")
+        self.worker.put("anilist-updates", "global", {})
+        rebuilt = self.pending_job("check-pending", conflict)
+        self.assertEqual((rebuilt["before"], rebuilt["status"], rebuilt["review"]["rebuilt"]), (2, "CURRENT", True))
+        self.pending_job("apply-pending", rebuilt, revision=rebuilt["revision"])
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 3, "status": "CURRENT"},
+                                          {"id": 9, "progress": 4, "status": "CURRENT"}])
+
+    def test_only_the_newest_update_for_an_anime_applies(self):
+        self.player["tracking"]["mode"] = "ask"
+        older = self.propose()
+        self.player.update(session=2, episode="5")
+        newer = self.propose()
+        self.stop_playback()
+        older = self.pending_job("check-pending", older)
+        with self.assertRaisesRegex(AccountError, "newest"):
+            self.pending_job("apply-pending", older, revision=older["revision"])
+        newer = self.pending_job("check-pending", newer)
+        self.pending_job("apply-pending", newer, revision=newer["revision"])
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 4}, {"id": 9, "progress": 5}])
+        self.assertFalse(self.worker.get("pending", older["key"]))
 
     def test_progress_gap_and_remote_change_both_require_review(self):
         self.row["progress"] = 1

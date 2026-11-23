@@ -65,10 +65,46 @@ def tv_rule_matches(rule, titles, year, provider_id, provider):
     return all(title in rule["titles"] for title in titles) if titles else rule.get("dedicated", False)
 
 
+def plan_update(entry, episode, total, rewatch, phase, kept_status):
+    """How an AniList entry should change when an episode is recorded, or None when it already has it."""
+    remote_status = entry["status"]
+    start_rewatch = bool(remote_status == "COMPLETED" and episode == 1 and rewatch and phase == "ready")
+    if entry["progress"] >= episode and not start_rewatch:
+        return None
+    status_accepted = entry["id"] and remote_status is not None and remote_status == kept_status
+    active_status = remote_status in ("CURRENT", "REPEATING") or status_accepted
+    resume_rewatch = remote_status in ("PAUSED", "DROPPED") and phase == "active"
+    rewatching = start_rewatch or resume_rewatch or remote_status == "REPEATING"
+    finish_rewatch = rewatching and episode == total
+    status = None
+    if finish_rewatch:
+        status = "COMPLETED"
+    elif start_rewatch or resume_rewatch:
+        status = "REPEATING"
+    elif not active_status:
+        status = "CURRENT"
+    return dict(
+        status=status,
+        repeat_count=min(entry["repeat"] + 1, 1000) if finish_rewatch else None,
+        start_rewatch=start_rewatch,
+        can_advance=bool(entry["id"] and active_status and not start_rewatch and not resume_rewatch
+                         and entry["progress"] + 1 == episode),
+    )
+
+
+def step_targets(before, target, status):
+    """Episodes to send one at a time, so AniList activity lists each watched episode."""
+    if before is None or target <= before + 1 or (status == "REPEATING" and target == 1):
+        return [target]
+    return list(range(before + 1, target + 1))
+
+
 JOB_LABELS = {
     "read": "Reading your AniList entry",
     "write": "Updating AniList",
     "accept": "Updating AniList",
+    "check-pending": "Checking the update on AniList",
+    "apply-pending": "Updating AniList",
     "skip": "Skipping the update",
     "rearm": "Starting a new viewing cycle",
     "connect": "Connecting AniList",
@@ -146,6 +182,7 @@ class Worker:
         self.music_attempts = 0
         self.video_attempts = 0
         self.expected = None
+        self.step_pause = 4.0
         self.data_generation = None
         self.cache_generation = None
         self.lookup_pool = None
@@ -534,35 +571,17 @@ class Worker:
             if unresolved := self.get("write-intent", scope):
                 self.recover_write(account, scope, unresolved)
                 raise AccountError("Previous update was confirmed. Refresh before making another change.")
-            expected = dict(progress=job["target"])
-            if job.get("status") is not None:
-                expected["status"] = job["status"]
-            if job.get("repeat_count") is not None:
-                expected["repeat"] = job["repeat_count"]
             intent = dict(
                 account=account, player={k: p[k] for k in ("media", "session", "episode", "tracking", "total")},
                 key=proposal["key"] if proposal else self.cycle(account, p),
-                window=self.window, base=base, expected=expected,
+                window=self.window,
                 keep_status=bool(proposal and job.get("keep_status") and
-                                 expected.get("status", base["status"]) == base["status"]),
+                                 (job.get("status") or base["status"]) == base["status"]),
             )
-
-            def record_intent():
-                with self.transaction():
-                    self.put("write-intent", scope, intent)
-
-            options = {"status": job.get("status")}
-            if job.get("repeat_count") is not None:
-                options["repeat_count"] = job["repeat_count"]
             try:
-                result = save_progress(
-                    token,
-                    base,
-                    job["target"],
-                    p["total"],
-                    validate,
-                    before_send=record_intent,
-                    **options,
+                result, intent = self.save_steps(
+                    token, scope, base, job["target"], p["total"], job.get("status"),
+                    job.get("repeat_count"), intent, validate, proposal,
                 )
             except EntryChanged as exc:
                 with self.transaction():
@@ -579,6 +598,194 @@ class Worker:
                 last_write=time.time(),
                 message="Progress saved.",
             )
+
+    def owned_pending(self, account, key):
+        prop = self.get("pending", key)
+        if (
+            not prop
+            or not account.get("id")
+            or not key.startswith(str(account["id"]) + "/")
+            or prop.get("account") != account["generation"]
+        ):
+            raise AccountError("This proposal has expired.")
+        return prop
+
+    def check_pending(self, account, key):
+        """Read AniList for a pending update so it can be applied without playing the episode."""
+        prop = self.owned_pending(account, key)
+        options = self.update_options()
+        entry = read_entry(self.credential(account), account["id"], prop["media"])
+        scope = f"{account['id']}/{prop['media']}"
+        now = time.time()
+        with serialized(self.directory), self.transaction():
+            if self.get("pending", key) != prop:
+                raise AccountError("This proposal has expired.")
+            if self.get("write-intent", scope):
+                raise AccountError("Another update for this anime is still being confirmed. Try again shortly.")
+            base = prop.get("base") or {}
+            plan = plan_update(entry, prop["episode"], prop.get("total", 0), prop.get("rewatch"),
+                               self.get("cycle", scope).get("phase"),
+                               self.get("entry", scope).get("keep_tracking_status"))
+            offline = prop.get("offline") or "status" not in prop
+            same = not offline and all(base.get(field) == entry[field] for field in ("id", "progress", "status", "repeat"))
+            if not plan:
+                if options["already_done"] == "remove":
+                    self.put("history", key, {"progress": entry["progress"]})
+                    self.delete("pending", key)
+                    message = f"AniList already has episode {entry['progress']}. Removed the update."
+                else:
+                    self.put("pending", key, dict(prop, review=dict(state="done", progress=entry["progress"], checked=now)))
+                    message = f"AniList already has episode {entry['progress']}."
+            elif same:
+                # Only unrelated fields such as the score changed, so the update itself still holds.
+                self.put("pending", key, dict(prop, base=dict(entry), review=dict(state="ready", checked=now)))
+                message = "Checked. Review and apply the update."
+            else:
+                # A changed rewatch count or a different entry needs playback to set up the viewing cycle again.
+                rebuildable = (
+                    "total" in prop and "rewatch" in prop
+                    and base.get("id") in (None, entry["id"])
+                    and base.get("repeat", entry["repeat"]) == entry["repeat"]
+                    and not plan["start_rewatch"] and not prop.get("start_rewatch")
+                )
+                if rebuildable and (offline or options["changed"] == "rebuild"):
+                    self.put("pending", key, dict(
+                        prop, base=dict(entry), before=entry["progress"], status=plan["status"],
+                        repeat_count=plan["repeat_count"], start_rewatch=False, offline=False,
+                        revision=secrets.token_hex(8), needs_review=True,
+                        review=dict(state="ready", rebuilt=not offline, checked=now)))
+                    message = ("Checked. Review and apply the update." if offline else
+                               "AniList changed. The update was rebuilt from your current entry.")
+                else:
+                    self.put("pending", key, dict(prop, review=dict(
+                        state="conflict", progress=entry["progress"], status=entry["status"], checked=now)))
+                    message = "AniList changed since this update was proposed. Play the episode or skip the update."
+        self.reply(message=message)
+
+    def apply_pending(self, account, job):
+        """Apply a checked pending update from the list, one episode at a time when stepping is on."""
+        key = job["proposal"]
+        prop = self.owned_pending(account, key)
+        review = prop.get("review") or {}
+        if (
+            job.get("revision") != prop.get("revision")
+            or review.get("state") != "ready"
+            or time.time() - review.get("checked", 0) > 600
+            or prop.get("offline")
+            or "status" not in prop
+        ):
+            raise AccountError("Select Review now to check this update against AniList first.")
+        newer = self.db.execute(
+            "SELECT 1 FROM records WHERE category='pending' AND scope LIKE ? AND scope<>? "
+            "AND json_extract(value,'$.account')=? AND json_extract(value,'$.episode')>?",
+            (f"{account['id']}/{prop['media']}/%", key, account["generation"], prop["episode"]),
+        ).fetchone()
+        if newer:
+            raise AccountError("Apply the newest update for this anime instead. It covers this episode.")
+        keep_status = bool(job.get("keep_status"))
+        if keep_status and (not prop["base"].get("id") or prop["status"] != "CURRENT"):
+            raise AccountError("Choose the proposed status to apply this update.")
+        scope = f"{account['id']}/{prop['media']}"
+
+        def validate():
+            with self.transaction():
+                if (
+                    self.get("account", "current").get("generation") != account["generation"]
+                    or self.get("pending", key) != prop
+                    or self.get("skipped", key)
+                    or self.get("history", key)
+                ):
+                    raise AccountError("This proposal has expired.")
+
+        token = self.credential(account)
+        with serialized(self.directory):
+            validate()
+            if unresolved := self.get("write-intent", scope):
+                self.recover_write(account, scope, unresolved)
+                raise AccountError("Previous update was confirmed. Refresh before making another change.")
+            status = None if keep_status else prop["status"]
+            intent = dict(
+                account=account, key=key, window=self.window,
+                player=dict(media=prop["media"], session=None, episode=str(prop["episode"]),
+                            tracking={"rewatch": prop.get("rewatch", False)}, total=prop.get("total", 0)),
+                keep_status=keep_status,
+            )
+            try:
+                result, intent = self.save_steps(
+                    token, scope, dict(prop["base"]), prop["episode"], prop.get("total", 0), status,
+                    prop.get("repeat_count"), intent, validate, prop,
+                )
+            except EntryChanged as exc:
+                with self.transaction():
+                    if self.get("pending", key) == prop:
+                        self.put("pending", key, dict(prop, review=dict(
+                            state="conflict", progress=exc.entry["progress"], status=exc.entry["status"],
+                            checked=time.time())))
+                raise
+            self.finish_write(scope, intent, result)
+        self.reply(message="Progress saved.")
+
+    def update_options(self):
+        saved = self.get("anilist-updates", "global")
+        return dict(
+            step=saved.get("step", True) is not False,
+            already_done="remove" if saved.get("already_done") == "remove" else "label",
+            changed="conflict" if saved.get("changed") == "conflict" else "rebuild",
+        )
+
+    def save_steps(self, token, scope, base, target, total, status, repeat_count, intent, validate, proposal):
+        """Send progress one episode at a time when Step through episodes is on, and return the final entry."""
+        targets = step_targets(base.get("progress"), target, status) if self.update_options()["step"] else [target]
+        cycle = self.get("cycle", scope).get("number", 0)
+        for step in targets:
+            final = step == target
+            # Intermediate episodes keep the entry active. A final Completed status or rewatch count waits for the last one.
+            step_status = status if final or status in ("CURRENT", "REPEATING") else None
+            expected = dict(progress=step)
+            if step_status is not None:
+                expected["status"] = step_status
+            if final and repeat_count is not None:
+                expected["repeat"] = repeat_count
+            step_intent = dict(intent, base=base, expected=expected,
+                               key=intent["key"] if final else f"{scope}/{step}/{cycle}")
+
+            def record_intent(step_intent=step_intent):
+                with self.transaction():
+                    self.put("write-intent", scope, step_intent)
+
+            options = {"status": step_status}
+            if final and repeat_count is not None:
+                options["repeat_count"] = repeat_count
+            try:
+                result = save_progress(token, base, step, total, validate, before_send=record_intent, **options)
+            except AccountError as exc:
+                if step == targets[0] or isinstance(exc, (EntryChanged, SessionExpired)):
+                    raise
+                # Earlier episodes are saved. Keep the update for the rest, based on the new progress.
+                with self.transaction():
+                    if proposal and self.get("pending", proposal["key"]) == proposal:
+                        self.put("pending", proposal["key"], dict(
+                            proposal, base=dict(base), before=base["progress"],
+                            revision=secrets.token_hex(8), needs_review=True, review=None))
+                raise AccountError(f"AniList is at episode {base['progress']}. {exc} "
+                                   "Review the update again to send the rest.") from None
+            if final:
+                return result, step_intent
+            with self.transaction():
+                self.delete("write-intent", scope)
+                previous = self.get("entry", scope)
+                cached = dict(result, checked=time.time())
+                if previous.get("keep_tracking_status") is not None and previous["keep_tracking_status"] == result["status"]:
+                    cached["keep_tracking_status"] = result["status"]
+                self.put("entry", scope, cached)
+                self.put("history", step_intent["key"], {"progress": step, "time": time.time(),
+                                                         "window": self.window})
+                self.delete("pending", step_intent["key"])
+            base = dict(result, session=base.get("session"))
+            self.reply(message=f"Updating AniList · episode {step} of {target}")
+            # Two requests per episode stay well inside AniList's per-minute limit.
+            time.sleep(self.step_pause)
+        raise AccountError("No progress to send.")
 
     def throttle(self, provider):
         with self.transaction():
@@ -851,6 +1058,10 @@ class Worker:
             self.reply(proposal=None, message="New viewing cycle started.")
         elif op == "write":
             self.write(job)
+        elif op == "check-pending":
+            self.check_pending(account, job["proposal"])
+        elif op == "apply-pending":
+            self.apply_pending(account, job)
         elif op in ("accept", "skip"):
             key = job["proposal"]
             prop = self.get("pending", key)
@@ -1974,6 +2185,8 @@ class Worker:
                                 activity=now,
                                 account=a["generation"],
                                 base={"session": p["session"]},
+                                total=p["total"] or 0,
+                                rewatch=bool(p["tracking"].get("rewatch")),
                             ),
                         )
             if ready:
@@ -2008,47 +2221,16 @@ class Worker:
             ):
                 return
 
-            remote_status = entry["status"]
             cycle = self.get("cycle", f"{a['id']}/{p['media']}")
-            start_rewatch = (
-                remote_status == "COMPLETED"
-                and episode == 1
-                and current["tracking"].get("rewatch")
-                and cycle.get("phase") == "ready"
-            )
-            if entry["progress"] >= episode and not start_rewatch:
+            plan = plan_update(entry, episode, current["total"], current["tracking"].get("rewatch"),
+                               cycle.get("phase"), cached_entry.get("keep_tracking_status"))
+            if not plan:
                 self.put("history", key, {"progress": entry["progress"]})
                 self.delete("pending", key)
                 return
-
-            status_accepted = (
-                entry["id"]
-                and remote_status is not None
-                and remote_status == cached_entry.get("keep_tracking_status")
-            )
-            active_status = remote_status in ("CURRENT", "REPEATING") or status_accepted
-            resume_rewatch = (
-                remote_status in ("PAUSED", "DROPPED")
-                and cycle.get("phase") == "active"
-            )
-            rewatching = start_rewatch or resume_rewatch or remote_status == "REPEATING"
-            finish_rewatch = rewatching and episode == current["total"]
-            status = None
-            if finish_rewatch:
-                status = "COMPLETED"
-            elif start_rewatch or resume_rewatch:
-                status = "REPEATING"
-            elif not active_status:
-                status = "CURRENT"
-            repeat_count = min(entry["repeat"] + 1, 1000) if finish_rewatch else None
+            status, repeat_count = plan["status"], plan["repeat_count"]
+            start_rewatch, can_advance = plan["start_rewatch"], plan["can_advance"]
             base = dict(entry, session=p["session"])
-            can_advance = (
-                entry["id"]
-                and active_status
-                and not start_rewatch
-                and not resume_rewatch
-                and entry["progress"] + 1 == episode
-            )
             prop = dict(
                 revision=secrets.token_hex(8),
                 title=p.get("match_title", ""),
@@ -2064,6 +2246,9 @@ class Worker:
                 start_rewatch=start_rewatch,
                 needs_review=mode == "ask" or not can_advance,
                 activity=now,
+                # Kept so the update can be checked again from Pending updates without playback.
+                total=current["total"] or 0,
+                rewatch=bool(current["tracking"].get("rewatch")),
             )
             self.put("pending", key, prop)
 

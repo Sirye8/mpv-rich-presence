@@ -519,6 +519,52 @@ local function verify()
     find("AniList","Finish rewatch").run()
     assert(confirmation():find("Rewatching → Completed",1,true) and confirmation():find("Rewatches 2 → 3",1,true))
 
+    -- Pending updates can be checked and applied from the list without playing the episode.
+    snapshot.episode="7"
+    snapshot.watch_episode=false
+    proposal.status=nil
+    proposal.repeat_count=nil
+    proposal.before=0
+    proposal.revision="r1"
+    proposal.base={id=9,status="CURRENT",progress=0}
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Play to apply",1,true))
+    find("Pending updates","Review "..proposal.key).run()
+    assert(job.op=="check-pending" and job.proposal==proposal.key,"Review now did not check the update")
+    proposal.review={state="ready",checked=os.time()}
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Checked",1,true))
+    find("Pending updates","Update episode 2").run()
+    assert(confirmation():find("Records episodes 1 to 2 one at a time",1,true),"Stepping was not explained")
+    find("Confirm","Confirm").run()
+    assert(job.op=="apply-pending" and job.revision=="r1","A checked update was not applied from the list")
+    snapshot.anilist_updates={step=false}
+    menu.update(snapshot)
+    find("Pending updates","Update episode 2").run()
+    assert(confirmation():find("Episode gap",1,true))
+    find("AniList","Step through episodes").run()
+    assert(applied.category=="anilist-updates" and applied.values.step==true and applied.scope=="global")
+    snapshot.anilist_updates=nil
+    proposal.review={state="conflict",checked=os.time()}
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Changed on AniList",1,true))
+    assert(not find("Pending updates","Review "..proposal.key),"A conflict offered Review now again")
+    proposal.review={state="done",progress=3,checked=os.time()}
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Already on AniList",1,true))
+    find("Pending updates","Remove "..proposal.key).run()
+    assert(job.op=="skip" and job.proposal==proposal.key)
+    proposal.review=nil
+    local later={key="5/42/3/0",title="Fixture anime",media=42,episode=3,before=0,base={id=9,status="CURRENT"}}
+    snapshot.pending={proposal,later}
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Covered by episode 3",1,true))
+    assert(not find("Pending updates","Review "..proposal.key) and find("Pending updates","Review "..later.key))
+    find("Pending updates","If already on AniList").run()
+    snapshot.pending={proposal}
+    snapshot.episode="2"
+    snapshot.watch_episode=true
+
     menu.page="AniList"
     snapshot.tracking={mode="off"}
     snapshot.episode_watch={elapsed=0}
