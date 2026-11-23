@@ -14,8 +14,9 @@ return function(make_sheet, send, options, help)
         glass={background="030405",accent="AFD9FF",opacity=87,blur=true,strength=6},
         midnight={background="0B1323",accent="A7D0FF",opacity=82,blur=true,strength=8},
         graphite={background="101113",accent="C9DEDA",opacity=100,blur=false,strength=6},
+        contrast={background="000000",accent="FFE14D",opacity=100,blur=false,strength=6,contrast=true},
     }
-    local theme_names={glass="Dark glass",midnight="Midnight",graphite="Graphite",custom="Custom"}
+    local theme_names={glass="Dark glass",midnight="Midnight",graphite="Graphite",contrast="High contrast",custom="Custom"}
     local blur_names={classic="Classic",gaussian="Gaussian",box="Box"}
     local layout_names={all="All media",anime="Anime",audio="Audio",video="Video",movie="Movies",
         tv="TV",recording="Music recordings",stream="Streams"}
@@ -200,7 +201,7 @@ return function(make_sheet, send, options, help)
     local cached_theme, theme_key
     local function panel_theme()
         local config=theme_settings()
-        local key=table.concat({config.background,config.accent,config.opacity,tostring(config.blur),config.strength,config.method or "classic"},":")
+        local key=table.concat({config.background,config.accent,config.opacity,tostring(config.blur),config.strength,config.method or "classic",tostring(config.contrast)},":")
         if key==theme_key then return cached_theme end
         local function bgr(rgb) return rgb:sub(5,6)..rgb:sub(3,4)..rgb:sub(1,2) end
         local function tint(first,second,fraction)
@@ -224,6 +225,12 @@ return function(make_sheet, send, options, help)
             accent=bgr(accent),ink=light(accent) and "1B1008" or "F7F3EF",rim="ABA096",
             switch=tint(background,accent,.42),hint=tint(background,"202835",.65),
             opacity=config.opacity/100,blur=config.blur,strength=config.strength,method=config.method}
+        if config.contrast then
+            -- Pure white text, light secondary text and a strong focus fill for low vision.
+            cached_theme.text,cached_theme.muted,cached_theme.rim="FFFFFF","EBEBEB","FFFFFF"
+            cached_theme.row,cached_theme.hover,cached_theme.focus=bgr("1C1C1C"),tint(background,accent,.30),tint(background,accent,.48)
+            cached_theme.ink="000000"
+        end
         return cached_theme
     end
     local function request(action,fields)
@@ -781,7 +788,7 @@ return function(make_sheet, send, options, help)
                 save(config,true)
             end
             local preset=config.preset or "glass"
-            choice("Panel theme preset",{"glass","midnight","graphite","custom"},preset,function(v)
+            choice("Panel theme preset",{"glass","midnight","graphite","contrast","custom"},preset,function(v)
                 if v=="custom" then config.preset=v; save(config,true)
                 else save({preset=v},true) end
             end,theme_names[preset],theme_names)

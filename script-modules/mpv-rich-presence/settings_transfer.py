@@ -70,7 +70,7 @@ FIELDS = {
     },
     "panel": {"position": POSITIONS, "yield_idle_pin": bool},
     "panel-theme": {
-        "preset": {"glass", "midnight", "graphite", "custom"},
+        "preset": {"glass", "midnight", "graphite", "contrast", "custom"},
         **dict.fromkeys(("background", "accent"), lambda value: isinstance(value, str) and bool(re.fullmatch("[0-9a-fA-F]{6}", value))),
         "opacity": integer(40, 100), "strength": integer(2, 32), "blur": bool,
         "method": {"classic", "gaussian", "box"},
@@ -149,6 +149,7 @@ def split_fields(category, value, legacy):
                 unused[key] = item
         elif key in rules and (item is not None or category=="provider") and supports(rules[key], item) and not (
             (legacy and INTRODUCED.get((category, key), (0, 0)) > legacy)
+            or (legacy and legacy < (2, 6) and category == "panel-theme" and key == "preset" and item == "contrast")
             or (legacy == (2, 0) and (category in ("watch-retention", "save-scopes") or
                 (category == "panel-theme" and (key == "method" or (key == "strength" and item > 12)))))
         ):

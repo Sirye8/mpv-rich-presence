@@ -210,6 +210,7 @@ local choices = {
         glass="Dark glass. Near-black, 87 percent opacity, with a soft live blur.",
         midnight="Midnight. Deep blue with more visible video and a stronger blur.",
         graphite="Graphite. An opaque charcoal panel with blur disabled.",
+        contrast="High contrast. An opaque black panel with white text, a bright yellow accent and no blur.",
         custom="Custom. Keep the current colors, opacity and blur settings. Editing any theme field also selects this preset.",
     },
     ["Background blur"]={

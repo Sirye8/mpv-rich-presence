@@ -673,7 +673,7 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
         if (category=="panel-theme")
         {
             static const std::regex rgb("[0-9A-Fa-f]{6}");
-            if (!((key=="preset" && (val=="glass" || val=="midnight" || val=="graphite" || val=="custom")) ||
+            if (!((key=="preset" && (val=="glass" || val=="midnight" || val=="graphite" || val=="contrast" || val=="custom")) ||
                 ((key=="background" || key=="accent") && val.is_string() &&
                     std::regex_match(val.get_ref<const std::string&>(),rgb)) ||
                 (key=="opacity" && val.is_number_integer() && val>=40 && val<=100) ||

@@ -1762,6 +1762,17 @@ class TrackingTests(unittest.TestCase):
         with self.worker.transaction():
             self.assertEqual(import_settings(self.worker.db,str(bad)),(0,["appearance.button_slots"]))
 
+    def test_high_contrast_theme_waits_for_older_targets(self):
+        self.worker.put("panel-theme","global",{"preset":"contrast"})
+        path=self.worker.directory/"theme.json"
+        export_settings(self.worker.db,str(path))
+        for target,expected in (((2,5),["panel-theme.preset"]),((2,6),[])):
+            older=Worker(":memory:","older",{})
+            self.addCleanup(older.db.close)
+            older.db.execute("CREATE TABLE records(category TEXT, scope TEXT, value TEXT, PRIMARY KEY(category,scope))")
+            with older.transaction():
+                self.assertEqual(import_settings(older.db,str(path),target=target)[1],expected)
+
     def test_invalid_settings_import_rolls_back(self):
         path=self.worker.directory/"malformed.json"
         path.write_text(json.dumps({"format":"mpv-rich-presence-settings","version":1,"records":[

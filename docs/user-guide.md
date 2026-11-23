@@ -55,7 +55,7 @@ Appearance groups the card settings into **Text**, **Artwork & badge**, **Button
 
 Select a text field to edit it in place. Use **Done** or Enter to accept, **Cancel** or Escape to discard, and Ctrl+V to paste where mpv provides clipboard access. Terminal-only mpv uses its text prompt.
 
-Open **Appearance → Panel look** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), or **Graphite** (opaque charcoal). Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
+Open **Appearance → Panel look** to choose **Dark glass** (the near-black default), **Midnight** (translucent deep blue), **Graphite** (opaque charcoal), or **High contrast** (opaque black with white text and a yellow accent). With `menu_animations=no`, hovering a row whose text is cut off shows the full text. Editing a color, opacity, or blur setting selects **Custom**. Theme edits save immediately and apply across mpv windows. **Restore panel theme defaults** returns to Dark glass and uses the conf's blur setting.
 
 Dark glass uses 87% opacity. On `vo=gpu-next`, the video blurs only beneath the open panel. Other video outputs keep translucency. Custom settings accept six-digit RGB colors, 40 to 100% opacity, and a blur strength from 2 to 32 pixels. **Classic** keeps the original filter. **Gaussian** softens busy footage more evenly and takes more GPU samples. **Box** uses fewer samples and can leave more defined edges at high strengths. Turn off **Background blur** in the panel, or set `panel_blur=no` to change the startup default.
 
