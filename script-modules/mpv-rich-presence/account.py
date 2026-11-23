@@ -27,6 +27,14 @@ class SessionExpired(AccountError):
     pass
 
 
+class RateLimited(AccountError):
+    """AniList refused the request for now. A refused mutation was not applied."""
+
+    def __init__(self, retry_after=None):
+        super().__init__("AniList rate limit reached. Try again later.")
+        self.retry_after = retry_after
+
+
 class EntryChanged(AccountError):
     def __init__(self, entry):
         super().__init__("AniList progress changed. Refresh and review the edit.")
@@ -58,7 +66,8 @@ def graphql(query, variables, token=None):
         if exc.code == 401:
             raise SessionExpired("Session expired. Reconnect to AniList.") from None
         if exc.code == 429:
-            raise AccountError("AniList rate limit reached. Try again later.") from None
+            wait = (exc.headers or {}).get("Retry-After", "")
+            raise RateLimited(int(wait) if wait.isdigit() else None) from None
         raise AccountError("AniList request failed (HTTP %d)." % exc.code) from None
     except (ValueError, OSError):
         raise AccountError("AniList is offline or timed out.") from None
@@ -149,7 +158,7 @@ def save_progress(
     before_send()
     try:
         row = dict(call(query, variables, token)["SaveMediaListEntry"])
-    except SessionExpired:
+    except (SessionExpired, RateLimited):
         raise
     except AccountError:
         # Never repeat a mutation whose acknowledgement was lost.

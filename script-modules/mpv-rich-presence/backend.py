@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from account import (
     AccountError,
     EntryChanged,
+    RateLimited,
     SessionExpired,
     Vault,
     authorize,
@@ -737,6 +738,33 @@ class Worker:
         """Send progress one episode at a time when Step through episodes is on, and return the final entry."""
         targets = step_targets(base.get("progress"), target, status) if self.update_options()["step"] else [target]
         cycle = self.get("cycle", scope).get("number", 0)
+        title = (proposal or {}).get("title") or self.get("player", self.window).get("match_title", "")
+        with self.transaction():
+            self.delete("step-cancel", self.window)
+            if len(targets) > 1:
+                self.put("step-progress", self.window, dict(title=title, media=base["media"], first=targets[0],
+                                                            step=targets[0], target=target, started=time.time()))
+        try:
+            return self.send_steps(token, scope, base, target, total, status, repeat_count, intent, validate,
+                                   proposal, targets, cycle)
+        finally:
+            with self.transaction():
+                self.delete("step-progress", self.window)
+                self.delete("step-cancel", self.window)
+
+    def wait_step(self, seconds):
+        """Wait between steps, stopping early when Cancel is selected."""
+        end = time.monotonic() + seconds
+        while True:
+            if self.get("step-cancel", self.window):
+                raise AccountError("Stopped by Cancel.")
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(left, 0.25))
+
+    def send_steps(self, token, scope, base, target, total, status, repeat_count, intent, validate,
+                   proposal, targets, cycle):
         for step in targets:
             final = step == target
             # Intermediate episodes keep the entry active. A final Completed status or rewatch count waits for the last one.
@@ -757,7 +785,28 @@ class Worker:
             if final and repeat_count is not None:
                 options["repeat_count"] = repeat_count
             try:
-                result = save_progress(token, base, step, total, validate, before_send=record_intent, **options)
+                if step != targets[0]:
+                    # Two requests per episode stay well inside AniList's per-minute limit.
+                    self.wait_step(self.step_pause)
+                for attempt in range(3):
+                    try:
+                        result = save_progress(token, base, step, total, validate, before_send=record_intent, **options)
+                        break
+                    except RateLimited as exc:
+                        # A refused request changed nothing, so wait as AniList asks and send it again.
+                        if attempt == 2:
+                            raise
+                        wait = min(max(exc.retry_after or 60, 1), 60)
+                        self.reply(message=f"AniList asked to slow down. Continuing in {wait} s.")
+                        self.wait_step(wait)
+                        if self.get("write-intent", scope):
+                            # The limit may have hit the check after a sent update. Confirm it before sending again.
+                            entry = read_entry(token, base["viewer"], base["media"])
+                            with self.transaction():
+                                self.delete("write-intent", scope)
+                            if entry["id"] and all(entry[f] == v for f, v in expected.items()):
+                                result = entry
+                                break
             except AccountError as exc:
                 if step == targets[0] or isinstance(exc, (EntryChanged, SessionExpired)):
                     raise
@@ -782,9 +831,10 @@ class Worker:
                                                          "window": self.window})
                 self.delete("pending", step_intent["key"])
             base = dict(result, session=base.get("session"))
-            self.reply(message=f"Updating AniList · episode {step} of {target}")
-            # Two requests per episode stay well inside AniList's per-minute limit.
-            time.sleep(self.step_pause)
+            with self.transaction():
+                progress = self.get("step-progress", self.window)
+                if progress:
+                    self.put("step-progress", self.window, dict(progress, step=step + 1))
         raise AccountError("No progress to send.")
 
     def throttle(self, provider):

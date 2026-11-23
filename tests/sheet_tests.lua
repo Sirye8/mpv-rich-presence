@@ -564,6 +564,19 @@ local function verify()
     snapshot.pending={proposal}
     snapshot.episode="2"
     snapshot.watch_episode=true
+    -- Step progress, Cancel and the pending count on Now playing.
+    snapshot.step_progress={title="Fixture anime",step=3,target=5}
+    menu.update(snapshot)
+    assert(find("Now playing","Updating AniList").label=="Updating AniList   Fixture anime · episode 3 of 5")
+    assert(find("AniList","Updating AniList"))
+    find("Now playing","Cancel update").run()
+    assert(last_request.action=="cancel_steps","Cancel did not stop the steps")
+    snapshot.step_progress=nil
+    menu.update(snapshot)
+    assert(not find("Now playing","Cancel update"))
+    assert(find("Now playing","Pending updates").label=="Pending updates   1")
+    find("Now playing","Pending updates").run()
+    assert(menu.page=="Pending updates","Pending count did not open the list")
 
     menu.page="AniList"
     snapshot.tracking={mode="off"}

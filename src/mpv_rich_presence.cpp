@@ -829,6 +829,11 @@ static void handle_client_message(rich_presence_state& state, mpv_event_client_m
                 state.store->put("lastfm-cancel",state.instance_id,{{"time",static_cast<double>(std::time(nullptr))}});
                 return;
             }
+            if (action=="cancel_steps" && state.store)
+            {
+                state.store->put("step-cancel",state.instance_id,{{"time",static_cast<double>(std::time(nullptr))}});
+                return;
+            }
             if (action=="cancel_connect" && state.store)
             {
                 state.store->put("signin-cancel",state.instance_id,{{"id",req.value("id",std::string{})}});
@@ -2034,6 +2039,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"save_scopes",state.store ? state.store->get("save-scopes","global") : nlohmann::json::object()},
                 {"watch_retention",state.store ? state.store->get("watch-retention","global") : nlohmann::json::object()},
                 {"anilist_updates",state.store ? state.store->get("anilist-updates","global") : nlohmann::json::object()},
+                {"step_progress",state.store ? state.store->get("step-progress",state.instance_id) : nlohmann::json::object()},
                 {"private", state.private_session}, {"hidden_file", state.hidden_file}, {"correction", state.correction},
                 {"hidden_until_exit",state.hidden_until_exit},{"track_allowed",watch},{"version",MPVRP_VERSION},
                 {"hidden_seconds",std::max<int64_t>(0,chrono::duration_cast<chrono::seconds>(

@@ -359,6 +359,14 @@ return function(make_sheet, send, options, help)
             item.toggle=v
             item.tip=help(label,page,true,{"On","Off"},value)
         end
+        -- Shown while progress is sent one episode at a time, with a way to stop after the current one.
+        local function step_rows()
+            local steps=snap.step_progress or {}
+            if not steps.target then return end
+            local name=(steps.title and steps.title~="") and steps.title.." · " or ""
+            row("Updating AniList   "..name.."episode "..steps.step.." of "..steps.target,nil,false,nil,"Updating AniList")
+            row("Cancel update",function() request("cancel_steps"); refresh() end)
+        end
         local function scope_row()
             choice("Save for",{"global","folder","file"},scope,function(v)
                 scopes[page]=v
@@ -467,6 +475,7 @@ return function(make_sheet, send, options, help)
             row("Cancel",ui.back)
         elseif page=="Now playing" then
             row("Discord   "..(snap.reason or "Waiting for mpv"))
+            step_rows()
             row("Activity   "..(card.type or "").." "..(card.name or ""))
             if card.details and card.details~=card.name then row("Details   "..card.details) end
             if card.state and card.state~=card.name then row("State   "..card.state) end
@@ -477,6 +486,9 @@ return function(make_sheet, send, options, help)
                 elseif snap.watch_episode and tonumber(snap.episode) and tonumber(snap.episode)>entry.progress then
                     row("Mark current episode watched",function() submit_progress(tonumber(snap.episode)) end)
                 end
+            end
+            if #(snap.pending or {})>0 then
+                row("Pending updates   "..#snap.pending,function() pick("AniList"); ui.push("Pending updates") end)
             end
             local lastfm_now=snap.lastfm or {}
             local listen_now=lastfm_now.listen or {}
@@ -1136,6 +1148,7 @@ return function(make_sheet, send, options, help)
                 row("Refresh list entry",function() service("read") end)
                 row("Disconnect",function() ui.push("Disconnect account") end)
             end
+            step_rows()
             row("Anime   "..((snap.match or 0)>0 and (snap.title or "Unknown title") or "No match"))
             row("Playing episode   "..(snap.episode and snap.episode~="" and snap.episode or "Unknown"))
             local watch=snap.episode_watch or {}

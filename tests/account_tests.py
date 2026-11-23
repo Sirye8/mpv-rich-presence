@@ -20,6 +20,7 @@ sys.path.insert(
 )
 from account import (
     AccountError,
+    RateLimited,
     ClientSecretRequired,
     callback_server,
     read_entry,
@@ -1669,6 +1670,44 @@ class TrackingTests(unittest.TestCase):
         left = self.worker.get("pending", proposal["key"])
         self.assertEqual((left["before"], left["base"]["progress"], left["episode"]), (2, 2, 4))
         self.assertNotEqual(left["revision"], proposal["revision"])
+
+    def test_a_rate_limited_step_waits_and_continues(self):
+        self.player["tracking"]["mode"] = "ask"
+        self.row["progress"] = 1
+        proposal = self.propose()
+        transport, refused = self.transport, []
+
+        def limit_once(query, args, token):
+            if query.startswith("mutation") and args["progress"] == 3 and not refused:
+                refused.append(True)
+                raise RateLimited(1)
+            return transport(query, args, token)
+
+        self.transport = limit_once
+        self.accept(proposal)
+        self.assertEqual(refused, [True])
+        self.assertEqual(self.mutations, [{"id": 9, "progress": n} for n in (2, 3, 4)])
+        self.assertFalse(self.worker.get("write-intent", "1/195604"))
+
+    def test_cancel_stops_between_steps_and_keeps_the_rest(self):
+        self.player["tracking"]["mode"] = "ask"
+        self.row["progress"] = 1
+        proposal = self.propose()
+        transport, seen = self.transport, []
+
+        def cancel_after_first(query, args, token):
+            if query.startswith("mutation"):
+                seen.append(self.worker.get("step-progress", "window"))
+                self.worker.put("step-cancel", "window", {"time": 1})
+            return transport(query, args, token)
+
+        self.transport = cancel_after_first
+        with self.assertRaisesRegex(AccountError, "AniList is at episode 2. Stopped by Cancel"):
+            self.accept(proposal)
+        self.assertEqual((seen[0]["step"], seen[0]["target"]), (2, 4))
+        self.assertEqual(self.mutations, [{"id": 9, "progress": 2}])
+        self.assertEqual(self.worker.get("pending", proposal["key"])["before"], 2)
+        self.assertFalse(self.worker.get("step-progress", "window") or self.worker.get("step-cancel", "window"))
 
     def test_a_pending_update_applies_from_the_list_without_playback(self):
         self.player["tracking"]["mode"] = "ask"

@@ -103,7 +103,7 @@ PIN_FIELDS = {
 }
 TV_FIELDS = {"provider": {"tmdb-tv", "tvmaze"}, "hit": dict, "year": str, "dedicated": bool, "titles": strings}
 CATEGORIES = frozenset(FIELDS) | {"provider", "tv-rule"}
-PRIVATE_CATEGORIES = frozenset("account watch cycle history pending skipped entry cache rate job player auto response pin write-intent flight generation watch-completed watch-sweep watch-finished watch-eof cancel refresh search-request signin-request signin-cancel listen lastfm-account lastfm-queue lastfm-history lastfm-status lastfm-track lastfm-cancel service-status".split())
+PRIVATE_CATEGORIES = frozenset("account watch cycle history pending skipped entry cache rate job player auto response pin write-intent flight generation watch-completed watch-sweep watch-finished watch-eof cancel refresh search-request signin-request signin-cancel listen lastfm-account lastfm-queue lastfm-history lastfm-status lastfm-track lastfm-cancel service-status step-progress step-cancel".split())
 
 
 def data_path(path):
