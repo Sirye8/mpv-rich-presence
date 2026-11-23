@@ -346,6 +346,21 @@ return function(make_sheet, send, options, help)
         if (answer.context and answer.context~=snap.session) or (answer.generation and answer.generation~=account.generation) then answer={} end
         local entry=answer.entry
         local valid_entry=entry and entry.media==snap.match and entry.viewer==account.id and entry.session==snap.session
+        -- Now playing and AniList share one progress draft and the same confirmation.
+        local function bump(n) if not edit_base then edit_base=copy(entry) end; edit=math.max(0,(edit or entry.progress)+n); if snap.total>0 then edit=math.min(edit,snap.total) end end
+        local function submit_progress(target)
+            local message=account.name.." · "..snap.title.." · "..entry.progress.." → "..target
+            if list_status then message=message.." · set status to "..list_status end
+            if not entry.id then message="Create entry · "..message end
+            if target>entry.progress+1 then message="Episode gap · "..message end
+            local base=edit_base or copy(entry)
+            confirm(message,function() service("write",{base=base,target=target,status=list_status}); list_status=nil; edit=nil; edit_base=nil end)
+        end
+        local function progress_row(page)
+            local draft_row=row("Episodes watched   "..tostring(edit or entry.progress),nil,false,bump)
+            draft_row.stepper,draft_row.disabled=true,false
+            draft_row.tip=help(draft_row.label,page,true)
+        end
         local card=snap.card or {}
         local tracking=snap.tracking or {}
         local function review_update(prop)
@@ -415,6 +430,21 @@ return function(make_sheet, send, options, help)
             row("Activity   "..(card.type or "").." "..(card.name or ""))
             if card.details and card.details~=card.name then row("Details   "..card.details) end
             if card.state and card.state~=card.name then row("State   "..card.state) end
+            if snap.match and snap.match>0 and valid_entry and account.name then
+                progress_row(page)
+                if edit and edit~=entry.progress then
+                    row("Apply progress",function() submit_progress(edit) end)
+                elseif snap.watch_episode and tonumber(snap.episode) and tonumber(snap.episode)>entry.progress then
+                    row("Mark current episode watched",function() submit_progress(tonumber(snap.episode)) end)
+                end
+            end
+            local lastfm_now=snap.lastfm or {}
+            local listen_now=lastfm_now.listen or {}
+            if listen_now.track and (listen_now.identity or {})[1]==snap.session then
+                local progress=listen_now.scrobbled and "Scrobbled" or listen_now.point and
+                    (duration(listen_now.credited or 0).." of "..duration(listen_now.point)) or "Too short to scrobble"
+                row("Last.fm   "..progress,function() pick("Last.fm") end,false,nil,"Last.fm status")
+            end
             row("Why this match?",function() ui.push("Match evidence") end)
             if snap.fingerprint_available then
                 row("Fingerprint this file",function() start_search("acoustid") end)
@@ -444,6 +474,11 @@ return function(make_sheet, send, options, help)
                 row(loved and "Remove love on Last.fm" or "Love on Last.fm",function()
                     service(loved and "lastfm-unlove" or "lastfm-love"); refresh()
                 end,false,nil,"Love on Last.fm")
+            end
+            if (tonumber(snap.hidden_seconds) or 0)>0 then
+                row("Resume Discord now",function() request("hide_minutes",{minutes=0}); refresh() end)
+            elseif not snap.hidden_until_exit then
+                row("Hide Discord for 1 hour",function() request("hide_minutes",{minutes=60}); refresh() end)
             end
             row(snap.hidden_file and "Share this file" or "Hide this file",function() request("hide_file"); refresh() end)
             row("Use this window for Discord",function() request("claim"); refresh() end)
@@ -1074,18 +1109,8 @@ return function(make_sheet, send, options, help)
             if valid_entry then
                 row(entry.id and ("List entry   "..entry.progress.." / "..(snap.total>0 and snap.total or "?")..
                     " · "..(list_status_labels[entry.status] or entry.status or "?")..(answer.offline and " · Offline" or "")) or "List status   Not on your list")
-                local function bump(n) if not edit_base then edit_base=copy(entry) end; edit=math.max(0,(edit or entry.progress)+n); if snap.total>0 then edit=math.min(edit,snap.total) end end
-                local draft_row=row("Episodes watched   "..tostring(edit or entry.progress),nil,false,bump)
-                draft_row.stepper,draft_row.disabled=true,false
-                draft_row.tip=help(draft_row.label,page,true)
-                local function submit(target)
-                    local message=account.name.." · "..snap.title.." · "..entry.progress.." → "..target
-                    if list_status then message=message.." · set status to "..list_status end
-                    if not entry.id then message="Create entry · "..message end
-                    if target>entry.progress+1 then message="Episode gap · "..message end
-                    local base=edit_base or copy(entry)
-                    confirm(message,function() service("write",{base=base,target=target,status=list_status}); list_status=nil; edit=nil; edit_base=nil end)
-                end
+                progress_row(page)
+                local submit=submit_progress
                 choice("Status on Apply",{"unchanged","CURRENT","COMPLETED","REPEATING","PAUSED","DROPPED","PLANNING"},
                     list_status or "unchanged",function(v) list_status=v~="unchanged" and v or nil end,
                     nil,list_status_labels)
@@ -1348,7 +1373,7 @@ return function(make_sheet, send, options, help)
         for page,scope in pairs(scopes) do
             if (snap.save_scopes or {})[page]==scope then scopes[page]=nil end
         end
-        if ui.page=="AniList" and value.allowed and (value.match or 0)>0 and (value.account or {}).id and last_read~=key then
+        if (ui.page=="AniList" or ui.page=="Now playing") and value.allowed and (value.match or 0)>0 and (value.account or {}).id and last_read~=key then
             last_read=key; service("read",{quiet=true})
         end
         ui.draw()

@@ -422,6 +422,14 @@ return function(model)
         mp.unobserve_property(ui.draw)
         mp.unobserve_property(ui.mouse_moved)
         unbind()
+        -- Reopening the panel returns to the section that was open.
+        ui.resume=nil
+        local sections={}
+        for _,name in ipairs(model.sections or {}) do sections[name]=true end
+        for i=#ui.stack+1,1,-1 do
+            local name=i>#ui.stack and ui.page or ui.stack[i]
+            if sections[name] then ui.resume=name; break end
+        end
         ui.stack,ui.hits,pressed,editing,drag,dropdown = {},{},nil,nil,nil,nil
         model.closed()
         tweens={}
@@ -1086,6 +1094,7 @@ return function(model)
         ui.old_term=mp.get_property("term-status-msg","")
         ui.terminal,last_terminal=false,nil
         ui.open=true
+        page=page or ui.resume
         ui.page=page or "Menu"
         ui.stack=page and {"Menu"} or {}
         motion.page,motion.focus=1,1

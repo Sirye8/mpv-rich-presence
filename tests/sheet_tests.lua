@@ -287,6 +287,13 @@ local function verify()
     clock=clock+.2
     animation().fn()
 
+    local sections_ui=sheet({sections={"Alpha","Beta"},animate=false,rows=function() return rows end,refresh=function() end,closed=function() end})
+    sections_ui.show("Beta")
+    sections_ui.push("Beta details")
+    sections_ui.close()
+    sections_ui.show()
+    assert(sections_ui.page=="Beta","Reopening did not return to the last section")
+    sections_ui.close()
     local model,job,opened,applied,choices,select_choice,typed,last_request
     local menu=dofile(modules.."/menu.lua")(function(value)
         model=value
@@ -353,6 +360,9 @@ local function verify()
     find("Last.fm","Love on Last.fm").run()
     assert(job.op=="lastfm-love")
     assert(find("Now playing","Love on Last.fm"),"Now playing did not offer Love on Last.fm")
+    assert(find("Now playing","Last.fm status").label=="Last.fm   01:05 of 01:40","Now playing lacks the scrobble progress")
+    find("Now playing","Hide Discord for 1 hour").run()
+    assert(last_request.action=="hide_minutes" and last_request.minutes==60)
     find("Last.fm","Queued scrobbles").run()
     assert(job.op=="lastfm-send")
     find("Last.fm","Scrobbling").run()
@@ -509,6 +519,14 @@ local function verify()
     assert(find("AniList","Episodes watched").label=="Episodes watched   4")
     draft.adjust(-1)
     assert(find("AniList","Episodes watched").label=="Episodes watched   3")
+    -- Now playing edits the same progress draft and confirms the same update.
+    local hub=find("Now playing","Episodes watched")
+    assert(hub and hub.stepper,"Now playing lacks the progress stepper")
+    hub.adjust(2)
+    assert(find("AniList","Episodes watched").label=="Episodes watched   5","Now playing and AniList drafts differ")
+    find("Now playing","Apply progress").run()
+    hub.adjust(-2)
+    assert(not find("Now playing","Apply progress"),"Apply progress stayed without an edit")
     snapshot.folder_filter={mode="whitelist",passes=false,current="D:/clips",folders={"D:/anime"}}
     snapshot.record_counts={cache=8,watch=2,match=1}
     snapshot.records={{category="cache",scope="v3:auto:wikidata/abcdef",label="v3:auto:wikidata",expires=1}}
