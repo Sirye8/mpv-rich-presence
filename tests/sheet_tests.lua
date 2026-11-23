@@ -343,6 +343,18 @@ local function verify()
         service={message="Progress refreshed.",elapsed=999}}
     menu.update(initial)
     assert(job and job.op=="read" and job.quiet,"Automatic list read sent a normal notification")
+    -- The drawn Discord card follows the outgoing card on Now playing and the card editing pages only.
+    assert(not model.card_preview("Now playing"),"A card without a name was drawn")
+    initial.card.name="Fixture anime"
+    initial.card.type="Watching"
+    initial.card.large_image="https://s4.anilist.co/cover.png"
+    initial.card.small_image="mpv"
+    menu.update(initial)
+    local drawn=model.card_preview("Now playing")
+    assert(drawn.header=="Watching" and drawn.name=="Fixture anime" and drawn.details=="Fixture details" and drawn["end"]==2)
+    assert(drawn.large_image=="https://s4.anilist.co/cover.png" and not drawn.small_image,"A non-https badge was fetched")
+    assert(model.card_preview("Appearance") and model.card_preview("Button 2") and not model.card_preview("AniList"))
+    initial.card.name=nil
     local function find(page,id)
         for _,row in ipairs(model.rows(page)) do if row.id==id then return row end end
     end

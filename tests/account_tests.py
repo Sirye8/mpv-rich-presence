@@ -2058,6 +2058,19 @@ class TrackingTests(unittest.TestCase):
 
 
 
+class PanelImageTests(unittest.TestCase):
+    def test_avatars_stay_on_account_hosts_and_card_images_need_https(self):
+        import avatar
+        for address, mode in (("https://example.com/a.png", "avatar"), ("http://example.com/a.png", "cover"),
+                              ("file:///C:/a.png", "badge"), ("https:///a.png", "cover")):
+            with self.subTest(address=address, mode=mode), self.assertRaisesRegex(ValueError, "host"):
+                avatar.main(address, "1", mode)
+        redirect = avatar.HttpsRedirect()
+        request = urllib.request.Request("https://coverartarchive.org/release/x/front")
+        self.assertIsNone(redirect.redirect_request(request, None, 307, "", {}, "http://archive.org/x.jpg"))
+        self.assertIsNotNone(redirect.redirect_request(request, None, 307, "", {}, "https://archive.org/x.jpg"))
+
+
 class ServiceStatusTests(unittest.TestCase):
     def setUp(self):
         import service_status

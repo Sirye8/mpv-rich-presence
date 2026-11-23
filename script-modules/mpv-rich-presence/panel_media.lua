@@ -43,59 +43,76 @@ return function(options, modules, interpreter, utils)
         if active then geometry=key end
     end
 
-    local avatar_url,pixels,job,displayed,rectangle,retry_after
-    local avatar_file
-    local avatar_id=58
-    local function remove_avatar()
-        if displayed then mp.commandv("overlay-remove",avatar_id); displayed=nil end
-    end
-    local function show_avatar()
-        if not rectangle or not pixels then return end
-        local key=table.concat(rectangle,":")
-        if displayed==key then return end
-        local x,y,size=unpack(rectangle)
-        if mp.commandv("overlay-add",avatar_id,x,y,avatar_file,0,"bgra",64,64,256,size,size) then
-            displayed=key
+    -- One overlay slot per image. Each decodes its URL once through avatar.py and is redrawn when it moves.
+    local slots={}
+    local function image_slot(id,mode,decode,allowed)
+        local s={file=utils.join_path(os.getenv("TEMP") or os.getenv("TMPDIR") or "/tmp",
+            "mpv-rich-presence-"..mode.."-"..mp.get_property("pid")..".bgra")}
+        slots[#slots+1]=s
+        local function remove()
+            if s.displayed then mp.commandv("overlay-remove",id); s.displayed=nil end
         end
-    end
-    options.avatar=function(url,x,y,size)
-        if type(url)~="string" or not (url:match("^https://s4%.anilist%.co/")
-            or url:match("^https://lastfm%-img%.freetls%.fastly%.net/")) then
-            rectangle=nil
-            remove_avatar()
-            return
+        s.remove=remove
+        local function show()
+            if not s.rect or not s.pixels then return end
+            local key=table.concat(s.rect,":")
+            if s.displayed==key then return end
+            local x,y,size=s.rect[1],s.rect[2],s.rect[3]
+            if mp.commandv("overlay-add",id,x,y,s.file,0,"bgra",decode,decode,decode*4,size,size) then
+                s.displayed=key
+            end
         end
-        rectangle={x,y,size}
-        if url==avatar_url and (pixels or job or mp.get_time()<(retry_after or 0)) then
-            show_avatar()
-            return
-        end
-        if job then mp.abort_async_command(job) end
-        remove_avatar()
-        avatar_url,pixels=url,nil
-        job=mp.command_native_async({name="subprocess",args={interpreter,"-I",
-            utils.join_path(modules,"avatar.py"),url,mp.get_property("pid")},
-            playback_only=false,capture_stdout=true,capture_stderr=true},function(_,result)
-            if avatar_url~=url then return end
-            job=nil
-            retry_after=mp.get_time()+60
-            if not result or result.status~=0 or #(result.stdout or "")~=16384 then
-                mp.msg.verbose("Could not load the account avatar. The panel can retry in 60 seconds.")
+        local function load(url,x,y,size)
+            if type(url)~="string" or not allowed(url) or not x then
+                s.rect=nil
+                remove()
                 return
             end
-            avatar_file=avatar_file or utils.join_path(os.getenv("TEMP") or os.getenv("TMPDIR") or "/tmp",
-                "mpv-rich-presence-avatar-"..mp.get_property("pid")..".bgra")
-            local file=io.open(avatar_file,"wb")
-            if not file then return end
-            local written=file:write(result.stdout)
-            file:close()
-            if written then pixels=true; show_avatar() end
-        end)
+            s.rect={x,y,size}
+            if url==s.url and (s.pixels or s.job or mp.get_time()<(s.retry or 0)) then
+                show()
+                return
+            end
+            if s.job then mp.abort_async_command(s.job) end
+            remove()
+            s.url,s.pixels=url,nil
+            s.job=mp.command_native_async({name="subprocess",args={interpreter,"-I",
+                utils.join_path(modules,"avatar.py"),url,mp.get_property("pid"),mode},
+                playback_only=false,capture_stdout=true,capture_stderr=true},function(_,result)
+                if s.url~=url then return end
+                s.job=nil
+                s.retry=mp.get_time()+60
+                if not result or result.status~=0 or #(result.stdout or "")~=decode*decode*4 then
+                    mp.msg.verbose("Could not load a panel image. The panel can retry in 60 seconds.")
+                    return
+                end
+                local file=io.open(s.file,"wb")
+                if not file then return end
+                local written=file:write(result.stdout)
+                file:close()
+                if written then s.pixels=true; show() end
+            end)
+        end
+        return load,function(url) return url==s.url and s.pixels==true end
     end
+
+    options.avatar=image_slot(58,"avatar",64,function(url)
+        return url:match("^https://s4%.anilist%.co/") or url:match("^https://lastfm%-img%.freetls%.fastly%.net/")
+    end)
+    local public=function(url) return url:match("^https://[%w%.%-]+/") ~= nil end
+    local large,large_ready=image_slot(59,"cover",128,public)
+    local small,small_ready=image_slot(60,"badge",64,public)
+    options.card_images={large_ready=large_ready,small_ready=small_ready,
+        show=function(large_url,x,y,size,small_url,bx,by,bsize)
+            large(large_url,x,y,size)
+            small(small_url,bx,by,bsize)
+        end}
     mp.register_event("shutdown",function()
-        if job then mp.abort_async_command(job) end
-        remove_avatar()
-        if avatar_file then os.remove(avatar_file) end
+        for _,s in ipairs(slots) do
+            if s.job then mp.abort_async_command(s.job) end
+            s.remove()
+            os.remove(s.file)
+        end
         stop_blur()
     end)
 end

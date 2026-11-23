@@ -81,6 +81,73 @@ local function label(ass, x,y, text, size, color, opacity, align, bold, clip)
         "&\\alpha&H"..alpha(opacity).."&"..(clip or "").."}"..text)
 end
 
+-- Discord's dark activity card, in ASS colours (BBGGRR).
+local discord={card="282423",image="47413F",text="F5F3F2",muted="C1BAB5",button="58504E",bar="FFFFFF"}
+local card_width,card_image=304,84
+
+local function clock(ms)
+    local seconds=math.max(0,math.floor(ms/1000))
+    local h,m,s=math.floor(seconds/3600),math.floor(seconds%3600/60),seconds%60
+    return h>0 and string.format("%d:%02d:%02d",h,m,s) or string.format("%02d:%02d",m,s)
+end
+
+-- Lines beside the artwork: name, details, state, then the timer.
+local function card_lines(card)
+    local lines={}
+    if card.name then lines[#lines+1]={card.name,15,discord.text,true} end
+    if card.details and card.details~=card.name then lines[#lines+1]={card.details,13,discord.text} end
+    if card.state and card.state~=card.name then lines[#lines+1]={card.state,13,discord.muted} end
+    return lines
+end
+
+local function card_height(card)
+    local text=#card_lines(card)*19+((card.start or card["end"]) and 24 or 0)
+    return 40+math.max(card_image,text)+14+#(card.buttons or {})*38
+end
+
+local function draw_card(ass,place,opacity)
+    local card,x,y,w=place.card,place.x,place.y,place.w
+    box(ass,x+1,y+4,x+w+1,y+place.h+5,"000000",.35*opacity,12)
+    box(ass,x,y,x+w,y+place.h,discord.card,.98*opacity,12)
+    label(ass,x+14,y+12,escape(card.header),12,discord.muted,opacity,nil,true)
+    local image_x,image_y=x+14,y+38
+    if not place.large_loaded then box(ass,image_x,image_y,image_x+card_image,image_y+card_image,discord.image,opacity,8) end
+    if card.small_image then
+        -- The badge sits on a ring cut into the artwork corner, as on Discord.
+        box(ass,place.badge_x-3,place.badge_y-3,place.badge_x+place.badge+3,place.badge_y+place.badge+3,discord.card,opacity,(place.badge+6)/2)
+        if not place.small_loaded then
+            box(ass,place.badge_x,place.badge_y,place.badge_x+place.badge,place.badge_y+place.badge,discord.image,opacity,place.badge/2)
+        end
+    end
+    local text_x=image_x+card_image+12
+    local space=x+w-14-text_x
+    local line_y=image_y
+    for _,line in ipairs(card_lines(card)) do
+        label(ass,text_x,line_y,fit(line[1],line[2],space),line[2],line[3],opacity,nil,line[4])
+        line_y=line_y+19
+    end
+    local now=os.time()*1000
+    if card.start and card["end"] and card["end"]>card.start then
+        local done=math.max(0,math.min(1,(now-card.start)/(card["end"]-card.start)))
+        local bar_y=line_y+12
+        label(ass,text_x,bar_y-6,clock(now-card.start),11,discord.muted,opacity,7)
+        label(ass,x+w-14,bar_y-6,clock(card["end"]-card.start),11,discord.muted,opacity,9)
+        local bar_left,bar_right=text_x+40,x+w-54
+        box(ass,bar_left,bar_y,bar_right,bar_y+4,discord.button,opacity,2)
+        box(ass,bar_left,bar_y,bar_left+math.max(4,(bar_right-bar_left)*done),bar_y+4,discord.bar,opacity,2)
+    elseif card.start then
+        label(ass,text_x,line_y+2,clock(now-card.start).." elapsed",13,discord.muted,opacity)
+    elseif card["end"] then
+        label(ass,text_x,line_y+2,clock(card["end"]-now).." left",13,discord.muted,opacity)
+    end
+    local button_y=y+40+math.max(card_image,place.text_height)+14
+    for _,button in ipairs(card.buttons or {}) do
+        box(ass,x+14,button_y,x+w-14,button_y+32,discord.button,opacity,6)
+        label(ass,x+w/2,button_y+16,fit(button.label,14,w-40),14,discord.text,opacity,5,true)
+        button_y=button_y+38
+    end
+end
+
 return function(model)
     local theme=default_theme
     local row_step, row_height = model.compact and 28 or 32, model.compact and 25 or 29
@@ -241,6 +308,22 @@ return function(model)
             local scroll = layout.scroll
             box(ass,right-6,scroll.start,right-2,scroll.finish,theme.rim,.25*shell,2)
             box(ass,right-6,scroll.first,right-2,scroll.last,theme.accent,(drag and 1 or .8)*shell,2)
+        end
+        local place=layout.card
+        if place then
+            place.large_loaded=model.card_images and model.card_images.large_ready and model.card_images.large_ready(place.card.large_image)
+            place.small_loaded=model.card_images and model.card_images.small_ready and model.card_images.small_ready(place.card.small_image)
+            draw_card(ass,place,shell)
+        end
+        if model.card_images then
+            -- Images are drawn above the panel, so they are hidden while a tooltip or dropdown covers the card.
+            local covered=not place or shell<1 or (tooltip and tooltip.x<place.x+place.w and tooltip.x+tooltip.width>place.x)
+                or (layout.dropdown and layout.dropdown.r>place.x and layout.dropdown.x<place.x+place.w)
+            local function at(value) return math.floor(value*scale) end
+            model.card_images.show(not covered and place and place.card.large_image,
+                place and at(place.x+14),place and at(place.y+38),place and at(card_image),
+                not covered and place and place.card.small_image,
+                place and at(place.badge_x),place and at(place.badge_y),place and at(place.badge))
         end
         if layout.dropdown then
             local popup=layout.dropdown
@@ -754,6 +837,20 @@ return function(model)
         if popup then
             bounds[2]=math.min(bounds[2],math.floor(popup.y*scale))
             bounds[4]=math.max(bounds[4],math.ceil(popup.b*scale))
+        end
+        local preview=not model.compact and not editing and model.card_preview and model.card_preview(ui.page)
+        if preview then
+            local h=card_height(preview)
+            local space_right=layout.w-layout.right>=card_width+24
+            local space_left=layout.left>=card_width+24
+            if (space_right or space_left) and h<=layout.max_bottom-layout.min_top then
+                local x=space_right and layout.right+12 or layout.left-card_width-12
+                local y=math.max(layout.min_top,math.min(top,layout.max_bottom-h))
+                local badge=math.floor(card_image*.34)
+                layout.card={card=preview,x=x,y=y,w=card_width,h=h,badge=badge,
+                    text_height=#card_lines(preview)*19+((preview.start or preview["end"]) and 24 or 0),
+                    badge_x=x+14+card_image-badge+4,badge_y=y+38+card_image-badge+4}
+            end
         end
         if model.avatar then
             local avatar

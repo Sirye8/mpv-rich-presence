@@ -1487,7 +1487,16 @@ return function(make_sheet, send, options, help)
         return list
     end
     ui=make_sheet({sections=sections,rows=rows,refresh=refresh,notice=notice,scale=options.menu_scale,
-        avatar=options.avatar,backdrop=options.backdrop,theme=panel_theme,
+        avatar=options.avatar,backdrop=options.backdrop,theme=panel_theme,card_images=options.card_images,
+        -- Now playing and the card editing pages show the outgoing card, including unapplied edits.
+        card_preview=function(page)
+            local card=snap.card or {}
+            if not card.name or not (page=="Now playing" or draft_pages[page]) then return nil end
+            return {header=card.type or "Playing",name=card.name,details=card.details,state=card.state,
+                start=tonumber(card.start),["end"]=tonumber(card["end"]),buttons=card.buttons,
+                large_image=type(card.large_image)=="string" and card.large_image:match("^https://") and card.large_image or nil,
+                small_image=type(card.small_image)=="string" and card.small_image:match("^https://") and card.small_image or nil}
+        end,
         animate=options.menu_animations,help=help,changed=clear_notice,position=function()
             return snap.panel_position and snap.panel_position~="" and snap.panel_position or config_position
         end,
