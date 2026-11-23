@@ -121,6 +121,17 @@ class ScrobbleQueueTests(unittest.TestCase):
         self.play(50, active=True, scrobble=False)
         self.assertLess(self.worker.get("listen", "window").get("credited", 0), 2)
 
+    def test_pause_without_repeated_samples_keeps_the_same_listening_time(self):
+        self.play(1)
+        self.play(20)
+        # Only the sample at the moment of pausing arrives, then the resumed samples.
+        self.base = dict(self.base, time=self.base["time"] + 1, wall=self.base["wall"] + 1000, active=False)
+        self.worker.put("player", "window", self.base)
+        self.worker.listen()
+        self.base = dict(self.base, time=self.base["time"] + 60, wall=self.base["wall"] + 60000)
+        self.play(10, active=True)
+        self.assertAlmostEqual(self.worker.get("listen", "window")["credited"], 29, delta=1)
+
     def test_recognized_names_replace_tags_without_losing_time(self):
         self.play(1)
         self.play(20)

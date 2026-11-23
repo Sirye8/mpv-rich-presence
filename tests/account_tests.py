@@ -1195,6 +1195,36 @@ class AccountTests(unittest.TestCase):
                         child.wait()
                 w.db.close()
 
+    def test_pause_without_repeated_samples_credits_the_same_time(self):
+        # v2.5 stops rewriting the sample every second while paused. The helper must credit
+        # exactly what it credited when paused samples kept arriving.
+        def credited(paused_samples):
+            with tempfile.TemporaryDirectory() as temp:
+                worker = Worker(Path(temp) / "db", "a", {})
+                try:
+                    worker.db.execute(
+                        "CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))"
+                    )
+                    worker.put("account", "current", dict(id=1, generation="test"))
+                    now = time.time()
+                    timeline = [(t, t, True, 0) for t in range(6)]
+                    timeline += [(t, 5, False, 1) for t in (range(6, 66) if paused_samples else [6])]
+                    timeline += [(66, 5, True, 2)] + [(t, t - 61, True, 2) for t in range(67, 71)]
+                    for t, pos, active, seek in timeline:
+                        worker.put("player", "a", dict(
+                            session=1, media=2, episode="7", watch_episode=True, active=active,
+                            time=now + t, wall=(now + t) * 1000, pos=pos, speed=1, seek=seek,
+                            tracking={"mode": "manual"}))
+                        with patch("backend.time.time", return_value=now + t):
+                            worker.sample()
+                    return worker.get("watch", "1/2/7/0")["elapsed"]
+                finally:
+                    worker.db.close()
+
+        before, after = credited(True), credited(False)
+        self.assertAlmostEqual(before, 9)
+        self.assertAlmostEqual(after, before)
+
     def test_elapsed(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "db"

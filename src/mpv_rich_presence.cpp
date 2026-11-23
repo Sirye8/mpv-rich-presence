@@ -1871,7 +1871,9 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             media.loved = current && info.value("loved", false) ? "Loved" : "";
         }
         const bool advancing = sampling && !media.paused && !media.buffering && !is_seeking;
-        if (state.store && ((sampling && now_steady >= next_sample) || observed_session != state.file_session || last_scrobble != scrobble
+        // While paused, buffering or seeking nothing is credited, so the once-a-second sample is
+        // written only while playback advances. Pause, seek and other changes still write at once.
+        if (state.store && ((sampling && advancing && now_steady >= next_sample) || observed_session != state.file_session || last_scrobble != scrobble
             || observed_source != source || (extra && (observed_title != media.title || observed_track_title != media.track_title ||
                 observed_artist != media.artist || observed_album != media.album || observed_channel != media.channel))
             || observed_recognition_options != state.recognition_options
