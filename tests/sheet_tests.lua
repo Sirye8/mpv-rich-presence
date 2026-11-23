@@ -577,6 +577,11 @@ local function verify()
     find("Now playing","Apply progress").run()
     hub.adjust(-2)
     assert(not find("Now playing","Apply progress"),"Apply progress stayed without an edit")
+    snapshot.hosted={["tmdb-relay"]={state="Rate limited",retry_after=60,time=1700000000}}
+    menu.update(snapshot)
+    assert(find("Diagnostics","TMDB relay").label:find("Rate limited · retry in 60 s",1,true),"Diagnostics lacks the relay state")
+    assert(find("Diagnostics","AniList sign-in service").label=="AniList sign-in service   Not used yet")
+    snapshot.hosted=nil
     snapshot.metadata_origin={tmdb="tvshow.nfo",episode="Episode 4.nfo"}
     menu.update(snapshot)
     assert(find("Match evidence","Metadata tmdb").label=="TMDB ID   from tvshow.nfo")

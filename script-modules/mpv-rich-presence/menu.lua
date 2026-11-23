@@ -1391,6 +1391,16 @@ return function(make_sheet, send, options, help)
             if (snap.last_published or 0)>0 then row("Last Discord publish   "..clock_time(snap.last_published)) end
             row("Configuration   "..(snap.configured and "Received" or "Waiting"))
             if options.helper_status then row("Python helper   "..options.helper_status()) end
+            -- Hosted services show their last outcome and when it happened.
+            local hosted=snap.hosted or {}
+            for _,service in ipairs({{"tmdb-relay","TMDB relay"},{"anilist-signin","AniList sign-in service"}}) do
+                local entry=hosted[service[1]]
+                local value=entry and entry.state or "Not used yet"
+                if service[1]=="tmdb-relay" and options.tmdb_key~="" then value="Not used · personal TMDB token" end
+                if entry and entry.retry_after then value=value.." · retry in "..entry.retry_after.." s" end
+                if entry and entry.time then value=value.." · "..os.date("%H:%M",math.floor(entry.time)) end
+                row(service[2].."   "..value,nil,false,nil,service[2])
+            end
             row("Publisher   "..(snap.owner and "This window" or "Other window"))
             row("Lookup   "..(snap.allowed and "Allowed" or "Blocked"))
             row("Recognition status   "..tostring(snap.recognition_status or "Waiting"))

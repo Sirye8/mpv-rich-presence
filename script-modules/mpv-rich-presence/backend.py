@@ -48,6 +48,7 @@ from providers import (
 )
 from settings_transfer import export_settings, import_settings, summary as import_summary
 import lastfm
+import service_status
 import sidecars
 
 PUBLIC_EXCHANGE = "https://mpv-anilist-login.si-based.workers.dev"
@@ -2321,6 +2322,19 @@ class Worker:
             epoch=self.artwork_epoch
             self.artwork_future=self.artwork_pool.submit(render)
 
+    def flush_service_status(self):
+        """Share the latest hosted-service outcomes with the panel when they change."""
+        version, states = service_status.snapshot()
+        if version == getattr(self, "service_status_version", 0):
+            return
+        self.service_status_version = version
+        with self.transaction():
+            saved = self.get("service-status", "global")
+            for name, entry in states.items():
+                if entry.get("time", 0) >= saved.get(name, {}).get("time", 0):
+                    saved[name] = entry
+            self.put("service-status", "global", saved)
+
     def run(self):
         stop = threading.Event()
         self.lookup_stop=stop
@@ -2394,6 +2408,7 @@ class Worker:
                     self.handle(job)
                 else:
                     self.sweep_watch()
+                    self.flush_service_status()
                     p = self.get("player", self.window)
                     if self.lookup_pool is None:
                         self.recognize(p)

@@ -12,6 +12,7 @@ import urllib.parse as url
 from urllib.error import HTTPError
 import urllib.request
 from account import AccountError, NoRedirect, graphql
+import service_status
 
 TMDB_RELAY = "https://mpv-anilist-login.si-based.workers.dev/metadata"
 # AcoustID identifies the application with this client key. Lookup does not use a user key.
@@ -181,7 +182,7 @@ def tmdb_request(path, settings, params=None):
                 params,
                 {"Authorization": "Bearer " + token},
             )
-        return fetch(TMDB_RELAY + path, params)
+        return service_status.guarded("tmdb-relay", lambda: fetch(TMDB_RELAY + path, params))
     except (OSError, ValueError):
         raise AccountError(
             "TMDB is unavailable. Check the connection or try again later."

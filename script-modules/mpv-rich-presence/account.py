@@ -12,6 +12,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+
+import service_status
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 USER_AGENT = "mpv-rich-presence (https://github.com/Sirye8/mpv-rich-presence)"
@@ -432,13 +434,16 @@ def wake_exchange(
                 or str(health.get("client_id")) != str(client_id)
                 or health.get("redirect_uri") != broker + "/callback"
             ):
+                service_status.record("anilist-signin", "Not configured")
                 raise AccountError(
                     "The sign-in service is configured for a different AniList client."
                 )
             if health.get("configured") is False:
+                service_status.record("anilist-signin", "Not configured")
                 raise AccountError(
                     "The sign-in service is missing its AniList credential."
                 )
+            service_status.record("anilist-signin", "OK")
             return
         except urllib.error.HTTPError as exc:
             if exc.code not in (429, 502, 503, 504):
@@ -448,6 +453,7 @@ def wake_exchange(
         except (OSError, ValueError):
             pass
         sleep(min(2, max(0, deadline - clock())))
+    service_status.record("anilist-signin", "Unreachable")
     raise AccountError(
         "The sign-in service did not wake up. Select Connect to try again."
     )
@@ -480,12 +486,16 @@ def authorize(
             with urllib.request.build_opener(NoRedirect).open(
                 req, timeout=15
             ) as response:
-                return json.load(response)
+                result = json.load(response)
+            service_status.record("anilist-signin", "OK")
+            return result
         except urllib.error.HTTPError as exc:
             try:
                 message = json.loads(exc.read(2048)).get("error", "")
             except (ValueError, OSError):
                 message = ""
+            service_status.record("anilist-signin", *service_status.classify(
+                exc, message if isinstance(message, str) else ""))
             if isinstance(message, str) and message.startswith(
                 ("AniList code exchange failed (HTTP ", "Sign-in failed at ")
             ):
@@ -493,6 +503,9 @@ def authorize(
             raise AccountError(
                 f"Sign-in service rejected {path[1:]} (HTTP {exc.code}). Reconnect in mpv."
             ) from None
+        except (OSError, ValueError) as exc:
+            service_status.record("anilist-signin", *service_status.classify(exc))
+            raise
 
     def exchange(code, secret, remember):
         valid()

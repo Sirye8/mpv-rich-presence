@@ -1872,6 +1872,51 @@ class TrackingTests(unittest.TestCase):
 
 
 
+class ServiceStatusTests(unittest.TestCase):
+    def setUp(self):
+        import service_status
+        self.status = service_status
+        service_status.states.clear()
+
+    def http(self, code, headers=None):
+        import urllib.error
+        return urllib.error.HTTPError("https://relay.invalid/metadata", code, "", headers or {}, None)
+
+    def relay(self, failure):
+        import providers
+        with patch("providers.fetch", side_effect=failure):
+            with self.assertRaises(AccountError):
+                providers.tmdb_request("/search/movie", {}, {"query": "x"})
+        return self.status.states["tmdb-relay"]
+
+    def test_relay_failures_are_named(self):
+        import socket
+        self.assertEqual(self.relay(socket.timeout("timed out"))["state"], "Unreachable")
+        self.assertEqual(self.relay(ValueError("Expecting value"))["state"], "Unexpected reply")
+        self.assertEqual(self.relay(self.http(302, {"Location": "https://elsewhere.invalid"}))["state"], "Unexpected reply")
+        limited = self.relay(self.http(429, {"Retry-After": "60"}))
+        self.assertEqual((limited["state"], limited["retry_after"]), ("Rate limited", 60))
+        self.assertEqual(self.relay(self.http(503, {"X-Relay-Reason": "not-configured"}))["state"], "Not configured")
+        self.assertEqual(self.relay(self.http(502))["state"], "Unreachable")
+        self.assertEqual(self.relay(self.http(404))["state"], "OK")
+
+    def test_sign_in_failures_are_named(self):
+        self.assertEqual(self.status.classify(self.http(400), "Sign-in failed at ticket validation. Reconnect in mpv.")[0], "Sign-in expired")
+        self.assertEqual(self.status.classify(self.http(400), "AniList code exchange failed (HTTP 400, invalid_grant).")[0], "Sign-in expired")
+        self.assertEqual(self.status.classify(self.http(503), "Owner setup required.")[0], "Not configured")
+        self.assertEqual(self.status.classify(self.http(403), "")[0], "Rejected")
+
+    def test_status_reaches_saved_data_without_titles(self):
+        worker = Worker(":memory:", "window", {})
+        self.addCleanup(worker.db.close)
+        worker.db.execute("CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+        self.relay(self.http(429, {"Retry-After": "30"}))
+        worker.flush_service_status()
+        saved = worker.get("service-status", "global")
+        self.assertEqual(saved["tmdb-relay"]["state"], "Rate limited")
+        self.assertEqual(set(saved["tmdb-relay"]), {"state", "time", "retry_after"})
+
+
 class FailureMessageTests(unittest.TestCase):
     def test_messages_name_the_action_and_the_fix(self):
         import urllib.error

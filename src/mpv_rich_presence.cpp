@@ -2043,6 +2043,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                 {"service",state.store ? state.store->get("response",state.instance_id) : nlohmann::json::object()},
                 {"account",std::move(account)},{"watch_episode",watch_episode},
                 {"episode_review",episode_review},
+                {"hosted",state.store && state.panel_page=="Diagnostics" ? state.store->get("service-status","global") : nlohmann::json::object()},
                 {"metadata_origin",resolved ? candidate.value("metadata_origin",nlohmann::json::object()) : nlohmann::json::object()},
                 {"recognition_status", !allowed ? "Blocked" :
                     (ambiguous_anime || (resolved && candidate.value("ambiguous",false))) ? "Ambiguous match" :
