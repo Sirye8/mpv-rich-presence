@@ -320,6 +320,10 @@ local function verify()
     local function find(page,id)
         for _,row in ipairs(model.rows(page)) do if row.id==id then return row end end
     end
+    initial.episode_watch.counting="other"
+    menu.update(initial)
+    assert(find("AniList","Counting watch time").label=="Counting watch time   Another mpv window")
+    assert(find("AniList","Publishing to Discord").label:find("Another window",1,true))
     local account=find("AniList","Account")
     assert(account.link and account.avatar=="https://s4.anilist.co/avatar.png")
     account.run()
@@ -458,6 +462,26 @@ local function verify()
     assert(confirmation():find("Paused → Watching",1,true))
     find("Confirm","Confirm").run()
     assert(job.op=="accept" and not job.keep_status and job.proposal==proposal.key)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Ready",1,true),"Playing update is not Ready")
+    proposal.offline=true
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Needs a refresh",1,true))
+    find("Pending updates","Check pending "..proposal.key).run()
+    assert(job.op=="read","Check now did not read the list")
+    proposal.offline=nil
+    proposal.base.progress=1
+    snapshot.service.entry={media=42,viewer=5,session=8,progress=2,id=9,status="CURRENT"}
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Conflict",1,true),"Changed list did not show a conflict")
+    proposal.base.progress=nil
+    snapshot.service.entry=nil
+    snapshot.episode="3"
+    proposal.needs_review=true
+    menu.update(snapshot)
+    assert(find("Pending updates","Proposal "..proposal.key).label:find("Unconfirmed",1,true))
+    proposal.needs_review=nil
+    snapshot.episode="2"
+    menu.update(snapshot)
     find("Pending updates","Update progress only").run()
     assert(confirmation():find("Keep Paused for later updates",1,true))
     find("Confirm","Confirm").run()

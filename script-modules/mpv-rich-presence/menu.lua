@@ -1093,6 +1093,11 @@ return function(make_sheet, send, options, help)
             elseif elapsed<=0 then watch_status="No time recorded yet"
             else watch_status=duration(elapsed) end
             row("Episode watch time   "..watch_status)
+            local counting=({this="This window",other="Another mpv window",none="Nothing playing"})[watch.counting or ""]
+            if counting then
+                row("Counting watch time   "..counting,nil,false,nil,"Counting watch time")
+                row("Publishing to Discord   "..(snap.owner and "This window" or "Another window or none"),nil,false,nil,"Publishing to Discord")
+            end
             if tracking.coverage then
                 local item=row("Unique footage watched   "..duration(watch.coverage or 0))
                 item.tip="Read only. Shows how much distinct footage was played while this option was enabled. Replaying a scene counts once here. The episode watch timer and AniList threshold still use real elapsed playback time."
@@ -1202,11 +1207,23 @@ return function(make_sheet, send, options, help)
                 local label=(prop.title~="" and prop.title or ("AniList "..prop.media)).." · Episode "..prop.episode
                 if label:lower():find(pending_filter:lower(),1,true) then
                     visible=visible+1
-                    row(label,nil,false,nil,"Proposal "..prop.key)
-                    if prop.offline then row("Waiting to refresh remote progress")
-                    elseif snap.allowed and snap.watch_episode and prop.media==snap.match and prop.episode==tonumber(snap.episode) then
-                        review_update(prop)
-                    else row("Play this episode to apply its update") end
+                    -- One label per update says what it is waiting for.
+                    local current=snap.allowed and snap.watch_episode and prop.media==snap.match and prop.episode==tonumber(snap.episode)
+                    local listed=valid_entry and prop.media==snap.match and entry.id and (prop.base or {}).progress~=nil
+                    local state=prop.offline and "Needs a refresh"
+                        or (listed and entry.progress~=prop.base.progress) and "Conflict"
+                        or prop.needs_review and not current and "Unconfirmed"
+                        or current and "Ready" or "Play to apply"
+                    row(label.."   "..state,nil,false,nil,"Proposal "..prop.key).tip=({
+                        ["Needs a refresh"]="AniList could not be read when this update was proposed. Play the episode or select Check now to read your list again.",
+                        Conflict="Your AniList progress changed after this update was proposed. Review it against the current list before applying.",
+                        Unconfirmed="An earlier attempt to send this update could not be confirmed. Play the episode to review it against your list.",
+                        Ready="The episode is playing. Review and apply the update below.",
+                        ["Play to apply"]="Play this episode to review and apply its update."})[state]
+                    if prop.media==snap.match and snap.allowed and (prop.offline or state=="Conflict") then
+                        row("Check now",function() service("read"); refresh() end,false,nil,"Check pending "..prop.key)
+                    end
+                    if current and not prop.offline then review_update(prop) end
                     row("Skip "..label,function() confirm("Skip "..label,function() service("skip",{proposal=prop.key}) end) end)
                 end
             end

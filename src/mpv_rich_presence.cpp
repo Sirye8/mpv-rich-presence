@@ -2000,6 +2000,10 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
             if (state.store && state.panel_page=="AniList" && allowed && viewer>0 && watch_episode)
             {
                 const auto record = state.store->episode_watch(viewer,media.anilist_id,media.episode);
+                // The window that counts watch time can differ from the one publishing to Discord.
+                const auto owner = record.value("owner",std::string{});
+                const bool recent = media.now - record.value("last_watched",0.0) < 10000;
+                const std::string counting = owner.empty() || !recent ? "none" : owner == state.instance_id ? "this" : "other";
                 if (state.tracking.value("resume",true) ||
                     (record.value("owner",std::string{})==state.instance_id &&
                     record.value("session",uint64_t{})==state.file_session))
@@ -2008,6 +2012,7 @@ auto mpv_open_cplugin_impl(mpv_handle* ctx) -> int
                         {"coverage",record.value("coverage",0.0)},
                         {"first_watched",record.value("first_watched",0.0)}, {"last_watched",record.value("last_watched",0.0)}};
                 }
+                episode_watch["counting"] = counting;
             }
             auto snapshot = nlohmann::json{
                 {"session", state.file_session}, {"instance", state.instance_id}, {"allowed", lookup_allowed(state)},

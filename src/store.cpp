@@ -213,7 +213,8 @@ namespace mpvrp
                 {"before",proposal.value("before",0)},{"offline",proposal.value("offline",false)},
                 {"base",std::move(base)},{"revision",proposal.value("revision",std::string{})},
                 {"status",proposal.value("status",json(nullptr))},{"repeat_count",proposal.value("repeat_count",json(nullptr))},
-                {"start_rewatch",proposal.value("start_rewatch",false)}});
+                {"start_rewatch",proposal.value("start_rewatch",false)},
+                {"needs_review",proposal.value("needs_review",false)}});
         }
         if (code != SQLITE_DONE) throw std::runtime_error(sqlite3_errmsg(db));
         return rows;
