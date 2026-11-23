@@ -313,6 +313,36 @@ local function verify()
     large.show("Alpha")
     assert(bounds[3]<=width and bounds[4]<=height,"A doubled scale left the window")
     large.close()
+    -- Card images stay visible unless a tooltip or dropdown actually overlaps them.
+    local card_rows,shown={}
+    for i=1,16 do card_rows[i]={id="c"..i,label="Card row "..i,tip="Help for card row "..i..".",run=function() end} end
+    local card_ui=sheet({sections={},animate=false,rows=function() return card_rows end,refresh=function() end,closed=function() end,
+        card_preview=function() return {header="Watching",name="Fixture",details="Details",
+            large_image="https://example.com/cover.png",small_image="https://example.com/badge.png"} end,
+        card_images={show=function(large_url,_,_,_,small_url) shown={large=large_url,small=small_url} end}})
+    card_ui.show("Card")
+    local function hover_tip(id)
+        local target
+        for _,hit in ipairs(card_ui.hits) do if hit.key=="row:"..id then target=hit end end
+        x,y=(target.x+4)*height/paint_height,(target.y+4)*height/paint_height
+        card_ui.mouse_moved(nil,{hover=true})
+        local wait_tip=timers[#timers]
+        wait_tip.killed=true
+        wait_tip.fn()
+        assert(paint:find("Help for card row "..id:sub(2)..".",1,true),"Tooltip for "..id.." was not drawn")
+    end
+    assert(shown.large and shown.small,"Card images were not shown")
+    local lowest
+    for _,hit in ipairs(card_ui.hits) do
+        if hit.key:match("^row:c") and (not lowest or hit.y>lowest.y) then lowest=hit end
+    end
+    hover_tip(lowest.key:sub(5))
+    assert(shown.large and shown.small,"A tooltip clear of the card hid its images")
+    hover_tip("c1")
+    assert(not shown.large and not shown.small,"A tooltip over the artwork left the images above it")
+    card_ui.mouse_moved(nil,{hover=false})
+    assert(shown.large and shown.small,"Images did not return after the tooltip closed")
+    card_ui.close()
     local sections_ui=sheet({sections={"Alpha","Beta"},animate=false,rows=function() return rows end,refresh=function() end,closed=function() end})
     sections_ui.show("Beta")
     sections_ui.push("Beta details")

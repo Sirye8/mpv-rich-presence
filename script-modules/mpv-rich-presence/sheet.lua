@@ -322,13 +322,20 @@ return function(model)
             draw_card(ass,place,shell)
         end
         if model.card_images then
-            -- Images are drawn above the panel, so they are hidden while a tooltip or dropdown covers the card.
-            local covered=not place or shell<1 or (tooltip and tooltip.x<place.x+place.w and tooltip.x+tooltip.width>place.x)
-                or (layout.dropdown and layout.dropdown.r>place.x and layout.dropdown.x<place.x+place.w)
+            -- Images are drawn above the panel, so each one is hidden only while a tooltip or dropdown overlaps it.
+            -- The 4 px margin covers the slide-in animation of both popups.
+            local popup=layout.dropdown
+            local function covered(x,y,size)
+                if not place or shell<1 then return true end
+                local r,b=x+size,y+size
+                return (tooltip and tooltip.x<r and tooltip.x+tooltip.width>x
+                        and tooltip.y<b and tooltip.y+tooltip.height+4>y)
+                    or (popup and popup.x<r and popup.r>x and popup.y-4<b and popup.b+4>y)
+            end
             local function at(value) return math.floor(value*scale) end
-            model.card_images.show(not covered and place and place.card.large_image,
+            model.card_images.show(place and not covered(place.x+14,place.y+38,place.art) and place.card.large_image,
                 place and at(place.x+14),place and at(place.y+38),place and at(place.art),
-                not covered and place and place.card.small_image,
+                place and not covered(place.badge_x,place.badge_y,place.badge) and place.card.small_image,
                 place and at(place.badge_x),place and at(place.badge_y),place and at(place.badge))
         end
         if layout.dropdown then
