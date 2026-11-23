@@ -887,9 +887,11 @@ return function(make_sheet, send, options, help)
             switch("Local metadata files",recognition.sidecar_metadata==true,function()
                 apply("recognition-options",{sidecar_metadata=not recognition.sidecar_metadata},"global")
             end)
-            switch("Ask before fingerprinting",recognition.confirm_fingerprint==true,function()
-                apply("recognition-options",{confirm_fingerprint=not recognition.confirm_fingerprint},"global")
-            end)
+            -- The old switch is still written so older releases keep asking.
+            local fingerprint=recognition.fingerprint or (recognition.confirm_fingerprint and "ask" or "auto")
+            choice("AcoustID fingerprinting",{"auto","ask","off"},fingerprint,function(v)
+                apply("recognition-options",{fingerprint=v,confirm_fingerprint=v=="ask"},"global")
+            end,nil,{auto="Automatic",ask="Ask",off="Off"})
             row("Provider settings and credits",function() ui.push("Providers") end)
             -- One search form for every provider, prefilled with the current title.
             local provider=search_provider or (({["tmdb-movie"]="tmdb-movie",["tmdb-tv"]="tmdb-tv",tvmaze="tvmaze",

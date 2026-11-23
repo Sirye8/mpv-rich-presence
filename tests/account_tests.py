@@ -592,6 +592,28 @@ class RecognitionTests(unittest.TestCase):
             finally:
                 worker.db.close()
 
+    def test_fingerprint_modes_follow_the_choice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            track = Path(directory) / "unknown.flac"
+            track.write_bytes(b"fLaC")
+            worker = Worker(":memory:", "window", {})
+            self.addCleanup(worker.db.close)
+            worker.db.execute("CREATE TABLE records(category TEXT,scope TEXT,value TEXT,PRIMARY KEY(category,scope))")
+            for session, options, offered, fingerprinted in (
+                (1, {}, False, True),
+                (2, {"confirm_fingerprint": True}, True, False),
+                (3, {"fingerprint": "ask"}, True, False),
+                (4, {"fingerprint": "off"}, False, False),
+                (5, {"fingerprint": "auto", "confirm_fingerprint": True}, False, True),
+            ):
+                sample = dict(source="auto", session=session, title=f"Unknown {session}", artist="Nobody", album="", duration=200,
+                              video=False, allowed=True, path=track.as_posix(), recognition_options=options)
+                worker.put("player", "window", sample)
+                with patch("backend.candidates", return_value=[]),                         patch("backend.fingerprint", return_value=[]) as acoustid:
+                    worker.recognize(sample)
+                self.assertEqual(worker.get("auto", "window").get("fingerprint_available", False), offered, options)
+                self.assertEqual(acoustid.called, fingerprinted, options)
+
     def test_music_edition_matching_with_bilingual_titles(self):
         album = "よふかしのうた - Yofukashino Uta"
         recording = dict(

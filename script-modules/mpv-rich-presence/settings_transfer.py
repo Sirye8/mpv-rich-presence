@@ -43,6 +43,7 @@ APPEARANCE = {
 INTRODUCED = {**{("scrobbling", key): (2, 4) for key in ("enabled", "now_playing", "while_hidden", "videos", "threshold")},
               ("save-scopes", "Last.fm"): (2, 4)}
 INTRODUCED |= {("appearance", key): (2, 6) for key in ("stream_channel", "stream_title", "stream_link")}
+INTRODUCED |= {("recognition-options", "fingerprint"): (2, 6)}
 INTRODUCED |= {("appearance", key): (2, 3) for key in
               "button_slots large_image small_image large_image_url large_text_template small_text_template while_paused pause_timeout".split()}
 
@@ -77,7 +78,8 @@ FIELDS = {
         "method": {"classic", "gaussian", "box"},
     },
     "folder-filter": {"mode": {"disabled", "whitelist", "blacklist"}, "folders": strings},
-    "recognition-options": dict.fromkeys(("tv_rules", "sidecar_metadata", "confirm_fingerprint"), bool),
+    "recognition-options": {**dict.fromkeys(("tv_rules", "sidecar_metadata", "confirm_fingerprint"), bool),
+                            "fingerprint": {"auto", "ask", "off"}},
     "match": {"id": integer(1, 2**31-1), "offset": integer(-9999, 9999),
               "episode": integer(1, 9999), "not_anime": bool},
     "watch-retention": {"months": integer(0, 120)},

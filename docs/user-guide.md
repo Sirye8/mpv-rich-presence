@@ -113,7 +113,7 @@ If two distinct AniList entries still tie after checking the available title, ye
 
 You can override the bundled provider access with `tmdb_key` or `acoustid_key`. See [shared TMDB setup](tmdb-metadata.md) for deployment details.
 
-Turn on **Ask before fingerprinting** if you want to approve AcoustID fallback per track. When tags and MusicBrainz leave a local track unresolved, **Fingerprint this file** appears under **Now playing**. Automatic fingerprinting is the default.
+**AcoustID fingerprinting** is **Automatic** by default. Choose **Ask** to approve each track: when tags and MusicBrainz leave a local track unresolved, **Fingerprint this file** appears under **Now playing**. Choose **Off** to never fingerprint automatically.
 
 For streams, **Appearance → Card text** with the **Streams** layout has separate **Stream channel**, **Stream title** and **Stream link** switches.
 

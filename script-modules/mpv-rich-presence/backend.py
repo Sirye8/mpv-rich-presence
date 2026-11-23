@@ -1240,10 +1240,13 @@ class Worker:
                     return False
 
         path = p.get("path", "")
-        if not hit and automatic and p.get("recognition_options", {}).get("confirm_fingerprint") and os.path.isfile(path):
+        options = p.get("recognition_options", {})
+        mode = options.get("fingerprint") or ("ask" if options.get("confirm_fingerprint") else "auto")
+        if not hit and automatic and mode == "ask" and os.path.isfile(path):
             publish(None, fingerprint_available=True)
             return False
-        if not hit and (automatic or source == "acoustid") and os.path.isfile(path):
+        # Off stops automatic fingerprinting. Choosing AcoustID as the source still fingerprints.
+        if not hit and ((automatic and mode == "auto") or source == "acoustid") and os.path.isfile(path):
             stat = os.stat(path)
             hit = cached(
                 "fingerprint",

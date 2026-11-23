@@ -664,7 +664,8 @@ static bool valid_settings(const std::string& category, const nlohmann::json& va
         }
         if (category == "sources" && !(key == "source" && valid_source(val))) return false;
         if (category == "recognition-options" &&
-            !((key=="tv_rules" || key=="sidecar_metadata" || key=="confirm_fingerprint") && val.is_boolean())) return false;
+            !(((key=="tv_rules" || key=="sidecar_metadata" || key=="confirm_fingerprint") && val.is_boolean())
+                || (key=="fingerprint" && (val=="auto" || val=="ask" || val=="off")))) return false;
         if (category == "panel" && !(key == "position" && (val == "top-left" || val == "top-center" ||
             val == "top-right" || val == "bottom-left" || val == "bottom-center" || val == "bottom-right"))) return false;
         if (category == "watch-retention" && !(key=="months" && val.is_number_integer() && val>=0 && val<=120)) return false;

@@ -577,6 +577,13 @@ local function verify()
     find("Now playing","Apply progress").run()
     hub.adjust(-2)
     assert(not find("Now playing","Apply progress"),"Apply progress stayed without an edit")
+    snapshot.recognition_options={confirm_fingerprint=true}
+    menu.update(snapshot)
+    assert(find("Recognition & folders","AcoustID fingerprinting").label=="AcoustID fingerprinting   Ask","Old switch did not carry over")
+    find("Recognition & folders","AcoustID fingerprinting").run()
+    select_choice("off")
+    assert(applied.category=="recognition-options" and applied.values.fingerprint=="off" and applied.values.confirm_fingerprint==false)
+    snapshot.recognition_options=nil
     for _,key in ipairs({"Stream channel","Stream title","Stream link"}) do
         assert(find("Card text",key),"Card text lacks "..key)
     end
