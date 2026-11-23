@@ -59,7 +59,8 @@ return function(options, modules, interpreter, utils)
         end
     end
     options.avatar=function(url,x,y,size)
-        if type(url)~="string" or not url:match("^https://s4%.anilist%.co/") then
+        if type(url)~="string" or not (url:match("^https://s4%.anilist%.co/")
+            or url:match("^https://lastfm%-img%.freetls%.fastly%.net/")) then
             rectangle=nil
             remove_avatar()
             return
@@ -79,7 +80,7 @@ return function(options, modules, interpreter, utils)
             job=nil
             retry_after=mp.get_time()+60
             if not result or result.status~=0 or #(result.stdout or "")~=16384 then
-                mp.msg.verbose("Could not load the AniList avatar. The panel can retry in 60 seconds.")
+                mp.msg.verbose("Could not load the account avatar. The panel can retry in 60 seconds.")
                 return
             end
             avatar_file=avatar_file or utils.join_path(os.getenv("TEMP") or os.getenv("TMPDIR") or "/tmp",

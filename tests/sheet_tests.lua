@@ -71,6 +71,13 @@ local function verify()
     assert(ui.memory.Test.top==4,"Refresh reset the scroll offset")
     bindings.UP()
     assert(ui.memory.Test.top==2 and ui.memory.Test.focus==2,"Keyboard did not reveal the focused row")
+    for i=1,30 do table.insert(rows,1,{id="above"..i,label="Inserted "..i}) end
+    ui.draw()
+    assert(ui.memory.Test.focus==32 and ui.memory.Test.top>2 and ui.memory.Test.top<=32,
+        "Rows added above pushed the focused row out of view")
+    for _=1,30 do table.remove(rows,1) end
+    ui.draw()
+    assert(ui.memory.Test.focus==2 and ui.memory.Test.top<=2,"Rows removed above hid the focused row")
     local _,top,right,bottom=unpack(bounds)
     x,y=right-4*height/paint_height,top+60*height/paint_height
     mouse_bindings[3][3]()

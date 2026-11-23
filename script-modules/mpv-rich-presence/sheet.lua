@@ -512,7 +512,13 @@ return function(model)
         local mem = ui.memory[ui.page] or {focus=1,top=1}
         ui.memory[ui.page]=mem
         if mem.id then
-            for i,row in ipairs(rows) do if row.id==mem.id then mem.focus=i; break end end
+            for i,row in ipairs(rows) do
+                if row.id==mem.id then
+                    -- Rows added or removed above keep the focused row in view.
+                    if i~=mem.focus then mem.reveal=true end
+                    mem.focus=i; break
+                end
+            end
         end
         mem.focus=math.max(1,math.min(#rows,mem.focus))
         mem.id=rows[mem.focus] and rows[mem.focus].id

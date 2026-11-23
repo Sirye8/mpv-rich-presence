@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Decode one AniList avatar to the raw format used by mpv overlays."""
+"""Decode one AniList or Last.fm avatar to the raw format used by mpv overlays."""
 
 import ctypes
 import os
@@ -29,6 +29,9 @@ def player_path(pid):
         kernel.CloseHandle(ctypes.c_void_p(handle))
 
 
+HOSTS = {"s4.anilist.co", "lastfm-img.freetls.fastly.net"}
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args):
         return None
@@ -36,8 +39,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def main(address, pid):
     parsed = urlsplit(address)
-    if parsed.scheme != "https" or parsed.netloc != "s4.anilist.co":
-        raise ValueError("Unexpected AniList avatar host.")
+    if parsed.scheme != "https" or parsed.netloc not in HOSTS:
+        raise ValueError("Unexpected avatar host.")
     request = urllib.request.Request(address, headers={
         "User-Agent": "mpv-rich-presence (+https://github.com/Sirye8/mpv-rich-presence)",
     })
