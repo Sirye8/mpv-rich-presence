@@ -54,8 +54,8 @@ return function(make_sheet, send, options, help)
     local function button_values(with_custom)
         local values={"off","provider"}
         for _,site in ipairs(layout_sites[layout] or {}) do values[#values+1]=site end
-        values[#values+1]="search-youtube"; values[#values+1]="search-google"
         values[#values+1]="anilist-profile"; values[#values+1]="lastfm-profile"
+        values[#values+1]="search-youtube"; values[#values+1]="search-google"
         if with_custom then values[#values+1]="custom" end
         return values
     end
