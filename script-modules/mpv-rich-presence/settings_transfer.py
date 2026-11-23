@@ -22,7 +22,7 @@ APPEARANCE = {
     "numbering": {"relative", "original", "both"},
     "timer": {"progress", "remaining", "session", "off"},
     "compact": {"name", "details", "state"},
-    **dict.fromkeys("group episode art badge tooltip button details state spoilers custom".split(), bool),
+    **dict.fromkeys("group episode art badge tooltip button details state spoilers custom stream_channel stream_title stream_link".split(), bool),
     **dict.fromkeys("headline details_template state_template large_url details_url state_url".split(), str),
     **dict.fromkeys("large_text_template small_text_template large_image_url".split(), str),
     "large_image": {"cover", "still", "mpv", "custom", "off"},
@@ -42,6 +42,7 @@ APPEARANCE = {
 # Settings added after v2.0.0, with the first release that reads them.
 INTRODUCED = {**{("scrobbling", key): (2, 4) for key in ("enabled", "now_playing", "while_hidden", "videos", "threshold")},
               ("save-scopes", "Last.fm"): (2, 4)}
+INTRODUCED |= {("appearance", key): (2, 6) for key in ("stream_channel", "stream_title", "stream_link")}
 INTRODUCED |= {("appearance", key): (2, 3) for key in
               "button_slots large_image small_image large_image_url large_text_template small_text_template while_paused pause_timeout".split()}
 

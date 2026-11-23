@@ -115,6 +115,8 @@ You can override the bundled provider access with `tmdb_key` or `acoustid_key`. 
 
 Turn on **Ask before fingerprinting** if you want to approve AcoustID fallback per track. When tags and MusicBrainz leave a local track unresolved, **Fingerprint this file** appears under **Now playing**. Automatic fingerprinting is the default.
 
+For streams, **Appearance → Card text** with the **Streams** layout has separate **Stream channel**, **Stream title** and **Stream link** switches.
+
 ## Connect AniList
 
 Open **Alt+p → AniList → Connect account**, then approve on AniList in your browser. Check the account name and avatar on the next page and choose **Connect**. The page reports when mpv has saved the connection. Use **Use another account** if the profile is wrong, switch on AniList, and reconnect from mpv. You can cancel from the browser or the AniList panel. **Connect for this session** keeps the credential in memory until the account helper exits.

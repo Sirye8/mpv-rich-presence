@@ -91,6 +91,26 @@ int main(int argc, char** argv)
         if (!third.success || third.freed != 1 || pending_callbacks() != 0) return 1;
         take_calls();
     }
+    {
+        // Streams can share the channel, title and link separately.
+        playback stream;
+        stream.video = true;
+        stream.title = "Speedrun finale";
+        stream.channel = "Channel Name";
+        stream.provider = {{"kind","stream"},{"name","Channel Name"},{"stream_title","Speedrun finale"},
+            {"link","https://www.twitch.tv/channelname"},{"live",true}};
+        const auto full = format_activity(stream, json::object());
+        if (full.dump().find("twitch.tv/channelname") == std::string::npos || full.at("name") != "Channel Name") return 1;
+        const auto no_link = format_activity(stream, {{"stream_layout",{{"stream_link",false}}}});
+        if (no_link.dump().find("twitch.tv") != std::string::npos) return 1;
+        const auto no_channel = format_activity(stream, {{"stream_layout",{{"stream_channel",false}}},
+            {"details_template","{channel}"}});
+        if (no_channel.dump().find("Channel Name") != std::string::npos || no_channel.at("name") != "Speedrun finale") return 1;
+        const auto no_title = format_activity(stream, {{"stream_title",false}});
+        if (no_title.dump().find("Speedrun") != std::string::npos || no_title.at("name") != "Channel Name") return 1;
+        const auto nothing = format_activity(stream, {{"stream_title",false},{"stream_channel",false},{"stream_link",false}});
+        if (nothing.at("name") != "Stream" || nothing.dump().find("Channel") != std::string::npos) return 1;
+    }
     playback music;
     music.video=false;
     music.title="Track";

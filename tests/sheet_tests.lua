@@ -577,6 +577,9 @@ local function verify()
     find("Now playing","Apply progress").run()
     hub.adjust(-2)
     assert(not find("Now playing","Apply progress"),"Apply progress stayed without an edit")
+    for _,key in ipairs({"Stream channel","Stream title","Stream link"}) do
+        assert(find("Card text",key),"Card text lacks "..key)
+    end
     snapshot.hosted={["tmdb-relay"]={state="Rate limited",retry_after=60,time=1700000000}}
     menu.update(snapshot)
     assert(find("Diagnostics","TMDB relay").label:find("Rate limited · retry in 60 s",1,true),"Diagnostics lacks the relay state")

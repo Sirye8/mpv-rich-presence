@@ -173,8 +173,32 @@ namespace mpvrp
         return minutes >= 0 ? minutes * 60 : fallback;
     }
 
-    json format_activity(const playback& m, const json& settings)
+    // Hidden stream parts leave the card data, so templates and buttons cannot show them either.
+    static const playback& shared_stream(const playback& m, const json& settings, playback& filtered)
     {
+        if (m.provider.value("kind", std::string{}) != "stream") return m;
+        const auto options = layout_options(m, settings);
+        const bool channel = options.value("stream_channel", true), title = options.value("stream_title", true),
+            link = options.value("stream_link", true);
+        if (channel && title && link) return m;
+        filtered = m;
+        auto& p = filtered.provider;
+        if (!link) { p.erase("link"); p.erase("page"); }
+        if (!title) { p.erase("stream_title"); filtered.title.clear(); }
+        if (!channel)
+        {
+            p["name"] = title ? m.provider.value("stream_title", m.title) : std::string("Stream");
+            p.erase("stream_title");
+            filtered.title.clear();
+            filtered.channel.clear();
+        }
+        return filtered;
+    }
+
+    json format_activity(const playback& original, const json& settings)
+    {
+        playback filtered;
+        const playback& m = shared_stream(original, settings, filtered);
         const json options = layout_options(m, settings);
         const auto preset = options.value("preset", std::string("original"));
         const bool generic = preset == "private" || (m.paused && options.value("while_paused", std::string("keep")) == "generic");

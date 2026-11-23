@@ -745,6 +745,11 @@ return function(make_sheet, send, options, help)
                     edit_text({label=label,value=opts[key] or "",limit=128,save=function(v) appearance_edit(key,v) end})
                 end,false,nil,label)
             end
+            if layout=="stream" or layout=="all" then
+                toggle("Stream channel","stream_channel",true)
+                toggle("Stream title","stream_title",true)
+                toggle("Stream link","stream_link",true)
+            end
         elseif page=="Artwork & badge" then
             local opts=appearance_opts()
             local private=opts.preset=="private"
